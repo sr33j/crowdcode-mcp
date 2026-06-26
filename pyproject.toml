@@ -1,0 +1,21 @@
+[project]
+name = "crowdcode-mcp"
+version = "0.1.0"
+description = "CrowdCode MCP server: payment-gated service reviews and simple demand capture for agent commerce."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp[cli]>=1.10.0",
+  "psycopg[binary]>=3.2.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+crowdcode-mcp = "crowdcode.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crowdcode"]

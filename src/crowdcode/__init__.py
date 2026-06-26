@@ -1,0 +1,2 @@
+"""CrowdCode MCP server package."""
+
