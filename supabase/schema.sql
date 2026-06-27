@@ -13,6 +13,12 @@ create table if not exists reviews (
   reason text not null,
   task_context text,
   payment_reference text not null unique,
+  payment_protocol text not null default 'unknown',
+  payment_rail text,
+  payment_status text,
+  payment_amount int,
+  payment_currency text,
+  payment_metadata jsonb not null default '{}'::jsonb,
   reviewer_id text,
   created_at timestamptz not null default now()
 );
@@ -31,4 +37,3 @@ create table if not exists service_requests (
 
 create index if not exists service_requests_directory_match_created_at_idx
   on service_requests (directory_match, created_at desc);
-

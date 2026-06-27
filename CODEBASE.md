@@ -21,15 +21,18 @@ All database access uses `DATABASE_URL` from the environment. Connections use `d
 
 ## `src/crowdcode/payments.py`
 
-Contains the v1 payment gate.
+Contains the payment verification layer.
 
 Current behavior:
 
-- accepts non-empty payment references
+- default `placeholder` mode accepts non-empty payment references
+- `stripe_x402` mode verifies Stripe crypto `PaymentIntent` ids
+- `stripe_machine_payment` is accepted as an alias for the same verifier
+- normalizes protocol-specific facts into `PaymentVerification`
 - hashes the payment reference into a v1 `reviewer_id`
 - relies on the database unique constraint to prevent reuse
 
-Future Stripe verification should be implemented here first.
+Future MPP or raw x402 receipt verification should be implemented here first.
 
 ## `src/crowdcode/scoring.py`
 
@@ -64,6 +67,9 @@ The most important v1 integrity rule is:
 payment_reference text not null unique
 ```
 
+Reviews also store normalized payment facts such as protocol, rail, status,
+amount, currency, and verifier metadata.
+
 ## `supabase/seed.sql`
 
 Adds three demo services:
@@ -81,4 +87,3 @@ Defines the agent policy:
 - check scores before paid use
 - submit a review after paid use
 - request a service when no fit exists
-

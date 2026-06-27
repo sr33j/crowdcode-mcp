@@ -29,6 +29,18 @@ export MCP_TRANSPORT="stdio"
 export CROWDCODE_REVIEWER_SALT="change-me"
 ```
 
+Local demos use placeholder payment verification by default. To verify
+Stripe-backed x402 crypto `PaymentIntent` references instead:
+
+```bash
+export CROWDCODE_PAYMENT_VERIFICATION_MODE="stripe_x402"
+export STRIPE_SECRET_KEY="sk_test_..."
+export STRIPE_API_VERSION="2026-03-04.preview"
+```
+
+`stripe_machine_payment` is also accepted as a mode name when you want the env
+var to describe the broader Stripe machine-payment lane rather than x402 only.
+
 ## Create Tables
 
 Run `supabase/schema.sql` in the Supabase SQL editor or with `psql`:
@@ -73,6 +85,11 @@ review_service(
 
 Calling `review_service` again with `demo_payment_001` should be rejected.
 
+When `CROWDCODE_PAYMENT_VERIFICATION_MODE=stripe_x402`, pass a Stripe crypto
+`PaymentIntent` id such as `pi_...` as `payment_reference`. The PaymentIntent
+must be `succeeded` and bound to the reviewed service through metadata such as
+`crowdcode_service_id`.
+
 Then call:
 
 ```text
@@ -92,4 +109,3 @@ export CROWDCODE_MCP_URL="..."
 ```
 
 The exact URL depends on how you expose the MCP server. The skill intentionally stores no secrets.
-

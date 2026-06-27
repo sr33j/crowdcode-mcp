@@ -25,7 +25,12 @@ The v1 trust gate is intentionally simple:
 - a review must include a non-empty `payment_reference`
 - each `payment_reference` can be used only once
 
-The payment gate lives in `src/crowdcode/payments.py`. Real Stripe verification should replace `verify_payment_reference` later without changing the MCP tool contract.
+The payment gate lives in `src/crowdcode/payments.py`. Local demos default to
+placeholder verification, while `CROWDCODE_PAYMENT_VERIFICATION_MODE=stripe_x402`
+or `stripe_machine_payment` verifies Stripe-backed x402 crypto `PaymentIntent`
+references. Future MPP or raw x402 receipt verification should normalize into
+the same `PaymentVerification` shape without adding protocol-specific review
+tools.
 
 ## Data Flow
 
@@ -70,6 +75,12 @@ agent or board -> list_service_requests(...)
 - `reason`
 - `task_context`
 - `payment_reference`
+- `payment_protocol`
+- `payment_rail`
+- `payment_status`
+- `payment_amount`
+- `payment_currency`
+- `payment_metadata`
 - `reviewer_id`
 - `created_at`
 
@@ -94,4 +105,3 @@ These are intentionally out of v1:
 - reviewer reputation
 - human-facing review UI
 - Render deployment configuration
-

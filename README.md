@@ -33,7 +33,7 @@ Returns a simple average rating:
 
 Confidence is `high` when a service has at least 5 reviews, otherwise `low`.
 
-### `review_service(service_id, rating, reason, payment_reference, task_context?)`
+### `review_service(service_id, rating, reason, payment_reference, task_context?, payment_protocol?, payment_evidence?)`
 
 Creates a review when:
 
@@ -43,7 +43,13 @@ Creates a review when:
 - `payment_reference` is non-empty
 - `payment_reference` has not been used before
 
-V1 does not call Stripe. The verification function is isolated in `src/crowdcode/payments.py` so real Stripe verification can replace it later.
+By default, local v1 runs in placeholder mode: non-empty payment references are
+accepted and database uniqueness prevents reuse. Set
+`CROWDCODE_PAYMENT_VERIFICATION_MODE=stripe_x402` or
+`stripe_machine_payment` to verify Stripe-backed x402 crypto `PaymentIntent`
+references (`pi_...`) through Stripe before accepting a review. Structured
+`payment_evidence` can carry protocol-specific x402 or MPP receipt details
+without adding protocol-specific MCP tools.
 
 ### `request_service(service_description, task_context?)`
 
@@ -71,5 +77,4 @@ hermes/crowdcode/
   SKILL.md       Hermes skill instructions
 ```
 
-See [SETUP.md](SETUP.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [CODEBASE.md](CODEBASE.md) for details.
-
+See [SETUP.md](SETUP.md), [ARCHITECTURE.md](ARCHITECTURE.md), [CODEBASE.md](CODEBASE.md), and [PAYMENTS.md](PAYMENTS.md) for details.

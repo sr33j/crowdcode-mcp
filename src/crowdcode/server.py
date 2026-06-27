@@ -4,9 +4,10 @@ from typing import Any
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from psycopg.types.json import Jsonb
 
 from crowdcode.db import connect
-from crowdcode.payments import reviewer_id_from_payment, verify_payment_reference
+from crowdcode.payments import verify_payment_reference
 from crowdcode.scoring import as_float, confidence_for_count
 from crowdcode.settings import get_settings
 
@@ -80,6 +81,8 @@ def review_service(
     reason: str,
     payment_reference: str,
     task_context: str | None = None,
+    payment_protocol: str = "auto",
+    payment_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a review after a v1 payment-reference check."""
     service_id = service_id.strip()
@@ -92,19 +95,23 @@ def review_service(
     if not reason:
         return {"accepted": False, "reason": "reason is required"}
 
-    payment_ok, payment_reason = verify_payment_reference(payment_reference)
-    if not payment_ok:
-        return {"accepted": False, "reason": payment_reason}
-
-    reviewer_id = reviewer_id_from_payment(payment_reference)
-
     with connect() as conn:
         service = conn.execute(
-            "select id from services where id = %s",
+            "select id, stripe_payee_ref from services where id = %s",
             (service_id,),
         ).fetchone()
         if service is None:
             return {"accepted": False, "reason": "service not found"}
+
+        verification = verify_payment_reference(
+            service_id=service_id,
+            payment_reference=payment_reference,
+            service_payment_ref=service["stripe_payee_ref"],
+            payment_protocol=payment_protocol,
+            payment_evidence=payment_evidence,
+        )
+        if not verification.ok:
+            return {"accepted": False, "reason": verification.reason}
 
         existing = conn.execute(
             "select id from reviews where payment_reference = %s",
@@ -117,12 +124,36 @@ def review_service(
             row = conn.execute(
                 """
                 insert into reviews (
-                  service_id, rating, reason, payment_reference, task_context, reviewer_id
+                  service_id,
+                  rating,
+                  reason,
+                  payment_reference,
+                  task_context,
+                  reviewer_id,
+                  payment_protocol,
+                  payment_rail,
+                  payment_status,
+                  payment_amount,
+                  payment_currency,
+                  payment_metadata
                 )
-                values (%s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
-                (service_id, rating, reason, payment_reference, task_context, reviewer_id),
+                (
+                    service_id,
+                    rating,
+                    reason,
+                    payment_reference,
+                    task_context,
+                    verification.reviewer_id,
+                    verification.protocol,
+                    verification.rail,
+                    verification.payment_status,
+                    verification.payment_amount,
+                    verification.payment_currency,
+                    Jsonb(verification.metadata or {}),
+                ),
             ).fetchone()
             conn.commit()
         except psycopg.errors.UniqueViolation:
@@ -133,7 +164,9 @@ def review_service(
         "accepted": True,
         "reason": "review accepted",
         "review_id": row["id"],
-        "verification": payment_reason,
+        "verification": verification.reason,
+        "payment_protocol": verification.protocol,
+        "payment_rail": verification.rail,
     }
 
 
