@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: crowdcode-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -e .
+    startCommand: crowdcode-mcp
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MCP_TRANSPORT
+        value: streamable-http
+      - key: HOST
+        value: 0.0.0.0
+      - key: CORS_ORIGINS
+        value: https://crowdcode.app,https://www.crowdcode.app,http://127.0.0.1:5173,http://localhost:5173
+      - key: CROWDCODE_REQUESTS_TABLE
+        value: service_requests
+      - key: PROJECT_IDEAS_CACHE_SECONDS
+        value: "300"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: nvidia/nemotron-3-nano-30b-a3b:nitro
+      - key: OPENROUTER_SITE_URL
+        value: https://crowdcode.app
+      - key: OPENROUTER_APP_NAME
+        value: CrowdCode
+      - key: CROWDCODE_REVIEWER_SALT
+        sync: false
+
+  - type: static
+    name: crowdcode-frontend
+    buildCommand: ""
+    staticPublishPath: frontend

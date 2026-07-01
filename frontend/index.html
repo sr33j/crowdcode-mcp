@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CrowdCode</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="ideas-panel" aria-labelledby="ideas-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Latest demand</p>
+            <h1 id="ideas-heading">Project ideas</h1>
+          </div>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+        <div id="ideas-status" class="status">Loading recent requests...</div>
+        <div id="ideas" class="ideas"></div>
+      </section>
+
+      <aside class="services-panel" aria-labelledby="services-heading">
+        <div class="section-head compact">
+          <div>
+            <p class="eyebrow">Reputation</p>
+            <h2 id="services-heading">Top services</h2>
+          </div>
+        </div>
+        <div id="services-status" class="status">Loading service rankings...</div>
+        <ol id="services" class="services"></ol>
+      </aside>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

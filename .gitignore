@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.DS_Store
+
+# Local agent skill installs
+.agents/
+.claude/
+.hermes/
+.pi/
+skills-lock.json
+
+# Supabase CLI local state
+supabase/.temp/
+
+# Local scratch data and examples
+*.csv
+examples/
