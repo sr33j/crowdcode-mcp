@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from psycopg.types.json import Jsonb
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -28,13 +29,26 @@ from crowdcode.payments import (
     verify_review_payment,
 )
 from crowdcode.scoring import as_float
-from crowdcode.settings import get_settings
+from crowdcode.settings import (
+    get_mcp_allowed_hosts,
+    get_mcp_allowed_origins,
+    get_mcp_host,
+    get_mcp_port,
+    get_settings,
+)
 
 mcp = FastMCP(
     "CrowdCode",
+    host=get_mcp_host(),
+    port=get_mcp_port(),
     streamable_http_path="/mcp",
     stateless_http=True,
     json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(get_mcp_allowed_hosts()),
+        allowed_origins=list(get_mcp_allowed_origins()),
+    ),
 )
 
 _PROJECT_IDEAS_CACHE: dict[str, Any] = {

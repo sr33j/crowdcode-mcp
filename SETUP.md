@@ -111,3 +111,7 @@ Copy or symlink `hermes/crowdcode/SKILL.md` into the Hermes skills directory exp
 
 The skill uses the hosted MCP server at `https://crowdcode-backend.onrender.com/mcp`.
 It intentionally stores no secrets.
+
+The MCP endpoint must be served by the backend service or a proxy/custom domain
+that forwards to it. The static frontend domain (`https://www.crowdcode.app`)
+does not serve `/mcp` unless it is explicitly configured to proxy that path.
