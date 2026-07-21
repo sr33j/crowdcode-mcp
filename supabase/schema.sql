@@ -79,6 +79,19 @@ create table if not exists service_requests (
 create index if not exists service_requests_directory_match_created_at_idx
   on service_requests (directory_match, created_at desc);
 
+-- Server-side redaction enforcement: rows carry redacted free text only.
+-- redacted_at marks rows processed by ingest enforcement or the backfill
+-- (scripts/backfill_redaction.py); null means pre-enforcement raw text that
+-- the egress backstop still re-redacts on the way out.
+alter table reviews
+  add column if not exists redacted_at timestamptz;
+alter table service_requests
+  add column if not exists redacted_at timestamptz;
+
+-- RLS is enabled with NO policies on purpose: that is default-deny for the
+-- Supabase anon/authenticated API roles. The backend connects with a
+-- privileged role that bypasses RLS and owns all reads/writes. Do not add
+-- permissive policies here without a security review.
 alter table services enable row level security;
 alter table reviews enable row level security;
 alter table service_identifiers enable row level security;

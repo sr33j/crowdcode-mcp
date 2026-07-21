@@ -11,9 +11,38 @@ __pycache__/
 .pi/
 skills-lock.json
 
+# Node / TypeScript workspaces
+node_modules/
+dist/
+*.tsbuildinfo
+
 # Supabase CLI local state
 supabase/.temp/
 
 # Local scratch data and examples
 *.csv
 examples/
+
+# Python test cache
+.pytest_cache/
+
+# Local env overrides (keep .env.example tracked)
+.env.local
+.env.*.local
+
+# Secrets / keys (defensive)
+*.pem
+*.key
+
+# Logs & coverage
+*.log
+coverage/
+*.lcov
+.nyc_output/
+
+# Packaging artifacts
+*.tgz
+
+# Editors
+.vscode/
+.idea/

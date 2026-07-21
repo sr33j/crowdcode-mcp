@@ -33,6 +33,28 @@ services:
         value: CrowdCode
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
+      # Redaction sidecar (server-side enforcement backstop). Point at the
+      # crowdcode-redactor private service; leave unset to disable enforcement.
+      - key: REDACTOR_URL
+        sync: false
+      - key: REDACTOR_TOKEN
+        sync: false
+
+  # Internal-only redaction sidecar: same Rampart + secret-recognizer
+  # pipeline as crowdcode-mcp, called by the backend on ingest/egress.
+  - type: pserv
+    name: crowdcode-redactor
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build -w @crowdcode/redaction
+    startCommand: node services/redactor/server.mjs
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: CROWDCODE_CACHE_DIR
+        value: /opt/render/project/.cache/crowdcode-redactor
+      - key: REDACTOR_TOKEN
+        sync: false
 
   - type: static
     name: crowdcode-frontend

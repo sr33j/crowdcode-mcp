@@ -1,0 +1,17 @@
+{
+  "name": "@crowdcode/redactor-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal redaction sidecar for the CrowdCode backend. Enforces the same Rampart + secret-recognizer pipeline on ingest/egress for callers that bypass the local MCP client.",
+  "type": "module",
+  "main": "server.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@crowdcode/redaction": "^0.1.0"
+  }
+}

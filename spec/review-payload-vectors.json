@@ -1,0 +1,261 @@
+{
+  "version": 1,
+  "generated_by": "scripts/generate_vectors.py",
+  "endpoint_normalization": [
+    {
+      "input": "Example.COM/api/",
+      "expected": "https://example.com/api"
+    },
+    {
+      "input": "HTTPS://Example.COM:443/api//",
+      "expected": "https://example.com:443/api"
+    },
+    {
+      "input": "http://localhost:8000",
+      "expected": "http://localhost:8000/"
+    },
+    {
+      "input": "https://a.b/x?q=1#f",
+      "expected": "https://a.b/x"
+    },
+    {
+      "input": "api.example.com:8080/v1/",
+      "expected": "https://api.example.com:8080/v1"
+    },
+    {
+      "input": "https://user:pass@Host.COM/x",
+      "expected": "https://host.com/x"
+    },
+    {
+      "input": "example.com",
+      "expected": "https://example.com/"
+    },
+    {
+      "input": "https://example.com//",
+      "expected": "https://example.com/"
+    },
+    {
+      "input": "HTTP://EXAMPLE.com/Path/To/Api",
+      "expected": "http://example.com/Path/To/Api"
+    },
+    {
+      "input": "   ",
+      "expected": null
+    },
+    {
+      "input": "",
+      "expected": null
+    },
+    {
+      "input": null,
+      "expected": null
+    },
+    {
+      "input": "https:///nohost",
+      "error": "api_endpoint must include a host"
+    }
+  ],
+  "provider_normalization": [
+    {
+      "input": "Stripe-Link",
+      "expected": "stripe_payment_link"
+    },
+    {
+      "input": "stripe_link",
+      "expected": "stripe_payment_link"
+    },
+    {
+      "input": "payment_link",
+      "expected": "stripe_payment_link"
+    },
+    {
+      "input": "MPP",
+      "expected": "mppx"
+    },
+    {
+      "input": "mppx",
+      "expected": "mppx"
+    },
+    {
+      "input": "  x402  ",
+      "expected": "x402"
+    },
+    {
+      "input": "Stripe",
+      "expected": "stripe"
+    },
+    {
+      "input": "MANUAL",
+      "expected": "manual"
+    },
+    {
+      "input": "venmo",
+      "error": "payment_provider must be one of: manual, mppx, stripe, stripe_payment_link, x402"
+    },
+    {
+      "input": "   ",
+      "expected": null
+    },
+    {
+      "input": null,
+      "expected": null
+    }
+  ],
+  "service_id": [
+    {
+      "api_endpoint": "api.example.com/v1",
+      "payment_provider": "x402",
+      "payment_target_ref": " 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 ",
+      "expected": "svc_e42f480020458a47684f"
+    },
+    {
+      "api_endpoint": "https://OCR.example.com:443/scan/",
+      "payment_provider": "mppx",
+      "payment_target_ref": "0x1111111111111111111111111111111111111111",
+      "expected": "svc_0362f7fc898bae2687ee"
+    },
+    {
+      "api_endpoint": "https://svc.example.com/",
+      "payment_provider": "stripe",
+      "payment_target_ref": "acct_123",
+      "expected": "svc_b3aede4257ba2ae95a5c"
+    }
+  ],
+  "review_payload": [
+    {
+      "name": "full identity, ascii",
+      "identity": {
+        "service_id": "svc_0123456789abcdef0123",
+        "api_endpoint": "https://api.example.com/v1",
+        "payment_provider": "x402",
+        "payment_target_ref": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "directory_slug": "example-ocr"
+      },
+      "rating": 5,
+      "reason": "Fast and accurate OCR, receipts parsed correctly.",
+      "payment_reference": "0xabababababababababababababababababababababababababababababababab",
+      "expected_reason_hash": "sha256:0f73a31d28c0e2f1b9bc4deafc14b510f228b55abde71d3fcbc8fb406fc2c330",
+      "expected_message": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":\"example-ocr\",\"payment_provider\":\"x402\",\"payment_reference\":\"0xabababababababababababababababababababababababababababababababab\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":5,\"reason_hash\":\"sha256:0f73a31d28c0e2f1b9bc4deafc14b510f228b55abde71d3fcbc8fb406fc2c330\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "non-ascii and emoji in reason, whitespace padding",
+      "identity": {
+        "service_id": "svc_0123456789abcdef0123",
+        "api_endpoint": "https://api.example.com/v1",
+        "payment_provider": "mppx",
+        "payment_target_ref": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "directory_slug": null
+      },
+      "rating": 4,
+      "reason": "  Great service \u2014 tr\u00e8s rapide \ud83d\ude80  ",
+      "payment_reference": "  0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd  ",
+      "expected_reason_hash": "sha256:aaae919f42fc29789fab3c4e28d24ef4d94785f066844a59ea506657214ef0d9",
+      "expected_message": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":null,\"payment_provider\":\"mppx\",\"payment_reference\":\"0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":4,\"reason_hash\":\"sha256:aaae919f42fc29789fab3c4e28d24ef4d94785f066844a59ea506657214ef0d9\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "non-ascii in identity fields (escaped in message itself)",
+      "identity": {
+        "service_id": null,
+        "api_endpoint": "https://caf\u00e9.example.com/",
+        "payment_provider": "manual",
+        "payment_target_ref": "caf\u00e9-ref-\u00fcber",
+        "directory_slug": "caf\u00e9-ocr"
+      },
+      "rating": 3,
+      "reason": "ok",
+      "payment_reference": "ref-123",
+      "expected_reason_hash": "sha256:2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "expected_message": "{\"api_endpoint\":\"https://caf\\u00e9.example.com/\",\"directory_slug\":\"caf\\u00e9-ocr\",\"payment_provider\":\"manual\",\"payment_reference\":\"ref-123\",\"payment_target_ref\":\"caf\\u00e9-ref-\\u00fcber\",\"rating\":3,\"reason_hash\":\"sha256:2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df\",\"service_id\":null,\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "all-null identity fields",
+      "identity": {
+        "service_id": null,
+        "api_endpoint": null,
+        "payment_provider": null,
+        "payment_target_ref": null,
+        "directory_slug": null
+      },
+      "rating": 1,
+      "reason": "no identity provided",
+      "payment_reference": "ref-null-identity",
+      "expected_reason_hash": "sha256:be4002a3b85690fd003ab06d769a1442f66da7f53cc82096a41ed3b5d5c2c98b",
+      "expected_message": "{\"api_endpoint\":null,\"directory_slug\":null,\"payment_provider\":null,\"payment_reference\":\"ref-null-identity\",\"payment_target_ref\":null,\"rating\":1,\"reason_hash\":\"sha256:be4002a3b85690fd003ab06d769a1442f66da7f53cc82096a41ed3b5d5c2c98b\",\"service_id\":null,\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "python str.strip control chars (x1c-x1f are python-space, not js-space)",
+      "identity": {
+        "service_id": "svc_ffffffffffffffffffff",
+        "api_endpoint": "https://api.example.com/v1",
+        "payment_provider": "x402",
+        "payment_target_ref": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "directory_slug": null
+      },
+      "rating": 2,
+      "reason": "\u001c\u001d review with odd padding \u001e\u001f",
+      "payment_reference": "\u001cref-ctrl\u001f",
+      "expected_reason_hash": "sha256:8c3099aa2cff44342713b0117de2b61832ab4255d61989050a70044a11637e79",
+      "expected_message": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":null,\"payment_provider\":\"x402\",\"payment_reference\":\"ref-ctrl\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":2,\"reason_hash\":\"sha256:8c3099aa2cff44342713b0117de2b61832ab4255d61989050a70044a11637e79\",\"service_id\":\"svc_ffffffffffffffffffff\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "nbsp and line separator padding",
+      "identity": {
+        "service_id": "svc_ffffffffffffffffffff",
+        "api_endpoint": "https://api.example.com/v1",
+        "payment_provider": "x402",
+        "payment_target_ref": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "directory_slug": null
+      },
+      "rating": 5,
+      "reason": "\u00a0\u2028 padded reason \u2028\u00a0",
+      "payment_reference": "ref-unicode-ws",
+      "expected_reason_hash": "sha256:074e14992cb8268cc806230088c3a99cf7901f3dc39f724d3b3add14bff869c8",
+      "expected_message": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":null,\"payment_provider\":\"x402\",\"payment_reference\":\"ref-unicode-ws\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":5,\"reason_hash\":\"sha256:074e14992cb8268cc806230088c3a99cf7901f3dc39f724d3b3add14bff869c8\",\"service_id\":\"svc_ffffffffffffffffffff\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "nfc reason (U+00E9 precomposed; no unicode normalization applied)",
+      "identity": {
+        "service_id": "svc_1234567890abcdef1234",
+        "api_endpoint": null,
+        "payment_provider": null,
+        "payment_target_ref": null,
+        "directory_slug": null
+      },
+      "rating": 4,
+      "reason": "caf\u00e9",
+      "payment_reference": "ref-nfc",
+      "expected_reason_hash": "sha256:850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e",
+      "expected_message": "{\"api_endpoint\":null,\"directory_slug\":null,\"payment_provider\":null,\"payment_reference\":\"ref-nfc\",\"payment_target_ref\":null,\"rating\":4,\"reason_hash\":\"sha256:850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e\",\"service_id\":\"svc_1234567890abcdef1234\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "nfd reason (U+0065 U+0301; must hash differently from nfc)",
+      "identity": {
+        "service_id": "svc_1234567890abcdef1234",
+        "api_endpoint": null,
+        "payment_provider": null,
+        "payment_target_ref": null,
+        "directory_slug": null
+      },
+      "rating": 4,
+      "reason": "cafe\u0301",
+      "payment_reference": "ref-nfd",
+      "expected_reason_hash": "sha256:81ef060bcd98adc7824eb5c1ada83c32491b16018e11e79f00ab9d09e04b015a",
+      "expected_message": "{\"api_endpoint\":null,\"directory_slug\":null,\"payment_provider\":null,\"payment_reference\":\"ref-nfd\",\"payment_target_ref\":null,\"rating\":4,\"reason_hash\":\"sha256:81ef060bcd98adc7824eb5c1ada83c32491b16018e11e79f00ab9d09e04b015a\",\"service_id\":\"svc_1234567890abcdef1234\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "redacted placeholder text (typical real input)",
+      "identity": {
+        "service_id": "svc_0123456789abcdef0123",
+        "api_endpoint": "https://api.example.com/v1",
+        "payment_provider": "x402",
+        "payment_target_ref": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "directory_slug": "example-ocr"
+      },
+      "rating": 5,
+      "reason": "Processed [EMAIL_1]'s invoices for [GIVEN_NAME_1], key [API_KEY_1] worked.",
+      "payment_reference": "0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "expected_reason_hash": "sha256:fbdcff585b6c7139e5dae6d7fc79ecfef56fedbaaf252e06857df04dbcb37e3a",
+      "expected_message": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":\"example-ocr\",\"payment_provider\":\"x402\",\"payment_reference\":\"0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":5,\"reason_hash\":\"sha256:fbdcff585b6c7139e5dae6d7fc79ecfef56fedbaaf252e06857df04dbcb37e3a\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}"
+    }
+  ]
+}

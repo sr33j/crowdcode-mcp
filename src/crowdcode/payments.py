@@ -34,6 +34,11 @@ class PaymentVerification:
     signature_scheme: str | None = None
     payment_verified: bool = False
     signature_verified: bool = False
+    # True when the failure was specifically the EIP-191 signature not
+    # matching the server-side canonical payload — lets review_service return
+    # the expected message so clients can re-sign after an identity
+    # resolution race.
+    signature_mismatch: bool = False
 
 
 def reviewer_id_from_payment(payment_reference: str) -> str:
@@ -42,11 +47,18 @@ def reviewer_id_from_payment(payment_reference: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-def canonical_review_payload(
+REASON_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def reason_hash(reason: str) -> str:
+    return "sha256:" + hashlib.sha256(reason.strip().encode("utf-8")).hexdigest()
+
+
+def canonical_review_payload_from_hash(
     *,
     identity: ServiceIdentity,
     rating: int,
-    reason: str,
+    reason_hash: str,
     payment_reference: str,
 ) -> str:
     payload = {
@@ -58,9 +70,24 @@ def canonical_review_payload(
         "directory_slug": identity.directory_slug,
         "payment_reference": payment_reference.strip(),
         "rating": rating,
-        "reason_hash": "sha256:" + hashlib.sha256(reason.strip().encode("utf-8")).hexdigest(),
+        "reason_hash": reason_hash,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def canonical_review_payload(
+    *,
+    identity: ServiceIdentity,
+    rating: int,
+    reason: str,
+    payment_reference: str,
+) -> str:
+    return canonical_review_payload_from_hash(
+        identity=identity,
+        rating=rating,
+        reason_hash=reason_hash(reason),
+        payment_reference=payment_reference,
+    )
 
 
 def verify_payment_reference(payment_reference: str) -> tuple[bool, str]:
@@ -144,9 +171,15 @@ def _verify_signed_machine_payment(
     )
     recovered = _recover_eip191(payload, review_signature)
     if recovered is None:
-        return PaymentVerification(False, "review_signature is invalid")
+        return PaymentVerification(
+            False, "review_signature is invalid", signature_mismatch=True
+        )
     if recovered.lower() != wallet.lower():
-        return PaymentVerification(False, "review_signature does not match reviewer_wallet")
+        return PaymentVerification(
+            False,
+            "review_signature does not match reviewer_wallet",
+            signature_mismatch=True,
+        )
 
     if identity.payment_provider == "mppx":
         payment = _verify_mppx_payment(

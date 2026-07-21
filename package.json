@@ -3,9 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
   "scripts": {
     "frontend": "node scripts/serve-frontend.mjs",
-    "backend": "crowdcode-mcp"
+    "backend": "crowdcode-mcp",
+    "build": "npm run build -w @crowdcode/redaction && npm run build -w crowdcode-mcp",
+    "test": "npm run build && npm test -w @crowdcode/redaction -w crowdcode-mcp"
   },
   "engines": {
     "node": ">=20"

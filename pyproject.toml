@@ -18,6 +18,12 @@ dependencies = [
 [project.scripts]
 crowdcode-mcp = "crowdcode.server:main"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

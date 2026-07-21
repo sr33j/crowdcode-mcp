@@ -24,9 +24,16 @@ from crowdcode.identity import (
     resolve_service,
 )
 from crowdcode.payments import (
+    REASON_HASH_RE,
     canonical_review_payload,
+    canonical_review_payload_from_hash,
     utc_now,
     verify_review_payment,
+)
+from crowdcode.redaction import (
+    RedactionUnavailable,
+    redact_texts,
+    redaction_enabled,
 )
 from crowdcode.scoring import as_float
 from crowdcode.settings import (
@@ -86,14 +93,32 @@ def request_service(
     if not service_description:
         return {"accepted": False, "reason": "service_description is required"}
 
+    # Ingest enforcement (fail-closed): free text is redacted before storage
+    # so raw PII/secrets from clients that bypass crowdcode-mcp never land
+    # in the shared database.
+    try:
+        redacted = redact_texts([service_description, task_context], fail_closed=True)
+    except RedactionUnavailable:
+        return {
+            "accepted": False,
+            "reason": "redaction service unavailable; retry shortly",
+        }
+    if redacted is not None:
+        service_description = redacted[0] or service_description
+        task_context = redacted[1]
+
     with connect() as conn:
         row = conn.execute(
             """
-            insert into service_requests (service_description, task_context)
-            values (%s, %s)
+            insert into service_requests (service_description, task_context, redacted_at)
+            values (%s, %s, %s)
             returning id, directory_match
             """,
-            (service_description, task_context),
+            (
+                service_description,
+                task_context,
+                utc_now() if redaction_enabled() else None,
+            ),
         ).fetchone()
         conn.commit()
 
@@ -172,6 +197,21 @@ def get_service_score(
             (service["id"],),
         ).fetchall()
 
+    # Egress backstop: rows written before enforcement may contain raw text;
+    # redact on the way out, dropping free text if the redactor is down.
+    review_texts: list[str | None] = []
+    for review in recent_reviews:
+        review_texts.append(review.get("reason"))
+        review_texts.append(review.get("task_context"))
+    redacted = redact_texts(review_texts, fail_closed=False)
+    for index, review in enumerate(recent_reviews):
+        if redacted is None:
+            review["reason"] = None
+            review["task_context"] = None
+        else:
+            review["reason"] = redacted[index * 2]
+            review["task_context"] = redacted[index * 2 + 1]
+
     num_reviews = score["num_reviews"]
     return {
         "service_id": service["id"],
@@ -179,6 +219,7 @@ def get_service_score(
         "canonical_endpoint": service.get("canonical_endpoint"),
         "payment_provider": service.get("payment_provider"),
         "payment_target_ref": service.get("payment_target_ref"),
+        "directory_slug": service.get("directory_slug"),
         "found": True,
         "avg_rating": as_float(score["avg_rating"]),
         "num_reviews": num_reviews,
@@ -189,7 +230,7 @@ def get_service_score(
 @mcp.tool()
 def get_review_signing_payload(
     rating: int,
-    reason: str,
+    reason_hash: str,
     payment_reference: str,
     service_id: str | None = None,
     api_endpoint: str | None = None,
@@ -197,7 +238,20 @@ def get_review_signing_payload(
     payment_target_ref: str | None = None,
     directory_slug: str | None = None,
 ) -> dict[str, Any]:
-    """Return the exact EIP-191 message to sign before reviewing."""
+    """Return the exact EIP-191 message to sign before reviewing.
+
+    Send only a hash of the review text, never the text itself: compute
+    reason_hash locally as "sha256:" + sha256(reason.strip() utf-8 bytes) in
+    lowercase hex, over the exact reason string you will later pass to
+    review_service. (The crowdcode-mcp package builds this payload entirely
+    locally and does not call this tool.)
+    """
+    reason_hash = reason_hash.strip().lower()
+    if not REASON_HASH_RE.match(reason_hash):
+        return {
+            "ok": False,
+            "reason": "reason_hash must look like sha256:<64 lowercase hex chars>",
+        }
     try:
         identity = build_identity(
             service_id=service_id,
@@ -228,10 +282,10 @@ def get_review_signing_payload(
     return {
         "ok": True,
         "signature_scheme": "eip191",
-        "message": canonical_review_payload(
+        "message": canonical_review_payload_from_hash(
             identity=identity,
             rating=rating,
-            reason=reason,
+            reason_hash=reason_hash,
             payment_reference=payment_reference,
         ),
     }
@@ -314,7 +368,44 @@ def review_service(
             signature_scheme=signature_scheme,
         )
         if not verification.ok:
-            return {"accepted": False, "reason": verification.reason}
+            failure: dict[str, Any] = {
+                "accepted": False,
+                "reason": verification.reason,
+            }
+            if verification.signature_mismatch:
+                # The signed message did not match the server-side canonical
+                # payload — usually a service_id resolution race. Return the
+                # resolved identity and the exact message to re-sign (identity
+                # fields plus the reason hash only; no private data).
+                failure["resolved_identity"] = {
+                    "service_id": effective_identity.service_id,
+                    "api_endpoint": effective_identity.api_endpoint,
+                    "payment_provider": effective_identity.payment_provider,
+                    "payment_target_ref": effective_identity.payment_target_ref,
+                    "directory_slug": effective_identity.directory_slug,
+                }
+                failure["expected_message"] = canonical_review_payload(
+                    identity=effective_identity,
+                    rating=rating,
+                    reason=reason,
+                    payment_reference=payment_reference,
+                )
+            return failure
+
+        # Ingest enforcement (fail-closed). Runs AFTER signature verification:
+        # the signature covers the hash of the reason exactly as received
+        # (already redacted when sent via crowdcode-mcp — this is a no-op
+        # then); storage gets the re-redacted text either way.
+        try:
+            redacted = redact_texts([reason, task_context], fail_closed=True)
+        except RedactionUnavailable:
+            return {
+                "accepted": False,
+                "reason": "redaction service unavailable; retry shortly",
+            }
+        if redacted is not None:
+            reason = redacted[0] or reason
+            task_context = redacted[1]
 
         if service is None:
             created = create_service_from_identity(conn, identity)
@@ -331,9 +422,9 @@ def review_service(
                   reviewer_id, payment_provider, payment_target_ref,
                   payment_proof, payment_verified, payment_verified_at,
                   reviewer_wallet, review_signature, signature_scheme,
-                  signature_verified
+                  signature_verified, redacted_at
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
                 (
@@ -352,6 +443,7 @@ def review_service(
                     verification.review_signature,
                     verification.signature_scheme,
                     verification.signature_verified,
+                    utc_now() if redaction_enabled() else None,
                 ),
             ).fetchone()
             conn.commit()
@@ -446,7 +538,16 @@ def _fetch_recent_requests(limit: int = 100) -> list[dict[str, Any]]:
                 "text": text[:1500],
             }
         )
-    return requests
+
+    # Egress backstop before this text reaches OpenRouter and the public
+    # frontend: redact pre-enforcement rows; drop everything if the redactor
+    # is configured but down (never leak on failure).
+    redacted = redact_texts([item["text"] for item in requests], fail_closed=False)
+    if redacted is None:
+        return []
+    for index, item in enumerate(requests):
+        item["text"] = redacted[index] or ""
+    return [item for item in requests if item["text"]]
 
 
 def _fallback_project_ideas(requests: list[dict[str, Any]], reason: str) -> dict[str, Any]:
