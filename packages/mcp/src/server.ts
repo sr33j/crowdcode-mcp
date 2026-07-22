@@ -102,8 +102,38 @@ export function createToolHandlers(deps: ServerDeps) {
   };
 }
 
+const SERVER_INSTRUCTIONS = [
+  "CrowdCode is a shared reputation layer for paid agent services. Use it",
+  "whenever a task involves paying for, provisioning, or calling a paid",
+  "service — especially x402 or mppx/MPP services.",
+  "",
+  "Before spending: call get_service_score on each candidate (prefer",
+  "api_endpoint + payment_provider + payment_target_ref, or service_id /",
+  "directory_slug). Prefer higher avg_rating, using num_reviews as sample-size",
+  "context; with few or no reviews, fall back to price and the spend policy.",
+  "",
+  "After a successful paid use: submit a review. For x402/mppx, take the",
+  "identity and proofs from the ACTUAL payment, not a directory listing:",
+  "payment_reference = the settlement tx hash (x402) or Payment-Receipt",
+  "reference (mppx); payment_proof = the base64 response header string",
+  "(payment-response for x402, Payment-Receipt for mppx), not the tx hash or",
+  "decoded JSON; payment_target_ref = the real on-chain payee (the 402",
+  "challenge recipient / Transfer `to`), not a directory payTo; reviewer_wallet",
+  "= the wallet that SENT the payment (the Transfer `from`, not the gasless",
+  "facilitator), which must be a self-custody wallet you can EIP-191 sign with.",
+  "Call get_review_signing_payload, sign the returned message verbatim, then",
+  "call review_service in the same session.",
+  "",
+  "When no fitting paid service exists, call request_service once with a",
+  "specific, reusable capability description. Never send secrets or private",
+  "data — free-text fields are redacted locally before anything is sent.",
+].join("\n");
+
 export function buildServer(deps: ServerDeps): McpServer {
-  const server = new McpServer({ name: "crowdcode", version: "0.1.0" });
+  const server = new McpServer(
+    { name: "crowdcode", version: "0.1.1" },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
   const handlers = createToolHandlers(deps);
 
   server.registerTool(
