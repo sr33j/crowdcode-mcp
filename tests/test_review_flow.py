@@ -9,7 +9,9 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from crowdcode.identity import ServiceIdentity
+from crowdcode import payments as payments_mod
 from crowdcode.payments import (
+    ERC20_TRANSFER_TOPIC,
     REASON_HASH_RE,
     canonical_review_payload,
     canonical_review_payload_from_hash,
@@ -111,6 +113,121 @@ def test_garbage_signature_sets_flag():
     assert not verification.ok
     assert verification.signature_mismatch
     assert verification.reason == "review_signature is invalid"
+
+
+TX_HASH = "0x" + "cd" * 32
+PAYEE = "0x" + "11" * 20  # matches IDENTITY.payment_target_ref
+FACILITATOR = "0x" + "99" * 20  # gasless relayer / settler (never the payer)
+
+
+def _addr_topic(addr: str) -> str:
+    return "0x" + "0" * 24 + addr[2:].lower()
+
+
+def _transfer_receipt(*, payer: str, payee: str, value: int = 1000) -> dict:
+    """A receipt whose tx sender is a facilitator but whose Transfer event
+    proves the real payer — mirrors a gasless x402/mppx settlement."""
+    return {
+        "status": "0x1",
+        "from": FACILITATOR,  # tx sender is the relayer, not the payer
+        "blockNumber": "0x1867543",
+        "logs": [
+            {
+                "address": "0x" + "cc" * 20,
+                "topics": [
+                    ERC20_TRANSFER_TOPIC,
+                    _addr_topic(payer),
+                    _addr_topic(payee),
+                ],
+                "data": hex(value),
+            }
+        ],
+    }
+
+
+def _x402_identity() -> ServiceIdentity:
+    return ServiceIdentity(
+        service_id=IDENTITY.service_id,
+        api_endpoint=IDENTITY.api_endpoint,
+        payment_provider="x402",
+        payment_target_ref=PAYEE,
+    )
+
+
+def _signed_for(identity: ServiceIdentity, reason: str) -> str:
+    return _sign(
+        canonical_review_payload(
+            identity=identity, rating=5, reason=reason, payment_reference=TX_HASH
+        )
+    )
+
+
+def test_x402_gasless_payment_verifies_via_transfer_event(monkeypatch):
+    identity = _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
+    )
+    verification = verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=json.dumps({"transaction": TX_HASH, "network": "base"}),
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(identity, reason),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified
+    assert verification.metadata["transaction"]["from"] == ACCOUNT.address.lower()
+
+
+def test_x402_rejects_when_payer_is_not_reviewer_wallet(monkeypatch):
+    identity = _x402_identity()
+    reason = "fast and correct"
+    other = "0x" + "77" * 20
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(payer=other, payee=PAYEE),
+    )
+    verification = verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=json.dumps({"transaction": TX_HASH, "network": "base"}),
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(identity, reason),
+    )
+    assert not verification.ok
+    assert verification.reason == "reviewer_wallet did not send the x402 payment"
+
+
+def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
+    reason = "solid data"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
+    )
+    receipt_proof = json.dumps(
+        {"status": "success", "method": "tempo", "reference": TX_HASH}
+    )
+    verification = verify_review_payment(
+        identity=IDENTITY,  # provider mppx, target PAYEE
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=receipt_proof,
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(IDENTITY, reason),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified
+    assert verification.metadata["provider"] == "mppx"
 
 
 def test_signing_tool_rejects_malformed_hash():

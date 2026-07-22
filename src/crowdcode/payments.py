@@ -19,6 +19,11 @@ from crowdcode.settings import get_settings
 EVM_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 TX_HASH_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
 
+# keccak256("Transfer(address,address,uint256)")
+ERC20_TRANSFER_TOPIC = (
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+)
+
 TEMPO_RPC_URL = "https://rpc.tempo.xyz"
 BASE_RPC_URL = "https://mainnet.base.org"
 
@@ -241,17 +246,22 @@ def _verify_mppx_payment(
     if payment_reference.strip() not in {tx_hash, f"mppx:tempo:{tx_hash}"}:
         return PaymentVerification(False, "payment_reference does not match mppx receipt reference")
 
-    tx = _rpc_transaction(
+    chain_receipt = _rpc_transaction_receipt(
         os.environ.get("MPPX_TEMPO_RPC_URL", TEMPO_RPC_URL),
         tx_hash,
     )
-    if tx is None:
+    if chain_receipt is None:
         return PaymentVerification(False, "could not verify mppx transaction on Tempo")
+    if _hex_to_int(chain_receipt.get("status")) != 1:
+        return PaymentVerification(False, "mppx transaction did not succeed on Tempo")
 
-    tx_from = _normalize_evm_address(tx.get("from"))
-    if tx_from is None:
-        return PaymentVerification(False, "mppx transaction is missing sender")
-    if tx_from.lower() != reviewer_wallet.lower():
+    # MPP/Tempo payments are settled by a facilitator, so the tx sender is the
+    # settler, not the payer. Verify the payer via the Transfer event `from`.
+    target = _normalize_evm_address(identity.payment_target_ref)
+    transfer = _find_erc20_transfer(
+        chain_receipt, sender=reviewer_wallet, recipient=target
+    )
+    if transfer is None:
         return PaymentVerification(False, "reviewer_wallet did not send the mppx payment")
 
     metadata: dict[str, Any] = {
@@ -259,9 +269,11 @@ def _verify_mppx_payment(
         "receipt": receipt,
         "transaction": {
             "hash": tx_hash,
-            "from": tx_from,
-            "chain_id": _hex_to_int(tx.get("chainId")),
-            "block_number": _hex_to_int(tx.get("blockNumber")),
+            "from": transfer["from"],
+            "to": transfer["to"],
+            "value": str(transfer["value"]) if transfer["value"] is not None else None,
+            "token": transfer["token"],
+            "block_number": _hex_to_int(chain_receipt.get("blockNumber")),
         },
     }
 
@@ -307,29 +319,33 @@ def _verify_x402_payment(
     if network not in {"base", "eip155:8453", "8453"}:
         return PaymentVerification(False, "only x402 Base EVM payments are currently supported")
 
-    tx = _rpc_transaction(os.environ.get("X402_BASE_RPC_URL", BASE_RPC_URL), tx_hash)
-    if tx is None:
+    chain_receipt = _rpc_transaction_receipt(
+        os.environ.get("X402_BASE_RPC_URL", BASE_RPC_URL), tx_hash
+    )
+    if chain_receipt is None:
         return PaymentVerification(False, "could not verify x402 transaction on Base")
+    if _hex_to_int(chain_receipt.get("status")) != 1:
+        return PaymentVerification(False, "x402 transaction did not succeed on Base")
 
-    tx_from = _normalize_evm_address(tx.get("from"))
-    if tx_from is None:
-        return PaymentVerification(False, "x402 transaction is missing sender")
-    if tx_from.lower() != reviewer_wallet.lower():
-        return PaymentVerification(False, "reviewer_wallet did not send the x402 payment")
-
-    pay_to = _normalize_evm_address(proof.get("payTo") or proof.get("recipient"))
+    # x402 on Base uses EIP-3009 (gasless): a facilitator submits the tx, so the
+    # payer is the `from` of the USDC Transfer event, not the tx sender.
     target = _normalize_evm_address(identity.payment_target_ref)
-    if target and pay_to and target.lower() != pay_to.lower():
-        return PaymentVerification(False, "x402 payment recipient does not match payment_target_ref")
+    transfer = _find_erc20_transfer(
+        chain_receipt, sender=reviewer_wallet, recipient=target
+    )
+    if transfer is None:
+        return PaymentVerification(False, "reviewer_wallet did not send the x402 payment")
 
     metadata = {
         "provider": "x402",
         "proof": proof,
         "transaction": {
             "hash": tx_hash,
-            "from": tx_from,
-            "chain_id": _hex_to_int(tx.get("chainId")),
-            "block_number": _hex_to_int(tx.get("blockNumber")),
+            "from": transfer["from"],
+            "to": transfer["to"],
+            "value": str(transfer["value"]) if transfer["value"] is not None else None,
+            "token": transfer["token"],
+            "block_number": _hex_to_int(chain_receipt.get("blockNumber")),
         },
     }
     return PaymentVerification(True, "verified x402 payment and reviewer wallet", metadata=metadata)
@@ -397,13 +413,8 @@ def _parse_mpp_challenge(value: str | None) -> dict[str, Any] | None:
     return _parse_json_or_base64_json(cleaned)
 
 
-def _rpc_transaction(rpc_url: str, tx_hash: str) -> dict[str, Any] | None:
-    payload = {
-        "jsonrpc": "2.0",
-        "method": "eth_getTransactionByHash",
-        "params": [tx_hash],
-        "id": 1,
-    }
+def _rpc_call(rpc_url: str, method: str, params: list[Any]) -> dict[str, Any] | None:
+    payload = {"jsonrpc": "2.0", "method": method, "params": params, "id": 1}
     request = urllib.request.Request(
         rpc_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -419,6 +430,70 @@ def _rpc_transaction(rpc_url: str, tx_hash: str) -> dict[str, Any] | None:
         return None
     result = body.get("result")
     return result if isinstance(result, dict) else None
+
+
+def _rpc_transaction(rpc_url: str, tx_hash: str) -> dict[str, Any] | None:
+    return _rpc_call(rpc_url, "eth_getTransactionByHash", [tx_hash])
+
+
+def _rpc_transaction_receipt(rpc_url: str, tx_hash: str) -> dict[str, Any] | None:
+    return _rpc_call(rpc_url, "eth_getTransactionReceipt", [tx_hash])
+
+
+def _topic_to_address(topic: Any) -> str | None:
+    """An indexed address topic is a 32-byte word; the address is the low 20."""
+    if not isinstance(topic, str):
+        return None
+    cleaned = topic.strip()
+    if not cleaned.startswith("0x") or len(cleaned) != 66:
+        return None
+    return _normalize_evm_address("0x" + cleaned[-40:])
+
+
+def _find_erc20_transfer(
+    receipt: dict[str, Any],
+    *,
+    sender: str,
+    recipient: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the first ERC-20 Transfer log matching the given constraints.
+
+    x402 (EIP-3009) and MPP/Tempo payments are gasless: a facilitator submits
+    the transaction, so the transaction's ``from`` is the relayer, never the
+    payer. The payer is the ``from`` of the ERC-20 ``Transfer`` event, which is
+    what this inspects.
+    """
+    logs = receipt.get("logs")
+    if not isinstance(logs, list):
+        return None
+    sender_n = _normalize_evm_address(sender)
+    recipient_n = _normalize_evm_address(recipient) if recipient else None
+    token_n = _normalize_evm_address(token) if token else None
+    for log in logs:
+        if not isinstance(log, dict):
+            continue
+        topics = log.get("topics")
+        if not isinstance(topics, list) or len(topics) < 3:
+            continue
+        if str(topics[0]).lower() != ERC20_TRANSFER_TOPIC:
+            continue
+        log_from = _topic_to_address(topics[1])
+        log_to = _topic_to_address(topics[2])
+        log_token = _normalize_evm_address(log.get("address"))
+        if sender_n and log_from != sender_n:
+            continue
+        if recipient_n and log_to != recipient_n:
+            continue
+        if token_n and log_token != token_n:
+            continue
+        return {
+            "from": log_from,
+            "to": log_to,
+            "value": _hex_to_int(log.get("data")),
+            "token": log_token,
+        }
+    return None
 
 
 def _hex_to_int(value: Any) -> int | None:
