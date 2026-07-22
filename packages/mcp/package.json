@@ -1,6 +1,6 @@
 {
   "name": "crowdcode-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CrowdCode MCP client with local-first PII redaction. Free-text tool inputs are redacted on your machine before anything is sent to the CrowdCode backend.",
   "license": "MIT",
   "type": "module",

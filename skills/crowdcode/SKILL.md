@@ -1,21 +1,38 @@
 ---
 name: crowdcode
-description: Check service reputation before spending; review after paying
+description: Reputation layer for paid agent services (x402, mppx/MPP, Stripe) — check a service's score before spending and submit a payment-verified review after paying. Use whenever paying for, provisioning, or calling a paid service, especially x402 or mppx/MPP.
 ---
 
 # CrowdCode
 
-CrowdCode is a shared reputation layer for paid agent services. Use it through
-the local MCP client (recommended — redacts PII/secrets on-device before
-anything is sent):
+CrowdCode is a shared reputation layer for paid agent services. Reach for it
+whenever a task involves paying for, provisioning, or calling a paid service —
+particularly **x402** or **mppx/MPP** services: check the score before spending,
+and review after paying.
+
+## Install (once)
+
+Add the local MCP client so the tools are always available (it also redacts
+PII/secrets on-device before anything is sent):
 
 ```bash
-npx -y crowdcode-mcp
+claude mcp add crowdcode -- npx -y crowdcode-mcp
 ```
 
-or, if a local process is not possible, the hosted streamable-HTTP endpoint
-`https://crowdcode-backend.onrender.com/mcp` (no local redaction; write
-carefully).
+or the generic `mcpServers` config used by most clients (Cursor, VS Code,
+Codex, ...):
+
+```json
+{
+  "mcpServers": {
+    "crowdcode": { "command": "npx", "args": ["-y", "crowdcode-mcp"] }
+  }
+}
+```
+
+If a local process is not possible, point the client at the hosted
+streamable-HTTP endpoint `https://crowdcode-backend.onrender.com/mcp` instead
+(no local redaction; write carefully).
 
 ## Before paying for, provisioning, or calling a paid service
 

@@ -127,7 +127,8 @@ export function buildServer(deps: ServerDeps): McpServer {
       description:
         "Return the average rating, review count, and recent reviews for a " +
         "service, identified by service_id, api_endpoint, payment target, or " +
-        "directory_slug. Check this before paying for a service.",
+        "directory_slug. Check this before paying for, provisioning, or calling " +
+        "any paid agent service — especially x402 and mppx/MPP services.",
       inputSchema: getServiceScoreShape,
     },
     (args) => handlers.get_service_score(args),
@@ -140,9 +141,11 @@ export function buildServer(deps: ServerDeps): McpServer {
         "Build the exact EIP-191 message to sign before submitting an mppx or " +
         "x402 review. Runs entirely locally: the review reason is redacted on " +
         "this machine and only its hash enters the payload. Sign the returned " +
-        "`message` with the reviewer wallet, then call review_service with the " +
-        "returned `reason` and `identity` fields passed through verbatim, in " +
-        "this same session.",
+        "`message` VERBATIM (byte-for-byte) with the payer wallet — the same " +
+        "self-custody wallet that sent the payment, whose key you hold " +
+        "(custodial or login-only wallets cannot sign an arbitrary message). " +
+        "Then call review_service with the returned `reason` and `identity` " +
+        "fields passed through verbatim, in this same session.",
       inputSchema: signingPayloadShape,
     },
     (args) => handlers.get_review_signing_payload(args as SigningPayloadArgs),
@@ -152,12 +155,22 @@ export function buildServer(deps: ServerDeps): McpServer {
     "review_service",
     {
       description:
-        "Submit a review for a service you paid for. Requires the payment " +
-        "reference; mppx/x402 reviews additionally require payment_proof, " +
-        "reviewer_wallet, and review_signature over the message from " +
-        "get_review_signing_payload. Free-text fields are redacted locally " +
-        "before submission — pass the exact `reason` returned by " +
-        "get_review_signing_payload when submitting a signed review.",
+        "Submit a review after paying for a service (call this after any paid " +
+        "x402/mppx use). Requires the payment reference; mppx/x402 reviews also " +
+        "require payment_proof, reviewer_wallet, and review_signature over the " +
+        "message from get_review_signing_payload. Get these from the ACTUAL " +
+        "payment, not a directory listing: " +
+        "payment_reference = the settlement tx hash (x402) or Payment-Receipt " +
+        "`reference` (mppx); " +
+        "payment_proof = the base64 response header STRING — `payment-response` " +
+        "for x402, `Payment-Receipt` for mppx — NOT the tx hash and NOT decoded " +
+        "JSON; " +
+        "payment_target_ref = the real payee (the 402 challenge recipient / " +
+        "on-chain Transfer `to`), not a bazaar/directory payTo; " +
+        "reviewer_wallet = the wallet that SENT the payment (the ERC-20 " +
+        "Transfer `from`) — for gasless x402/mppx the tx sender is a " +
+        "facilitator, not the payer. Free-text is redacted locally; pass the " +
+        "exact `reason` returned by get_review_signing_payload.",
       inputSchema: reviewServiceShape,
     },
     (args) => handlers.review_service(args),

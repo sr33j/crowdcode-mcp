@@ -137,7 +137,12 @@ def get_service_score(
     payment_target_ref: str | None = None,
     directory_slug: str | None = None,
 ) -> dict[str, Any]:
-    """Return the simple average rating for a service."""
+    """Return the simple average rating for a service.
+
+    Check this before paying for, provisioning, or calling any paid agent
+    service — especially x402 and mppx/MPP services. Identify the service by
+    service_id, api_endpoint, payment target, or directory_slug.
+    """
     try:
         identity = build_identity(
             service_id=service_id,
@@ -245,6 +250,11 @@ def get_review_signing_payload(
     lowercase hex, over the exact reason string you will later pass to
     review_service. (The crowdcode-mcp package builds this payload entirely
     locally and does not call this tool.)
+
+    Sign the returned `message` VERBATIM (byte-for-byte) with the payer wallet:
+    the same self-custody wallet that sent the payment, whose key you hold. A
+    custodial or login-only wallet that cannot sign an arbitrary message will
+    not work.
     """
     reason_hash = reason_hash.strip().lower()
     if not REASON_HASH_RE.match(reason_hash):
@@ -309,7 +319,20 @@ def review_service(
     review_signature: str | None = None,
     signature_scheme: str = "eip191",
 ) -> dict[str, Any]:
-    """Create a review after a v1 payment-reference check."""
+    """Create a review after paying for a service (x402/mppx/Stripe/manual).
+
+    Call this after any paid x402/mppx use. For mppx/x402, take the identity and
+    proofs from the ACTUAL payment, not a directory listing:
+    - payment_reference: the settlement tx hash (x402) or Payment-Receipt
+      `reference` (mppx). Unique — one review per payment.
+    - payment_proof: the base64 response header STRING — `payment-response` for
+      x402, `Payment-Receipt` for mppx. Not the tx hash, not decoded JSON.
+    - payment_target_ref: the real payee (the 402 challenge recipient / on-chain
+      Transfer `to`), not a bazaar/directory advertised payTo.
+    - reviewer_wallet: the wallet that SENT the payment (the ERC-20 Transfer
+      `from`). For gasless x402/mppx the tx sender is a facilitator, not the
+      payer.
+    """
     reason = reason.strip()
     payment_reference = payment_reference.strip()
     task_context = task_context.strip() if task_context else None
