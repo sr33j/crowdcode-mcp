@@ -206,6 +206,29 @@ def test_x402_rejects_when_payer_is_not_reviewer_wallet(monkeypatch):
     assert verification.reason == "reviewer_wallet did not send the x402 payment"
 
 
+def test_x402_accepts_dict_payment_proof(monkeypatch):
+    # Some MCP transports coerce a JSON-object-shaped string into a dict; the
+    # verifier must tolerate a dict payment_proof, not only a string.
+    identity = _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
+    )
+    verification = verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof={"transaction": TX_HASH, "network": "base"},
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(identity, reason),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified
+
+
 def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
     reason = "solid data"
     monkeypatch.setattr(

@@ -303,8 +303,8 @@ def review_service(
     payment_provider: str | None = None,
     payment_target_ref: str | None = None,
     directory_slug: str | None = None,
-    payment_proof: str | None = None,
-    payment_challenge: str | None = None,
+    payment_proof: str | dict | None = None,
+    payment_challenge: str | dict | None = None,
     reviewer_wallet: str | None = None,
     review_signature: str | None = None,
     signature_scheme: str = "eip191",
@@ -313,6 +313,14 @@ def review_service(
     reason = reason.strip()
     payment_reference = payment_reference.strip()
     task_context = task_context.strip() if task_context else None
+
+    # payment_proof / payment_challenge are opaque strings end to end, but some
+    # MCP transports coerce a JSON-object-shaped string argument into a dict.
+    # Accept that and re-serialize so downstream string parsing still works.
+    if isinstance(payment_proof, dict):
+        payment_proof = json.dumps(payment_proof)
+    if isinstance(payment_challenge, dict):
+        payment_challenge = json.dumps(payment_challenge)
 
     try:
         identity = build_identity(

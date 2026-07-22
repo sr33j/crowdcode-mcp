@@ -377,16 +377,22 @@ def _recover_eip191(message: str, signature: str) -> str | None:
     return _normalize_evm_address(recovered)
 
 
-def _parse_payment_receipt(value: str) -> dict[str, Any] | None:
+def _parse_payment_receipt(value: str | dict | None) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return None
     cleaned = value.strip()
     if cleaned.lower().startswith("payment-receipt:"):
         cleaned = cleaned.split(":", 1)[1].strip()
     return _parse_json_or_base64_json(cleaned)
 
 
-def _parse_json_or_base64_json(value: str | None) -> dict[str, Any] | None:
+def _parse_json_or_base64_json(value: str | dict | None) -> dict[str, Any] | None:
     if not value:
         return None
+    if isinstance(value, dict):
+        return value
     cleaned = value.strip()
     try:
         parsed = json.loads(cleaned)
@@ -403,9 +409,11 @@ def _parse_json_or_base64_json(value: str | None) -> dict[str, Any] | None:
         return None
 
 
-def _parse_mpp_challenge(value: str | None) -> dict[str, Any] | None:
+def _parse_mpp_challenge(value: str | dict | None) -> dict[str, Any] | None:
     if not value:
         return None
+    if isinstance(value, dict):
+        return value
     cleaned = value.strip()
     match = re.search(r'request="([^"]+)"', cleaned)
     if match:
