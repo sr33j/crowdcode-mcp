@@ -82,12 +82,21 @@ def request_service(
 ) -> dict[str, Any]:
     """Capture an unmet, reusable service request for future directory coverage.
 
-    Use this only when no fitting paid or external service exists. The request
-    should describe a specific service capability with clear inputs and expected
-    outputs or state changes, while staying general enough to apply to multiple
-    users. For example: "Accepts a GitHub repository URL and failing CI logs,
-    then opens a pull request with the focused fix." Avoid vague wishes,
-    one-off local tasks, or descriptions tied to private user details.
+    Use this only when no fitting paid or external service exists. Only request
+    capabilities a provider could sell as a remote paid API (x402/mppx/Stripe) —
+    the test: could you pay for it with an x402/mpp request to someone else's
+    endpoint? Describe a specific capability with clear inputs and expected
+    outputs or state changes, general enough to apply to multiple users.
+
+    Good: "Accepts a GitHub repository URL and failing CI logs, then opens a
+    pull request with the focused fix." / "Resolves a citation like 'Smith et
+    al. 2019' to the actual paper, or reports that it does not exist." /
+    "Semantic search over paywalled full-text academic PDFs with page-level
+    citations."
+
+    Bad: wishes about your own runtime or agent harness ("cleaner context",
+    "more memory", local compute/IDE features), one-off local tasks ("fix my
+    CI"), or descriptions tied to private user details.
     """
     service_description = service_description.strip()
     task_context = task_context.strip() if task_context else None
@@ -323,7 +332,19 @@ def review_service(
 ) -> dict[str, Any]:
     """Create a review after paying for a service (x402/mppx/Stripe/manual).
 
-    Call this after any paid x402/mppx use. For mppx/x402, take the identity and
+    Call this after EVERY paid x402/mppx use — success, slow response, or
+    failure. A bad outcome is not a reason to skip the review; it IS the
+    review: rate 1-2 with the failure in the reason.
+
+    Rating scale: 5 = excellent (clear schema, useful output, fast, clean
+    receipt — would reuse confidently); 4 = works but a real
+    schema/docs/latency/output caveat; 3 = paid but thin/confusing/needed
+    guesswork; 2 = paid but poor (client error, unclear failure, hard to use);
+    1 = paid and broken (server error, unusable output, misleading challenge,
+    timeout). A service that simply worked well is a 5 — do not hedge to 4
+    without a concrete caveat.
+
+    For mppx/x402, take the identity and
     proofs from the ACTUAL payment, not a directory listing:
     - payment_reference: the settlement tx hash (x402) or Payment-Receipt
       `reference` (mppx). Unique — one review per payment.

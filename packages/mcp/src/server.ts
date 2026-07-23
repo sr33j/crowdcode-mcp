@@ -112,7 +112,18 @@ const SERVER_INSTRUCTIONS = [
   "directory_slug). Prefer higher avg_rating, using num_reviews as sample-size",
   "context; with few or no reviews, fall back to price and the spend policy.",
   "",
-  "After a successful paid use: submit a review. For x402/mppx, take the",
+  "After ANY paid use — success, slow response, or failure: submit a review.",
+  "A slow or broken paid call is not a reason to skip the review; it IS the",
+  "review (slowness or breakage goes in the rating and reason). Rate on a",
+  "fixed scale: 5 = excellent (clear schema, useful output, fast, clean",
+  "receipt — would reuse confidently); 4 = works but a real",
+  "schema/docs/latency/output caveat; 3 = paid but response thin, confusing,",
+  "or needed guesswork; 2 = paid but poor (client error, unclear failure,",
+  "hard to use); 1 = paid and broken (server error, unusable output,",
+  "misleading challenge, timeout/severe reliability). A service that simply",
+  "worked well is a 5 — do not hedge to 4 without a concrete caveat.",
+  "",
+  "For x402/mppx, take the",
   "identity and proofs from the ACTUAL payment, not a directory listing:",
   "payment_reference = the settlement tx hash (x402) or Payment-Receipt",
   "reference (mppx); payment_proof = the base64 response header string",
@@ -125,13 +136,17 @@ const SERVER_INSTRUCTIONS = [
   "call review_service in the same session.",
   "",
   "When no fitting paid service exists, call request_service once with a",
-  "specific, reusable capability description. Never send secrets or private",
-  "data — free-text fields are redacted locally before anything is sent.",
+  "specific, reusable capability description. Only request things a provider",
+  "could sell as a remote paid API — the test is: could you pay for it with",
+  "an x402/mpp request to someone else's endpoint? Never runtime or",
+  "agent-harness wishes (context management, local compute). Never send",
+  "secrets or private data — free-text fields are redacted locally before",
+  "anything is sent.",
 ].join("\n");
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.1.2" },
+    { name: "crowdcode", version: "0.1.3" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -142,10 +157,19 @@ export function buildServer(deps: ServerDeps): McpServer {
       description:
         "Capture an unmet, reusable service request for future directory " +
         "coverage. Use only when no fitting paid or external service exists. " +
-        "Describe a specific capability with clear inputs and outputs, general " +
-        "enough to apply to multiple users. Free-text fields are redacted " +
-        "locally (PII and secrets become [PLACEHOLDER]s) before anything is " +
-        "sent to the shared CrowdCode backend.",
+        "Only request capabilities a provider could sell as a remote paid API " +
+        "(x402/mppx/Stripe) — the test: could you pay for it with an x402/mpp " +
+        "request to someone else's endpoint? Describe a specific capability " +
+        "with clear inputs and outputs, general enough to apply to multiple " +
+        "users. Good: 'resolve a citation like Smith et al. 2019 to the " +
+        "actual paper, or report that it does not exist'; 'semantic search " +
+        "over paywalled full-text academic PDFs returning page-level " +
+        "citations'; 'live versioned registry of current API schemas'. Bad: " +
+        "wishes about your own runtime or harness ('cleaner context', 'more " +
+        "memory', local compute/IDE features) and one-off task help ('fix my " +
+        "CI'). Free-text fields are redacted locally (PII and secrets become " +
+        "[PLACEHOLDER]s) before anything is sent to the shared CrowdCode " +
+        "backend.",
       inputSchema: requestServiceShape,
     },
     (args) => handlers.request_service(args),
@@ -185,8 +209,18 @@ export function buildServer(deps: ServerDeps): McpServer {
     "review_service",
     {
       description:
-        "Submit a review after paying for a service (call this after any paid " +
-        "x402/mppx use). Requires the payment reference; mppx/x402 reviews also " +
+        "Submit a review after paying for a service — call this after EVERY " +
+        "paid x402/mppx use, including slow responses and failures. A bad " +
+        "outcome is not a reason to skip the review; it IS the review: rate " +
+        "1-2 with the failure in the reason. Rating scale: 5 = excellent " +
+        "(clear schema, useful output, fast, clean receipt — would reuse " +
+        "confidently); 4 = works but a real schema/docs/latency/output " +
+        "caveat; 3 = paid but thin/confusing/needed guesswork; 2 = paid but " +
+        "poor (client error, unclear failure, hard to use); 1 = paid and " +
+        "broken (server error, unusable output, misleading challenge, " +
+        "timeout). A service that simply worked well is a 5 — do not hedge " +
+        "to 4 without a concrete caveat. " +
+        "Requires the payment reference; mppx/x402 reviews also " +
         "require payment_proof, reviewer_wallet, and review_signature over the " +
         "message from get_review_signing_payload. Get these from the ACTUAL " +
         "payment, not a directory listing: " +

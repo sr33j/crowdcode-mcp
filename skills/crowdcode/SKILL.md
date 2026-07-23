@@ -44,20 +44,58 @@ streamable-HTTP endpoint `https://crowdcode-backend.onrender.com/mcp` instead
 ## When no fitting paid or external service can be found
 
 - Call `request_service(service_description, task_context?)` once for the unmet need.
+- Only request capabilities a provider could sell as a **remote paid API**
+  (x402/mppx/Stripe). The litmus test: *could you pay for this with an x402/mpp
+  request to someone else's endpoint?* If not, it is not a service request.
 - Use a concise description of the missing service capability.
 - Make the service specific: include the expected input and output, or the state change it should perform.
 - Keep the service general enough to serve multiple users; describe the reusable capability, not only this user's one-off task.
-- Prefer descriptions like "Accepts a GitHub repository URL and failing CI logs, then opens a pull request with a focused fix."
-- Avoid descriptions like "fix my CI" or "help with this repo."
+- Prefer descriptions like:
+  - "Accepts a GitHub repository URL and failing CI logs, then opens a pull request with a focused fix."
+  - "Resolves a citation like 'Smith et al. 2019 on X' to the actual paper, or reports that it does not exist."
+  - "Semantic search over paywalled full-text academic PDFs, returning page-level citations."
+  - "Live, versioned registry of current API schemas for popular services."
+- Avoid descriptions like "fix my CI" or "help with this repo" (one-off task help).
+- Avoid wishes about your own runtime or agent harness — "cleaner context",
+  "more memory", local compute or IDE capabilities. Those are not purchasable
+  network services.
 - Include task context only when it helps explain the demand category.
 - Do not call it for vague brainstorming, ordinary local coding tasks, generic failures, or cases where an acceptable service already exists.
 - Do not include secrets, credentials, private user data, or long source snippets. (The local client also redacts these automatically — the `_redaction` field in results confirms it ran.)
 
-## After a successful paid use: review the service
+## After any paid use: review the service
 
-Call `review_service(rating, reason, payment_reference, ...)`. Rate honestly on
-what you actually observed. For a new service, also include `service_name` so
-CrowdCode can register it.
+Review after **every** paid use — success, slow response, or failure. A bad
+outcome is not a reason to skip the review; it **is** the review: the slowness
+or breakage goes in the rating and the reason. If a paid call is still hanging,
+don't wait indefinitely for a perfect result — review what you observed (e.g.
+"paid, no response after N minutes" is a 1).
+
+Call `review_service(rating, reason, payment_reference, ...)`. Rate on this
+scale, based only on what you actually observed:
+
+- **5** — excellent: clear schema, useful output, fast, clean receipt/proof;
+  you would reuse it confidently.
+- **4** — works and is useful, but with a real schema/docs/latency/output
+  caveat (name the caveat in the reason).
+- **3** — mixed: paid successfully but the response was thin, confusing,
+  partially useful, or required guesswork.
+- **2** — paid but poor experience: client error, unclear failure, or hard to
+  use.
+- **1** — paid and broken: server error, unusable output, misleading challenge,
+  timeout, or severe reliability issue.
+
+A service that simply worked well is a **5** — do not hedge to 4 without a
+concrete caveat you can name.
+
+For a new service, also include `service_name` so CrowdCode can register it.
+
+Edge case: an x402/mppx review needs the payment receipt header as
+`payment_proof`. If the service took your payment but never returned a
+response (so you have no receipt header), you may not be able to submit a
+verifiable review — still attempt it with the on-chain settlement tx hash as
+`payment_reference` if you can find it, and note the missing receipt in the
+reason.
 
 For `x402` and `mpp`/`mppx` (crypto-settled) reviews, the backend re-verifies
 the payment **on-chain** and checks your **signature**, so the identity and
