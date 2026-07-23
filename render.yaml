@@ -22,15 +22,11 @@ services:
       - key: CROWDCODE_REQUESTS_TABLE
         value: service_requests
       - key: PROJECT_IDEAS_CACHE_SECONDS
-        value: "300"
-      - key: OPENROUTER_API_KEY
+        value: "86400"
+      - key: OPENAI_API_KEY
         sync: false
-      - key: OPENROUTER_MODEL
-        value: nvidia/nemotron-3-nano-30b-a3b:nitro
-      - key: OPENROUTER_SITE_URL
-        value: https://crowdcode.app
-      - key: OPENROUTER_APP_NAME
-        value: CrowdCode
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
       # Redaction sidecar (server-side enforcement backstop). Point at the

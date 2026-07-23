@@ -31,12 +31,10 @@ class Settings:
     mcp_allowed_origins: tuple[str, ...] = DEFAULT_MCP_ALLOWED_ORIGINS
     cors_origins: tuple[str, ...] = ("http://127.0.0.1:5173", "http://localhost:5173")
     requests_table: str = "service_requests"
-    project_ideas_cache_seconds: int = 300
-    openrouter_api_key: str | None = None
-    openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_site_url: str = "https://crowdcode.app"
-    openrouter_app_name: str = "CrowdCode"
+    project_ideas_cache_seconds: int = 86400
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -91,27 +89,14 @@ def get_settings() -> Settings:
         requests_table=os.environ.get("CROWDCODE_REQUESTS_TABLE", "service_requests").strip()
         or "service_requests",
         project_ideas_cache_seconds=int(
-            os.environ.get("PROJECT_IDEAS_CACHE_SECONDS", "300")
+            os.environ.get("PROJECT_IDEAS_CACHE_SECONDS", "86400")
         ),
-        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "").strip() or None,
-        openrouter_model=os.environ.get(
-            "OPENROUTER_MODEL",
-            "nvidia/nemotron-3-ultra-550b-a55b",
+        openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or None,
+        openai_model=os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip()
+        or "gpt-5-mini",
+        openai_base_url=os.environ.get(
+            "OPENAI_BASE_URL",
+            "https://api.openai.com/v1",
         ).strip()
-        or "nvidia/nemotron-3-ultra-550b-a55b",
-        openrouter_base_url=os.environ.get(
-            "OPENROUTER_BASE_URL",
-            "https://openrouter.ai/api/v1",
-        ).strip()
-        or "https://openrouter.ai/api/v1",
-        openrouter_site_url=os.environ.get(
-            "OPENROUTER_SITE_URL",
-            "https://crowdcode.app",
-        ).strip()
-        or "https://crowdcode.app",
-        openrouter_app_name=os.environ.get(
-            "OPENROUTER_APP_NAME",
-            "CrowdCode",
-        ).strip()
-        or "CrowdCode",
+        or "https://api.openai.com/v1",
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from typing import Any
 
@@ -62,6 +63,7 @@ _PROJECT_IDEAS_CACHE: dict[str, Any] = {
     "expires_at": 0.0,
     "payload": None,
 }
+_PROJECT_IDEAS_REFRESH_LOCK = threading.Lock()
 _REQUESTS_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -570,7 +572,7 @@ def _fetch_recent_requests(limit: int = 100) -> list[dict[str, Any]]:
             }
         )
 
-    # Egress backstop before this text reaches OpenRouter and the public
+    # Egress backstop before this text reaches OpenAI and the public
     # frontend: redact pre-enforcement rows; drop everything if the redactor
     # is configured but down (never leak on failure).
     redacted = redact_texts([item["text"] for item in requests], fail_closed=False)
@@ -626,7 +628,7 @@ def _extract_json_object(content: str) -> dict[str, Any]:
             raise
         parsed = json.loads(content[start : end + 1])
     if not isinstance(parsed, dict):
-        raise ValueError("OpenRouter response was not a JSON object")
+        raise ValueError("model response was not a JSON object")
     return parsed
 
 
@@ -640,8 +642,8 @@ def _summarize_project_ideas(requests: list[dict[str, Any]]) -> dict[str, Any]:
             "source_request_count": 0,
             "ideas": [],
         }
-    if not settings.openrouter_api_key:
-        return _fallback_project_ideas(requests, "OPENROUTER_API_KEY is not set")
+    if not settings.openai_api_key:
+        return _fallback_project_ideas(requests, "OPENAI_API_KEY is not set")
 
     compact_requests = [
         {
@@ -678,15 +680,13 @@ def _summarize_project_ideas(requests: list[dict[str, Any]]) -> dict[str, Any]:
     try:
         with httpx.Client(timeout=90) as client:
             response = client.post(
-                f"{settings.openrouter_base_url.rstrip('/')}/chat/completions",
+                f"{settings.openai_base_url.rstrip('/')}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "Authorization": f"Bearer {settings.openai_api_key}",
                     "Content-Type": "application/json",
-                    "HTTP-Referer": settings.openrouter_site_url,
-                    "X-Title": settings.openrouter_app_name,
                 },
                 json={
-                    "model": settings.openrouter_model,
+                    "model": settings.openai_model,
                     "messages": [
                         {
                             "role": "system",
@@ -698,19 +698,20 @@ def _summarize_project_ideas(requests: list[dict[str, Any]]) -> dict[str, Any]:
                         {"role": "user", "content": json.dumps(prompt)},
                     ],
                     "response_format": {"type": "json_object"},
-                    "temperature": 0.2,
                 },
             )
             response.raise_for_status()
         data = response.json()
         content = data["choices"][0]["message"]["content"]
+        if content is None:
+            raise ValueError("model returned empty content")
         parsed = _extract_json_object(content)
     except Exception as exc:
-        return _fallback_project_ideas(requests, f"OpenRouter summarization failed: {exc}")
+        return _fallback_project_ideas(requests, f"OpenAI summarization failed: {exc}")
 
     ideas = parsed.get("ideas", [])
     if not isinstance(ideas, list):
-        return _fallback_project_ideas(requests, "OpenRouter JSON did not include ideas[]")
+        return _fallback_project_ideas(requests, "OpenAI JSON did not include ideas[]")
 
     clean_ideas: list[dict[str, Any]] = []
     for idea in ideas[:20]:
@@ -738,23 +739,43 @@ def _summarize_project_ideas(requests: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "source": "openrouter",
-        "model": settings.openrouter_model,
+        "source": "openai",
+        "model": settings.openai_model,
         "generated_at": int(time.time()),
         "source_request_count": len(requests),
         "ideas": clean_ideas,
     }
 
 
+def _refresh_project_ideas_cache() -> None:
+    try:
+        settings = get_settings()
+        requests = _fetch_recent_requests(limit=100)
+        payload = _summarize_project_ideas(requests)
+        payload["cached"] = False
+        _PROJECT_IDEAS_CACHE["payload"] = payload
+        _PROJECT_IDEAS_CACHE["expires_at"] = (
+            time.time() + settings.project_ideas_cache_seconds
+        )
+    except Exception:
+        pass
+    finally:
+        _PROJECT_IDEAS_REFRESH_LOCK.release()
+
+
 def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
     settings = get_settings()
     now = time.time()
-    if (
-        not refresh
-        and _PROJECT_IDEAS_CACHE["payload"] is not None
-        and _PROJECT_IDEAS_CACHE["expires_at"] > now
-    ):
-        payload = dict(_PROJECT_IDEAS_CACHE["payload"])
+    cached = _PROJECT_IDEAS_CACHE["payload"]
+
+    if not refresh and cached is not None:
+        # Serve the cache immediately; if it has expired, rebuild it in the
+        # background so no visitor ever waits on summarization.
+        if _PROJECT_IDEAS_CACHE["expires_at"] <= now and _PROJECT_IDEAS_REFRESH_LOCK.acquire(
+            blocking=False
+        ):
+            threading.Thread(target=_refresh_project_ideas_cache, daemon=True).start()
+        payload = dict(cached)
         payload["cached"] = True
         return payload
 
@@ -766,46 +787,51 @@ def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
     return payload
 
 
-def _top_services_payload(limit: int = 10) -> dict[str, Any]:
+def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
+    sql = """
+        select
+          s.id as service_id,
+          s.name,
+          s.directory_slug,
+          s.canonical_endpoint,
+          s.payment_provider,
+          avg(r.rating)::float as avg_rating,
+          count(r.id)::int as num_reviews,
+          (
+            (avg(r.rating) * count(r.id)) + (4.0 * 5)
+          ) / (count(r.id) + 5) as rank_score
+        from services s
+        join reviews r on r.service_id = s.id
+        group by s.id, s.name, s.directory_slug, s.canonical_endpoint,
+                 s.payment_provider
+        order by rank_score desc, num_reviews desc, avg_rating desc, s.name asc
+        """
     with connect() as conn:
-        rows = conn.execute(
-            """
-            select
-              s.id as service_id,
-              s.name,
-              s.directory_slug,
-              s.canonical_endpoint,
-              s.payment_provider,
-              avg(r.rating)::float as avg_rating,
-              count(r.id)::int as num_reviews,
-              (
-                (avg(r.rating) * count(r.id)) + (4.0 * 5)
-              ) / (count(r.id) + 5) as rank_score
-            from services s
-            join reviews r on r.service_id = s.id
-            group by s.id, s.name, s.directory_slug, s.canonical_endpoint,
-                     s.payment_provider
-            order by rank_score desc, num_reviews desc, avg_rating desc, s.name asc
-            limit %s
-            """,
-            (limit,),
-        ).fetchall()
+        if limit is None:
+            rows = conn.execute(sql).fetchall()
+        else:
+            rows = conn.execute(sql + " limit %s", (limit,)).fetchall()
 
+    services = [
+        {
+            "service_id": row["service_id"],
+            "name": row["name"],
+            "directory_slug": row.get("directory_slug"),
+            "canonical_endpoint": row.get("canonical_endpoint"),
+            "payment_provider": row.get("payment_provider"),
+            "avg_rating": as_float(row["avg_rating"]),
+            "num_reviews": row["num_reviews"],
+            "rank_score": as_float(row["rank_score"]),
+        }
+        for row in rows
+    ]
     return {
         "ok": True,
-        "services": [
-            {
-                "service_id": row["service_id"],
-                "name": row["name"],
-                "directory_slug": row.get("directory_slug"),
-                "canonical_endpoint": row.get("canonical_endpoint"),
-                "payment_provider": row.get("payment_provider"),
-                "avg_rating": as_float(row["avg_rating"]),
-                "num_reviews": row["num_reviews"],
-                "rank_score": as_float(row["rank_score"]),
-            }
-            for row in rows
-        ],
+        "services": services,
+        "stats": {
+            "num_services": len(services),
+            "total_reviews": sum(s["num_reviews"] for s in services),
+        },
     }
 
 
@@ -835,6 +861,14 @@ async def top_services(_: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+async def all_services(_: Request) -> JSONResponse:
+    try:
+        payload = await run_in_threadpool(_top_services_payload, None)
+    except Exception as exc:
+        return _json_error(str(exc))
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
+
+
 def create_app() -> Starlette:
     settings = get_settings()
     mcp_app = mcp.streamable_http_app()
@@ -842,6 +876,7 @@ def create_app() -> Starlette:
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
+            Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             *mcp_app.routes,
         ],

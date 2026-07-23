@@ -8,154 +8,139 @@ const apiBase =
     ? DEFAULT_LOCAL_API_BASE
     : DEFAULT_PROD_API_BASE);
 
-const ideasRoot = document.querySelector("#ideas");
-const ideasStatus = document.querySelector("#ideas-status");
-const servicesRoot = document.querySelector("#services");
-const servicesStatus = document.querySelector("#services-status");
-const refreshButton = document.querySelector("#refresh");
+const PAGE_SIZE = 15;
 
-function formatNumber(value, digits = 1) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "0";
-  return number.toFixed(digits);
+let services = [];
+let provFilter = "all";
+let sortKey = "rank_score";
+let page = 1;
+
+const tbody = document.querySelector("#tbody");
+const pager = document.querySelector("#pager");
+const statline = document.querySelector("#statline");
+const searchInput = document.querySelector("#q");
+const carousel = document.querySelector("#car");
+
+function esc(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (ch) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[ch]
+  );
 }
 
-function setStatus(element, text, isError = false) {
-  element.textContent = text;
-  element.className = isError ? "status error" : "status";
+function railLabel(provider) {
+  if (provider === "mppx") return "MPP";
+  if (provider === "x402") return "x402";
+  return provider || "—";
 }
 
-function emptyBlock(text) {
-  const block = document.createElement("div");
-  block.className = "empty";
-  block.textContent = text;
-  return block;
+function railClass(provider) {
+  return provider === "x402" || provider === "mppx" ? provider : "other";
+}
+
+function filteredServices() {
+  const q = searchInput.value.trim().toLowerCase();
+  const rows = services.filter((s) => {
+    if (provFilter !== "all" && s.payment_provider !== provFilter) return false;
+    if (!q) return true;
+    return (
+      (s.name || "").toLowerCase().includes(q) ||
+      (s.canonical_endpoint || "").toLowerCase().includes(q) ||
+      (s.directory_slug || "").toLowerCase().includes(q)
+    );
+  });
+  return rows.sort(
+    (a, b) => (b[sortKey] || 0) - (a[sortKey] || 0) || b.num_reviews - a.num_reviews
+  );
+}
+
+function renderTable() {
+  const rows = filteredServices();
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  page = Math.min(page, pages);
+  const start = (page - 1) * PAGE_SIZE;
+  const slice = rows.slice(start, start + PAGE_SIZE);
+
+  if (!slice.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="5" class="state">No services match.</td></tr>';
+  } else {
+    tbody.innerHTML = slice
+      .map((s, i) => {
+        const score = Number(s.rank_score) || 0;
+        const width = Math.max(4, ((score - 3.5) / (5 - 3.5)) * 100);
+        const endpoint = s.canonical_endpoint || s.directory_slug || s.service_id;
+        return `
+        <tr>
+          <td class="rank">${start + i + 1}</td>
+          <td class="name"><div class="nm">${esc(s.name || s.service_id)}</div><div class="ep">${esc(endpoint)}</div></td>
+          <td><span class="chip ${railClass(s.payment_provider)}">${esc(railLabel(s.payment_provider))}</span></td>
+          <td class="score"><div class="score-cell"><span class="score-num">${score.toFixed(2)}</span><span class="score-bar"><i style="width:${width}%"></i></span></div></td>
+          <td class="reviews">${
+            s.num_reviews < 3
+              ? '<span class="lo">' + s.num_reviews + "</span>"
+              : s.num_reviews
+          }</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  let html = `<span class="info">${rows.length ? start + 1 : 0}–${
+    start + slice.length
+  } of ${rows.length}</span>`;
+  html += `<button data-goto="${page - 1}" ${
+    page === 1 ? "disabled" : ""
+  } aria-label="Previous page">‹</button>`;
+  for (let p = 1; p <= pages; p++) {
+    html += `<button data-goto="${p}" aria-current="${p === page}">${p}</button>`;
+  }
+  html += `<button data-goto="${page + 1}" ${
+    page === pages ? "disabled" : ""
+  } aria-label="Next page">›</button>`;
+  pager.innerHTML = html;
+
+  document.querySelectorAll(".arr").forEach((el) => (el.textContent = ""));
+  const arrow = document.querySelector(`#arr-${sortKey}`);
+  if (arrow) arrow.textContent = "▼";
+}
+
+function renderStatline(stats) {
+  const totalReviews =
+    stats?.total_reviews ??
+    services.reduce((sum, s) => sum + (s.num_reviews || 0), 0);
+  const numServices = stats?.num_services ?? services.length;
+  statline.innerHTML =
+    `<b>${totalReviews}</b> payment-verified reviews ` +
+    '<span class="sep">/</span> ' +
+    `<b>${numServices}</b> services ranked ` +
+    '<span class="sep">/</span> <span class="live">growing daily</span>';
 }
 
 function renderIdeas(payload) {
-  ideasRoot.replaceChildren();
   const ideas = Array.isArray(payload.ideas) ? payload.ideas : [];
-
   if (!ideas.length) {
-    ideasRoot.append(emptyBlock("No recent requests found."));
-    setStatus(
-      ideasStatus,
-      `${payload.source_request_count || 0} recent requests analyzed.`
-    );
+    carousel.innerHTML = '<div class="idea state">No open requests right now.</div>';
     return;
   }
-
-  setStatus(
-    ideasStatus,
-    `${payload.source_request_count || 0} recent requests analyzed via ${payload.source}.`
-  );
-
-  for (const idea of ideas) {
-    const article = document.createElement("article");
-    article.className = "idea";
-
-    const header = document.createElement("div");
-    header.className = "idea-header";
-
-    const text = document.createElement("div");
-    const title = document.createElement("h3");
-    title.textContent = idea.title || "Untitled idea";
-    const summary = document.createElement("p");
-    summary.textContent = idea.summary || "";
-    text.append(title, summary);
-
-    const count = document.createElement("span");
-    count.className = "count";
-    count.textContent = `${idea.request_count || 1} requests`;
-    header.append(text, count);
-    article.append(header);
-
-    if (Array.isArray(idea.tags) && idea.tags.length) {
-      const tags = document.createElement("div");
-      tags.className = "tags";
-      for (const value of idea.tags) {
-        const tag = document.createElement("span");
-        tag.className = "tag";
-        tag.textContent = value;
-        tags.append(tag);
-      }
-      article.append(tags);
-    }
-
-    if (Array.isArray(idea.example_requests) && idea.example_requests.length) {
-      const examples = document.createElement("div");
-      examples.className = "examples";
-      for (const value of idea.example_requests.slice(0, 3)) {
-        const example = document.createElement("div");
-        example.textContent = value;
-        examples.append(example);
-      }
-      article.append(examples);
-    }
-
-    ideasRoot.append(article);
-  }
-}
-
-function renderServices(payload) {
-  servicesRoot.replaceChildren();
-  const services = Array.isArray(payload.services) ? payload.services : [];
-
-  if (!services.length) {
-    servicesRoot.append(emptyBlock("No reviewed services yet."));
-    setStatus(servicesStatus, "0 ranked services.");
-    return;
-  }
-
-  setStatus(servicesStatus, `${services.length} ranked services.`);
-
-  services.forEach((service, index) => {
-    const item = document.createElement("li");
-    item.className = "service";
-
-    const main = document.createElement("div");
-    main.className = "service-main";
-
-    const rank = document.createElement("div");
-    rank.className = "rank";
-    rank.textContent = String(index + 1);
-
-    const text = document.createElement("div");
-    const title = document.createElement("h3");
-    title.textContent = service.name || service.service_id || "Unknown service";
-    const meta = document.createElement("div");
-    meta.className = "service-meta";
-    meta.textContent =
-      service.directory_slug ||
-      service.canonical_endpoint ||
-      service.payment_provider ||
-      service.service_id ||
-      "";
-    text.append(title, meta);
-    main.append(rank, text);
-
-    const scoreRow = document.createElement("div");
-    scoreRow.className = "score-row";
-    scoreRow.append(
-      metric(formatNumber(service.avg_rating), "Rating"),
-      metric(String(service.num_reviews || 0), "Reviews"),
-      metric(formatNumber(service.rank_score), "Score")
-    );
-
-    item.append(main, scoreRow);
-    servicesRoot.append(item);
-  });
-}
-
-function metric(value, label) {
-  const box = document.createElement("div");
-  box.className = "metric";
-  const strong = document.createElement("strong");
-  strong.textContent = value;
-  const span = document.createElement("span");
-  span.textContent = label;
-  box.append(strong, span);
-  return box;
+  carousel.innerHTML = ideas
+    .map((idea) => {
+      const count = idea.request_count || 1;
+      return `
+      <div class="idea">
+        <div class="t">${esc(idea.title)}</div>
+        <p>${esc(idea.summary)}</p>
+        <div class="n">${count} request${count > 1 ? "s" : ""}</div>
+      </div>`;
+    })
+    .join("");
 }
 
 async function fetchJson(path) {
@@ -169,33 +154,107 @@ async function fetchJson(path) {
   return payload;
 }
 
-async function loadIdeas(refresh = false) {
-  setStatus(ideasStatus, "Loading recent requests...");
-  ideasRoot.replaceChildren();
-  try {
-    const payload = await fetchJson(
-      `/api/project-ideas${refresh ? "?refresh=true" : ""}`
-    );
-    renderIdeas(payload);
-  } catch (error) {
-    setStatus(ideasStatus, error.message, true);
-    ideasRoot.append(emptyBlock("Project ideas are unavailable."));
-  }
-}
-
 async function loadServices() {
-  setStatus(servicesStatus, "Loading service rankings...");
-  servicesRoot.replaceChildren();
   try {
-    const payload = await fetchJson("/api/services/top");
-    renderServices(payload);
+    let payload;
+    try {
+      payload = await fetchJson("/api/services");
+    } catch {
+      payload = await fetchJson("/api/services/top");
+    }
+    services = Array.isArray(payload.services) ? payload.services : [];
+    renderStatline(payload.stats);
+    renderTable();
   } catch (error) {
-    setStatus(servicesStatus, error.message, true);
-    servicesRoot.append(emptyBlock("Service rankings are unavailable."));
+    tbody.innerHTML = `<tr><td colspan="5" class="state error">${esc(
+      error.message
+    )}</td></tr>`;
   }
 }
 
-refreshButton.addEventListener("click", () => loadIdeas(true));
+async function loadIdeas() {
+  try {
+    renderIdeas(await fetchJson("/api/project-ideas"));
+  } catch {
+    carousel.innerHTML =
+      '<div class="idea state">Requests are unavailable right now.</div>';
+  }
+}
 
-loadIdeas();
+/* ---------- wiring ---------- */
+
+searchInput.addEventListener("input", () => {
+  page = 1;
+  renderTable();
+});
+
+document.querySelectorAll(".seg button").forEach((button) => {
+  button.addEventListener("click", () => {
+    document
+      .querySelectorAll(".seg button")
+      .forEach((b) => b.setAttribute("aria-pressed", "false"));
+    button.setAttribute("aria-pressed", "true");
+    provFilter = button.dataset.prov;
+    page = 1;
+    renderTable();
+  });
+});
+
+document.querySelectorAll("th.sortable").forEach((th) => {
+  th.addEventListener("click", () => {
+    sortKey = th.dataset.sort;
+    page = 1;
+    renderTable();
+  });
+});
+
+pager.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-goto]");
+  if (!button || button.disabled) return;
+  page = Number(button.dataset.goto);
+  renderTable();
+});
+
+document.querySelectorAll(".install-tabs button").forEach((button) => {
+  button.addEventListener("click", () => {
+    button.parentElement
+      .querySelectorAll("button")
+      .forEach((b) => b.setAttribute("aria-selected", "false"));
+    button.setAttribute("aria-selected", "true");
+    for (const key of ["claude", "codex", "json"]) {
+      document
+        .querySelector(`#cmd-${key}`)
+        .classList.toggle("hidden", key !== button.dataset.tab);
+    }
+  });
+});
+
+document.querySelectorAll(".copy-btn").forEach((button) => {
+  button.addEventListener("click", () => {
+    const pre = button.parentElement.querySelector("pre:not(.hidden)");
+    const text = pre.textContent.replace(/^\$\s*/, "");
+    navigator.clipboard.writeText(text).then(() => {
+      button.textContent = "copied ✓";
+      setTimeout(() => (button.textContent = "copy"), 1500);
+    });
+  });
+});
+
+document.querySelectorAll("[data-page]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const which = button.dataset.page;
+    document
+      .querySelector("#page-rank")
+      .classList.toggle("hidden", which !== "rank");
+    document
+      .querySelector("#page-docs")
+      .classList.toggle("hidden", which !== "docs");
+    document
+      .querySelector("#nav-docs")
+      .setAttribute("aria-current", which === "docs");
+    window.scrollTo(0, 0);
+  });
+});
+
 loadServices();
+loadIdeas();
