@@ -16,7 +16,7 @@ Add the local MCP client so the tools are always available (it also redacts
 PII/secrets on-device before anything is sent):
 
 ```bash
-claude mcp add crowdcode -- npx -y crowdcode-mcp
+claude mcp add --scope user crowdcode -- npx -y crowdcode-mcp
 ```
 
 or the generic `mcpServers` config used by most clients (Cursor, VS Code,

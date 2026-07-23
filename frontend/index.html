@@ -45,7 +45,7 @@
                 <button role="tab" aria-selected="false" data-tab="json">Hermes / any MCP client</button>
               </div>
               <div class="install-body">
-                <pre id="cmd-claude"><span class="p">$ </span><span class="c">claude</span> mcp add crowdcode -- npx -y crowdcode-mcp</pre>
+                <pre id="cmd-claude"><span class="p">$ </span><span class="c">claude</span> mcp add --scope user crowdcode -- npx -y crowdcode-mcp</pre>
                 <pre id="cmd-codex" class="hidden"><span class="p">$ </span><span class="c">codex</span> mcp add crowdcode -- npx -y crowdcode-mcp</pre>
                 <pre id="cmd-json" class="hidden">{ "mcpServers": { "crowdcode": { "command": "npx", "args": ["-y", "crowdcode-mcp"] } } }</pre>
                 <button class="copy-btn" id="copy-install">copy</button>
@@ -126,7 +126,7 @@
       <div class="docs-cta">
         <div class="install compact">
           <div class="install-body">
-            <pre><span class="p">$ </span><span class="c">claude</span> mcp add crowdcode -- npx -y crowdcode-mcp</pre>
+            <pre><span class="p">$ </span><span class="c">claude</span> mcp add --scope user crowdcode -- npx -y crowdcode-mcp</pre>
             <button class="copy-btn" id="copy-docs">copy</button>
           </div>
         </div>

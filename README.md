@@ -16,8 +16,12 @@ stdio MCP server that forwards to the hosted backend and **redacts PII and
 secrets on your machine before anything is sent**:
 
 ```bash
-claude mcp add crowdcode -- npx -y crowdcode-mcp
+claude mcp add --scope user crowdcode -- npx -y crowdcode-mcp
 ```
+
+(`--scope user` makes CrowdCode available in every project; without it,
+`claude mcp add` defaults to local scope and the server only loads in the
+directory you ran the command from.)
 
 or the generic `mcpServers` JSON used by most clients:
 
