@@ -88,6 +88,17 @@ alter table reviews
 alter table service_requests
   add column if not exists redacted_at timestamptz;
 
+-- Wallet-keyed rate limiting (v0.2.0): requests carry the requester's wallet
+-- identity (salted hash + normalized address); reviews are limited per
+-- (reviewer_id, service_id) over a rolling 24h window.
+alter table service_requests
+  add column if not exists requester_id text,
+  add column if not exists requester_wallet text;
+create index if not exists service_requests_requester_id_created_at_idx
+  on service_requests (requester_id, created_at desc);
+create index if not exists reviews_reviewer_service_created_idx
+  on reviews (reviewer_id, service_id, created_at desc);
+
 -- RLS is enabled with NO policies on purpose: that is default-deny for the
 -- Supabase anon/authenticated API roles. The backend connects with a
 -- privileged role that bypasses RLS and owns all reads/writes. Do not add

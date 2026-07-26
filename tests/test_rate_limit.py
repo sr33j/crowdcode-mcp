@@ -1,0 +1,122 @@
+"""Tests for wallet-keyed rolling-window rate limits."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from crowdcode.rate_limit import (
+    WINDOW_SECONDS,
+    check_request_limit,
+    check_review_limit,
+    identity_id_from_wallet,
+    rate_limit_payload,
+)
+
+NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
+
+
+class FakeCursor:
+    def __init__(self, row):
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+
+class FakeConn:
+    def __init__(self, row):
+        self.row = row
+        self.queries: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, params):
+        self.queries.append((sql, params))
+        return FakeCursor(self.row)
+
+
+def test_under_limit_allows_with_remaining():
+    conn = FakeConn({"n": 2, "oldest": NOW - timedelta(hours=3)})
+    result = check_request_limit(conn, "req-id", 5, NOW)
+    assert result.allowed
+    assert result.retry_after_seconds is None
+    assert result.remaining == 2  # 5 max - 2 used - 1 for this action
+
+
+def test_at_limit_blocks_with_retry_after():
+    oldest = NOW - timedelta(hours=20)
+    conn = FakeConn({"n": 1, "oldest": oldest})
+    result = check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    assert not result.allowed
+    assert result.remaining == 0
+    # The window frees up when the oldest hit ages out: 24h - 20h = 4h.
+    assert result.retry_after_seconds == 4 * 3600
+    assert result.limit == {
+        "scope": "reviewer_service_daily",
+        "max": 1,
+        "window_seconds": WINDOW_SECONDS,
+    }
+
+
+def test_zero_limit_disables_without_query():
+    conn = FakeConn({"n": 999, "oldest": NOW})
+    result = check_review_limit(conn, "rev-id", "svc_x", 0, NOW)
+    assert result.allowed
+    assert result.remaining is None
+    assert conn.queries == []
+
+
+def test_blocked_with_missing_oldest_falls_back_to_full_window():
+    conn = FakeConn({"n": 5, "oldest": None})
+    result = check_request_limit(conn, "req-id", 5, NOW)
+    assert not result.allowed
+    assert result.retry_after_seconds == WINDOW_SECONDS
+
+
+def test_retry_after_is_at_least_one_second():
+    oldest = NOW - timedelta(seconds=WINDOW_SECONDS)  # ages out right now
+    conn = FakeConn({"n": 1, "oldest": oldest})
+    result = check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    assert not result.allowed
+    assert result.retry_after_seconds == 1
+
+
+def test_query_scopes_by_identity_and_window():
+    conn = FakeConn({"n": 0, "oldest": None})
+    check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    sql, params = conn.queries[0]
+    assert "reviewer_id = %s and service_id = %s" in sql
+    assert params == ("rev-id", "svc_x", NOW - timedelta(seconds=WINDOW_SECONDS))
+
+    conn = FakeConn({"n": 0, "oldest": None})
+    check_request_limit(conn, "req-id", 5, NOW)
+    sql, params = conn.queries[0]
+    assert "requester_id = %s" in sql
+    assert params == ("req-id", NOW - timedelta(seconds=WINDOW_SECONDS))
+
+
+def test_rate_limit_payload_shape():
+    conn = FakeConn({"n": 1, "oldest": NOW - timedelta(hours=23)})
+    result = check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    payload = rate_limit_payload(
+        result, "1 review(s) per service per reviewer per 24 hours",
+        retry_tool="review_service",
+    )
+    assert payload["accepted"] is False
+    assert payload["rate_limited"] is True
+    assert payload["reason"].startswith("rate limit exceeded:")
+    assert payload["retry_after_seconds"] == 3600
+    assert payload["limit"]["scope"] == "reviewer_service_daily"
+    next_step = payload["next_step"]
+    assert next_step["action"] == "wait_and_retry"
+    assert next_step["retry"] == {
+        "tool": "review_service",
+        "after_seconds": 3600,
+        "with": {},
+    }
+
+
+def test_identity_id_is_salted_and_case_insensitive(monkeypatch):
+    monkeypatch.setenv("CROWDCODE_REVIEWER_SALT", "test-salt")
+    monkeypatch.setenv("DATABASE_URL", "postgres://unused")
+    wallet = "0x" + "Ab" * 20
+    assert identity_id_from_wallet(wallet) == identity_id_from_wallet(wallet.lower())
+    assert len(identity_id_from_wallet(wallet)) == 64

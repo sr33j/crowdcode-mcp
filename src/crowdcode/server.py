@@ -26,10 +26,18 @@ from crowdcode.identity import (
 )
 from crowdcode.payments import (
     REASON_HASH_RE,
+    _normalize_evm_address,
     canonical_review_payload,
     canonical_review_payload_from_hash,
     utc_now,
     verify_review_payment,
+)
+from crowdcode.rate_limit import (
+    AGENTCASH_INSTALL_COMMAND,
+    check_request_limit,
+    check_review_limit,
+    identity_id_from_wallet,
+    rate_limit_payload,
 )
 from crowdcode.redaction import (
     RedactionUnavailable,
@@ -75,10 +83,30 @@ def _json_ready(row: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def _next_step(
+    action: str,
+    summary: str,
+    *,
+    command: str | None = None,
+    link: str | None = None,
+    retry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Machine-actionable CTA attached to responses: what to do, the literal
+    command or link that does it, and what to retry afterward."""
+    return {
+        "action": action,
+        "summary": summary,
+        "command": command,
+        "link": link,
+        "retry": retry,
+    }
+
+
 @mcp.tool()
 def request_service(
     service_description: str,
     task_context: str | None = None,
+    requester_wallet: str | None = None,
 ) -> dict[str, Any]:
     """Capture an unmet, reusable service request for future directory coverage.
 
@@ -87,6 +115,10 @@ def request_service(
     the test: could you pay for it with an x402/mpp request to someone else's
     endpoint? Describe a specific capability with clear inputs and expected
     outputs or state changes, general enough to apply to multiple users.
+
+    Requires requester_wallet (an EVM 0x address identifying who is asking;
+    crowdcode-mcp attaches your local wallet automatically). Requests are
+    rate-limited per wallet identity per day.
 
     Good: "Accepts a GitHub repository URL and failing CI logs, then opens a
     pull request with the focused fix." / "Resolves a citation like 'Smith et
@@ -104,30 +136,67 @@ def request_service(
     if not service_description:
         return {"accepted": False, "reason": "service_description is required"}
 
+    wallet = _normalize_evm_address(requester_wallet) if requester_wallet else None
+    if wallet is None:
+        return {
+            "accepted": False,
+            "reason": "requester_wallet is required (an EVM 0x address identifying who is asking)",
+            "next_step": _next_step(
+                "install_wallet",
+                "Service requests need a wallet identity for rate limiting. "
+                "crowdcode-mcp >= 0.2.0 attaches your local wallet automatically — "
+                "install agentcash (or set X402_PRIVATE_KEY), then retry request_service.",
+                command=AGENTCASH_INSTALL_COMMAND,
+            ),
+        }
+    requester_id = identity_id_from_wallet(wallet)
+
     # Ingest enforcement (fail-closed): free text is redacted before storage
     # so raw PII/secrets from clients that bypass crowdcode-mcp never land
-    # in the shared database.
+    # in the shared database. Wallet fields are structured identifiers and
+    # never pass through redaction.
     try:
         redacted = redact_texts([service_description, task_context], fail_closed=True)
     except RedactionUnavailable:
         return {
             "accepted": False,
             "reason": "redaction service unavailable; retry shortly",
+            "next_step": _next_step(
+                "retry_redaction",
+                "The redaction sidecar is temporarily unavailable; retry the same call shortly.",
+                retry={"tool": "request_service", "after_seconds": 30, "with": {}},
+            ),
         }
     if redacted is not None:
         service_description = redacted[0] or service_description
         task_context = redacted[1]
 
+    settings = get_settings()
     with connect() as conn:
+        limit_check = check_request_limit(
+            conn, requester_id, settings.request_rate_limit_per_day, utc_now()
+        )
+        if not limit_check.allowed:
+            return rate_limit_payload(
+                limit_check,
+                f"{settings.request_rate_limit_per_day} service requests per wallet per 24 hours",
+                retry_tool="request_service",
+            )
+
         row = conn.execute(
             """
-            insert into service_requests (service_description, task_context, redacted_at)
-            values (%s, %s, %s)
+            insert into service_requests (
+              service_description, task_context, requester_id, requester_wallet,
+              redacted_at
+            )
+            values (%s, %s, %s, %s, %s)
             returning id, directory_match
             """,
             (
                 service_description,
                 task_context,
+                requester_id,
+                wallet,
                 utc_now() if redaction_enabled() else None,
             ),
         ).fetchone()
@@ -137,6 +206,7 @@ def request_service(
         "accepted": True,
         "request_id": row["id"],
         "directory_match": row["directory_match"],
+        "requests_remaining_today": limit_check.remaining,
     }
 
 
@@ -163,40 +233,26 @@ def get_service_score(
             directory_slug=directory_slug,
         )
     except ValueError as exc:
-        return {
-            "service_id": service_id,
-            "found": False,
-            "avg_rating": None,
-            "num_reviews": 0,
-            "recent_reviews": [],
-            "reason": str(exc),
-        }
+        return _score_not_found(service_id, str(exc))
 
     with connect() as conn:
         resolved = resolve_service(conn, identity)
         if resolved.error:
-            return {
-                "service_id": identity.service_id,
-                "found": False,
-                "avg_rating": None,
-                "num_reviews": 0,
-                "recent_reviews": [],
-                "reason": resolved.error,
-            }
+            return _score_not_found(identity.service_id, resolved.error)
         service = resolved.row
         if service is None:
-            return {
-                "service_id": identity.service_id,
-                "found": False,
-                "avg_rating": None,
-                "num_reviews": 0,
-                "recent_reviews": [],
-                "reason": "service not found",
-            }
+            return _score_not_found(identity.service_id, "service not found")
 
         score = conn.execute(
             """
-            select avg(rating) as avg_rating, count(*)::int as num_reviews
+            select
+              avg(rating) as avg_rating,
+              count(*)::int as num_reviews,
+              count(*) filter (where payment_verified)::int as num_verified_reviews,
+              avg(rating) filter (where payment_verified) as verified_avg_rating,
+              sum(rating * (case when payment_verified then 1.0 else 0.5 end))
+                / nullif(sum(case when payment_verified then 1.0 else 0.5 end), 0)
+                as weighted_rating
             from reviews
             where service_id = %s
             """,
@@ -204,7 +260,7 @@ def get_service_score(
         ).fetchone()
         recent_reviews = conn.execute(
             """
-            select rating, reason, task_context, created_at
+            select rating, reason, task_context, payment_verified, created_at
             from reviews
             where service_id = %s
             order by created_at desc
@@ -239,7 +295,24 @@ def get_service_score(
         "found": True,
         "avg_rating": as_float(score["avg_rating"]),
         "num_reviews": num_reviews,
+        "num_verified_reviews": score["num_verified_reviews"],
+        "verified_avg_rating": as_float(score["verified_avg_rating"]),
+        "weighted_rating": as_float(score["weighted_rating"]),
         "recent_reviews": [_json_ready(row) for row in recent_reviews],
+    }
+
+
+def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
+    return {
+        "service_id": service_id,
+        "found": False,
+        "avg_rating": None,
+        "num_reviews": 0,
+        "num_verified_reviews": 0,
+        "verified_avg_rating": None,
+        "weighted_rating": None,
+        "recent_reviews": [],
+        "reason": reason,
     }
 
 
@@ -336,13 +409,17 @@ def review_service(
     failure. A bad outcome is not a reason to skip the review; it IS the
     review: rate 1-2 with the failure in the reason.
 
-    Rating scale: 5 = excellent (clear schema, useful output, fast, clean
-    receipt — would reuse confidently); 4 = works but a real
-    schema/docs/latency/output caveat; 3 = paid but thin/confusing/needed
-    guesswork; 2 = paid but poor (client error, unclear failure, hard to use);
+    Rate against the ORIGINAL task you were solving: was the response
+    relevant and did it actually help answer that question? Rating scale:
+    5 = excellent (clear schema, relevant output that answered the original
+    question, fast, clean receipt — would reuse confidently); 4 = helped but
+    a real schema/docs/latency/output caveat; 3 = paid but
+    thin/confusing/needed guesswork, or not actually relevant/helpful for
+    the task — a technically valid answer that did not help is a 3 at best;
+    2 = paid but poor (client error, unclear failure, hard to use);
     1 = paid and broken (server error, unusable output, misleading challenge,
-    timeout). A service that simply worked well is a 5 — do not hedge to 4
-    without a concrete caveat.
+    timeout). A service that simply worked well AND helped is a 5 — do not
+    hedge to 4 without a concrete caveat.
 
     For mppx/x402, take the identity and
     proofs from the ACTUAL payment, not a directory listing:
@@ -350,6 +427,8 @@ def review_service(
       `reference` (mppx). Unique — one review per payment.
     - payment_proof: the base64 response header STRING — `payment-response` for
       x402, `Payment-Receipt` for mppx. Not the tx hash, not decoded JSON.
+      Strongly recommended but OPTIONAL: without it the review is stored as
+      unverified and carries half weight in scoring.
     - payment_target_ref: the real payee (the 402 challenge recipient / on-chain
       Transfer `to`), not a bazaar/directory advertised payTo.
     - reviewer_wallet: the wallet that SENT the payment (the ERC-20 Transfer
@@ -426,6 +505,14 @@ def review_service(
                 "accepted": False,
                 "reason": verification.reason,
             }
+            if verification.missing_wallet:
+                failure["next_step"] = _next_step(
+                    "install_wallet",
+                    "mppx/x402 reviews need a signing wallet. crowdcode-mcp >= 0.2.0 "
+                    "signs automatically with your local agentcash wallet or "
+                    "X402_PRIVATE_KEY — install agentcash, then retry review_service.",
+                    command=AGENTCASH_INSTALL_COMMAND,
+                )
             if verification.signature_mismatch:
                 # The signed message did not match the server-side canonical
                 # payload — usually a service_id resolution race. Return the
@@ -444,7 +531,38 @@ def review_service(
                     reason=reason,
                     payment_reference=payment_reference,
                 )
+                failure["next_step"] = _next_step(
+                    "resign_expected_message",
+                    "Sign expected_message VERBATIM with the same wallet, then retry "
+                    "review_service using the fields from resolved_identity.",
+                    retry={
+                        "tool": "review_service",
+                        "after_seconds": 0,
+                        "with": {"review_signature": "<signature of expected_message>"},
+                    },
+                )
             return failure
+
+        settings = get_settings()
+        if (
+            service is not None
+            and verification.reviewer_id
+            and settings.review_rate_limit_per_day > 0
+        ):
+            limit_check = check_review_limit(
+                conn,
+                verification.reviewer_id,
+                service["id"],
+                settings.review_rate_limit_per_day,
+                utc_now(),
+            )
+            if not limit_check.allowed:
+                return rate_limit_payload(
+                    limit_check,
+                    f"{settings.review_rate_limit_per_day} review(s) per service "
+                    "per reviewer per 24 hours",
+                    retry_tool="review_service",
+                )
 
         # Ingest enforcement (fail-closed). Runs AFTER signature verification:
         # the signature covers the hash of the reason exactly as received
@@ -456,6 +574,12 @@ def review_service(
             return {
                 "accepted": False,
                 "reason": "redaction service unavailable; retry shortly",
+                "next_step": _next_step(
+                    "retry_redaction",
+                    "The redaction sidecar is temporarily unavailable; retry the "
+                    "same call shortly.",
+                    retry={"tool": "review_service", "after_seconds": 30, "with": {}},
+                ),
             }
         if redacted is not None:
             reason = redacted[0] or reason
@@ -505,7 +629,7 @@ def review_service(
             conn.rollback()
             return {"accepted": False, "reason": "payment_reference already used"}
 
-    return {
+    result = {
         "accepted": True,
         "reason": "review accepted",
         "service_id": service["id"],
@@ -514,7 +638,19 @@ def review_service(
         "verification": verification.reason,
         "payment_verified": verification.payment_verified,
         "signature_verified": verification.signature_verified,
+        "verified_purchase": verification.payment_verified,
     }
+    if (
+        not verification.payment_verified
+        and effective_identity.payment_provider in {"mppx", "x402"}
+    ):
+        result["next_step"] = _next_step(
+            "supply_payment_proof",
+            "Review accepted as UNVERIFIED (half weight in scoring). Next time "
+            "include payment_proof — the base64 payment-response header (x402) "
+            "or Payment-Receipt header (mppx) — for verified-purchase status.",
+        )
+    return result
 
 
 def _json_error(message: str, status_code: int = 500) -> JSONResponse:
@@ -809,6 +945,11 @@ def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
 
 
 def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
+    # Bayesian prior (toward 4.0 with weight 5) over EFFECTIVE review counts:
+    # a verified-purchase review counts 1.0, an unverified (signed, no
+    # payment_proof) review counts 0.5 — identity proven, payment not.
+    # sum(rating*w) is the weighted-average numerator already, so the prior
+    # reduces to (sum(rating*w) + 4.0*5) / (sum(w) + 5).
     sql = """
         select
           s.id as service_id,
@@ -818,9 +959,13 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.payment_provider,
           avg(r.rating)::float as avg_rating,
           count(r.id)::int as num_reviews,
+          count(r.id) filter (where r.payment_verified)::int as num_verified_reviews,
           (
-            (avg(r.rating) * count(r.id)) + (4.0 * 5)
-          ) / (count(r.id) + 5) as rank_score
+            sum(r.rating * (case when r.payment_verified then 1.0 else 0.5 end))
+            + (4.0 * 5)
+          ) / (
+            sum(case when r.payment_verified then 1.0 else 0.5 end) + 5
+          ) as rank_score
         from services s
         join reviews r on r.service_id = s.id
         group by s.id, s.name, s.directory_slug, s.canonical_endpoint,
@@ -842,6 +987,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "payment_provider": row.get("payment_provider"),
             "avg_rating": as_float(row["avg_rating"]),
             "num_reviews": row["num_reviews"],
+            "num_verified_reviews": row["num_verified_reviews"],
             "rank_score": as_float(row["rank_score"]),
         }
         for row in rows

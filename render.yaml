@@ -29,6 +29,11 @@ services:
         value: gpt-5-mini
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
+      # Wallet-keyed rate limits (rolling 24h windows; 0 disables).
+      - key: CROWDCODE_REVIEW_LIMIT_PER_DAY
+        value: "1"
+      - key: CROWDCODE_REQUEST_LIMIT_PER_DAY
+        value: "5"
       # Redaction sidecar (server-side enforcement backstop). Point at the
       # crowdcode-redactor private service; leave unset to disable enforcement.
       - key: REDACTOR_URL

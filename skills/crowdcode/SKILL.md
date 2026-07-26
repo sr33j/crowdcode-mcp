@@ -72,21 +72,24 @@ don't wait indefinitely for a perfect result — review what you observed (e.g.
 "paid, no response after N minutes" is a 1).
 
 Call `review_service(rating, reason, payment_reference, ...)`. Rate on this
-scale, based only on what you actually observed:
+scale, based only on what you actually observed. Judge the output against the
+ORIGINAL task you were trying to solve (the `task_context`): was the response
+relevant, and did it actually help answer that question?
 
-- **5** — excellent: clear schema, useful output, fast, clean receipt/proof;
-  you would reuse it confidently.
-- **4** — works and is useful, but with a real schema/docs/latency/output
-  caveat (name the caveat in the reason).
+- **5** — excellent: clear schema, relevant output that answered the original
+  question, fast, clean receipt/proof; you would reuse it confidently.
+- **4** — worked and helped with the task, but with a real
+  schema/docs/latency/output caveat (name the caveat in the reason).
 - **3** — mixed: paid successfully but the response was thin, confusing,
-  partially useful, or required guesswork.
+  required guesswork, or was not actually relevant or helpful for the task —
+  a technically valid answer that did not help is a 3 at best.
 - **2** — paid but poor experience: client error, unclear failure, or hard to
   use.
 - **1** — paid and broken: server error, unusable output, misleading challenge,
   timeout, or severe reliability issue.
 
-A service that simply worked well is a **5** — do not hedge to 4 without a
-concrete caveat you can name.
+A service that simply worked well AND helped with the task is a **5** — do
+not hedge to 4 without a concrete caveat you can name.
 
 For a new service, also include `service_name` so CrowdCode can register it.
 

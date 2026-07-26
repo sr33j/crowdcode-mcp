@@ -253,6 +253,106 @@ def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
     assert verification.metadata["provider"] == "mppx"
 
 
+def _raise_if_rpc_called(rpc, tx_hash):
+    raise AssertionError("chain RPC must not be called for proofless reviews")
+
+
+def test_proofless_review_accepted_unverified(monkeypatch):
+    # No payment_proof: the review passes on signature alone, marked
+    # unverified, and never touches the chain RPC.
+    monkeypatch.setattr(payments_mod, "_rpc_transaction_receipt", _raise_if_rpc_called)
+    reason = "worked well, forgot to save the receipt"
+    verification = verify_review_payment(
+        identity=IDENTITY,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=None,
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(IDENTITY, reason),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is False
+    assert verification.signature_verified is True
+    assert verification.reviewer_id == payments_mod._reviewer_id_from_wallet(
+        ACCOUNT.address
+    )
+    assert verification.metadata["proof"] is None
+
+
+def test_proofless_review_still_rejects_bad_signature(monkeypatch):
+    monkeypatch.setattr(payments_mod, "_rpc_transaction_receipt", _raise_if_rpc_called)
+    reason = "worked well"
+    wrong_identity = ServiceIdentity(
+        service_id=None,
+        api_endpoint=IDENTITY.api_endpoint,
+        payment_provider=IDENTITY.payment_provider,
+        payment_target_ref=IDENTITY.payment_target_ref,
+    )
+    verification = verify_review_payment(
+        identity=IDENTITY,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=None,
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(wrong_identity, reason),
+    )
+    assert not verification.ok
+    assert verification.signature_mismatch
+
+
+def test_missing_wallet_sets_missing_wallet_flag():
+    verification = verify_review_payment(
+        identity=IDENTITY,
+        rating=5,
+        reason="x",
+        payment_reference=TX_HASH,
+        payment_proof=None,
+        reviewer_wallet=None,
+        review_signature=None,
+    )
+    assert not verification.ok
+    assert verification.missing_wallet
+    assert "reviewer_wallet is required" in verification.reason
+
+
+def test_missing_signature_sets_missing_wallet_flag():
+    verification = verify_review_payment(
+        identity=IDENTITY,
+        rating=5,
+        reason="x",
+        payment_reference=TX_HASH,
+        payment_proof=None,
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=None,
+    )
+    assert not verification.ok
+    assert verification.missing_wallet
+    assert "review_signature is required" in verification.reason
+
+
+def test_supplied_but_failing_proof_stays_hard_rejection(monkeypatch):
+    # A proof that fails on-chain verification must NOT downgrade to the
+    # unverified-accepted path.
+    identity = _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod, "_rpc_transaction_receipt", lambda rpc, h: None
+    )
+    verification = verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=json.dumps({"transaction": TX_HASH, "network": "base"}),
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(identity, reason),
+    )
+    assert not verification.ok
+    assert verification.reason == "could not verify x402 transaction on Base"
+
+
 def test_signing_tool_rejects_malformed_hash():
     from crowdcode.server import get_review_signing_payload
 

@@ -20,14 +20,24 @@ import {
   signingPayloadShape,
 } from "./schemas.js";
 import {
+  prepareSignedReview,
+  resignFromMismatch,
+  installWalletNextStep,
+  type PreparedReview,
+  type WalletOptions,
+} from "./tools/sign-review.js";
+import {
   getReviewSigningPayload,
   type SigningPayloadArgs,
 } from "./tools/signing-payload.js";
 import { UpstreamClient, UpstreamError, type Upstream } from "./upstream.js";
+import { loadWallet } from "./wallet.js";
 
 export interface ServerDeps {
   engine: RedactionEngine;
   upstream: Upstream;
+  /** Wallet loading knobs; defaults come from getConfig(). Injectable in tests. */
+  wallet?: Partial<WalletOptions>;
 }
 
 type ToolResult = ReturnType<typeof toToolResult>;
@@ -40,6 +50,15 @@ function errorPayload(
     err instanceof UpstreamError
       ? err.message
       : `could not reach the CrowdCode backend: ${(err as Error).message}`;
+  const next_step = {
+    action: "retry_backend",
+    summary:
+      "The CrowdCode backend may be cold-starting (free-tier hosting); retry " +
+      "the same call in ~30 seconds.",
+    command: null,
+    link: null,
+    retry: { tool, after_seconds: 30, with: {} },
+  };
   if (tool === "get_service_score") {
     return {
       found: false,
@@ -47,58 +66,156 @@ function errorPayload(
       num_reviews: 0,
       recent_reviews: [],
       reason: message,
+      next_step,
     };
   }
-  return { accepted: false, reason: message };
+  return { accepted: false, reason: message, next_step };
+}
+
+function withWalletInfo(
+  payload: Record<string, unknown>,
+  prepared: PreparedReview,
+): Record<string, unknown> {
+  const out = { ...payload };
+  if (prepared.wallet_source !== undefined) {
+    out.wallet_source = prepared.wallet_source;
+  }
+  if (prepared.wallet_created) out.wallet_created = true;
+  if (prepared.wallet_error) out.wallet_error = prepared.wallet_error;
+  if (out.next_step === undefined && prepared.next_step) {
+    out.next_step = prepared.next_step;
+  }
+  return out;
 }
 
 export function createToolHandlers(deps: ServerDeps) {
   const { engine, upstream } = deps;
+  const config = getConfig();
+  const walletOptions: WalletOptions = {
+    walletDir: deps.wallet?.walletDir ?? config.walletDir,
+    autoCreate: deps.wallet?.autoCreate ?? config.walletAutoCreate,
+    env: deps.wallet?.env,
+  };
+  const signingDeps = { redact: (text: string) => engine.redact(text), upstream };
+  // Show the install-wallet onboarding CTA at most once per process so score
+  // lookups don't nag (agentcash pattern: CTA on success, never stacked).
+  let onboardingCtaShown = false;
 
-  async function forwardWithRedaction(
+  async function forwardPayload(
     tool: string,
     args: Record<string, unknown>,
-  ): Promise<ToolResult> {
+  ): Promise<Record<string, unknown>> {
     const redacted = await redactArgs(engine, tool, args);
     try {
       const result = await upstream.call(tool, redacted.args);
-      return toToolResult(
-        withRedactionAttestation(result, {
-          entitiesRemoved: redacted.entitiesRemoved,
-          modelActive: redacted.modelActive,
-        }),
-      );
+      return withRedactionAttestation(result, {
+        entitiesRemoved: redacted.entitiesRemoved,
+        modelActive: redacted.modelActive,
+      });
     } catch (err) {
-      return toToolResult(errorPayload(tool, err));
+      return errorPayload(tool, err);
     }
   }
 
   return {
-    request_service: (args: Record<string, unknown>) =>
-      forwardWithRedaction("request_service", args),
+    request_service: async (
+      args: Record<string, unknown>,
+    ): Promise<ToolResult> => {
+      let outgoing = args;
+      if (!outgoing.requester_wallet) {
+        // Read-only probe: requests never mint a wallet; the review flow does.
+        const wallet = await loadWallet({
+          walletDir: walletOptions.walletDir,
+          env: walletOptions.env,
+          autoCreate: false,
+        });
+        if (wallet.address) {
+          outgoing = { ...outgoing, requester_wallet: wallet.address };
+        }
+      }
+      return toToolResult(await forwardPayload("request_service", outgoing));
+    },
 
     get_service_score: async (
       args: Record<string, unknown>,
     ): Promise<ToolResult> => {
+      let payload: Record<string, unknown>;
       try {
-        return toToolResult(await upstream.call("get_service_score", args));
+        payload = await upstream.call("get_service_score", args);
       } catch (err) {
         return toToolResult(errorPayload("get_service_score", err));
       }
+      const provider = payload.payment_provider;
+      if (
+        !onboardingCtaShown &&
+        payload.found === true &&
+        (provider === "mppx" || provider === "x402")
+      ) {
+        const wallet = await loadWallet({
+          walletDir: walletOptions.walletDir,
+          env: walletOptions.env,
+          autoCreate: false,
+        });
+        if (wallet.source === "none") {
+          onboardingCtaShown = true;
+          payload = {
+            ...payload,
+            onboarding_cta: {
+              message:
+                "This is a paid x402/mppx service and you have no local " +
+                "signing wallet yet. Install agentcash (or set " +
+                "X402_PRIVATE_KEY) so your post-purchase review can be " +
+                "signed and counted.",
+              command: installWalletNextStep("review_service").command,
+            },
+          };
+        }
+      }
+      return toToolResult(payload);
     },
 
     get_review_signing_payload: async (
-      args: SigningPayloadArgs,
-    ): Promise<ToolResult> =>
-      toToolResult(
-        await getReviewSigningPayload(
-          { redact: (text) => engine.redact(text), upstream },
-          args,
-        ),
-      ),
+      args: SigningPayloadArgs & { auto_sign?: boolean | null },
+    ): Promise<ToolResult> => {
+      const payload = await getReviewSigningPayload(signingDeps, args);
+      if (args.auto_sign !== true || payload.ok !== true) {
+        return toToolResult(payload);
+      }
+      const wallet = await loadWallet(walletOptions);
+      if (wallet.source === "none" || wallet.account === null) {
+        return toToolResult({
+          ...payload,
+          wallet_source: "none",
+          wallet_error: wallet.error,
+          next_step: installWalletNextStep("review_service"),
+        });
+      }
+      const signature = await wallet.account.signMessage({
+        message: payload.message as string,
+      });
+      return toToolResult({
+        ...payload,
+        review_signature: signature,
+        reviewer_wallet: wallet.address,
+        wallet_source: wallet.source,
+        ...(wallet.created ? { wallet_created: true } : {}),
+      });
+    },
 
-    review_service: (args: Record<string, unknown>) =>
-      forwardWithRedaction("review_service", args),
+    review_service: async (
+      args: Record<string, unknown>,
+    ): Promise<ToolResult> => {
+      const prepared = await prepareSignedReview(signingDeps, args, walletOptions);
+      let payload = await forwardPayload("review_service", prepared.args);
+      // Signature-mismatch recovery (identity resolution race): re-sign the
+      // backend's expected_message once with the same wallet and retry. A
+      // second mismatch is surfaced to the caller.
+      const retryArgs = await resignFromMismatch(prepared, payload);
+      if (retryArgs !== null) {
+        payload = await forwardPayload("review_service", retryArgs);
+      }
+      return toToolResult(withWalletInfo(payload, prepared));
+    },
   };
 }
 
@@ -114,39 +231,52 @@ const SERVER_INSTRUCTIONS = [
   "",
   "After ANY paid use — success, slow response, or failure: submit a review.",
   "A slow or broken paid call is not a reason to skip the review; it IS the",
-  "review (slowness or breakage goes in the rating and reason). Rate on a",
-  "fixed scale: 5 = excellent (clear schema, useful output, fast, clean",
-  "receipt — would reuse confidently); 4 = works but a real",
+  "review (slowness or breakage goes in the rating and reason). Rate against",
+  "the ORIGINAL task you were solving: was the response relevant and did it",
+  "actually help answer that question? Fixed scale: 5 = excellent (clear",
+  "schema, relevant output that answered the original question, fast, clean",
+  "receipt — would reuse confidently); 4 = helped but a real",
   "schema/docs/latency/output caveat; 3 = paid but response thin, confusing,",
-  "or needed guesswork; 2 = paid but poor (client error, unclear failure,",
-  "hard to use); 1 = paid and broken (server error, unusable output,",
-  "misleading challenge, timeout/severe reliability). A service that simply",
-  "worked well is a 5 — do not hedge to 4 without a concrete caveat.",
+  "needed guesswork, or not actually relevant/helpful for the task (a",
+  "technically valid answer that did not help is a 3 at best); 2 = paid but",
+  "poor (client error, unclear failure, hard to use); 1 = paid and broken",
+  "(server error, unusable output, misleading challenge, timeout/severe",
+  "reliability). A service that simply worked well AND helped is a 5 — do",
+  "not hedge to 4 without a concrete caveat.",
   "",
-  "For x402/mppx, take the",
-  "identity and proofs from the ACTUAL payment, not a directory listing:",
-  "payment_reference = the settlement tx hash (x402) or Payment-Receipt",
-  "reference (mppx); payment_proof = the base64 response header string",
-  "(payment-response for x402, Payment-Receipt for mppx), not the tx hash or",
-  "decoded JSON; payment_target_ref = the real on-chain payee (the 402",
-  "challenge recipient / Transfer `to`), not a directory payTo; reviewer_wallet",
-  "= the wallet that SENT the payment (the Transfer `from`, not the gasless",
-  "facilitator), which must be a self-custody wallet you can EIP-191 sign with.",
-  "Call get_review_signing_payload, sign the returned message verbatim, then",
-  "call review_service in the same session.",
+  "Signing is AUTOMATIC: review_service signs with your local wallet",
+  "(X402_PRIVATE_KEY, or the agentcash wallet at ~/.agentcash/wallet.json,",
+  "auto-created if missing) — you do not need get_review_signing_payload or",
+  "an external signer. Responses include wallet_source (env | agentcash |",
+  "none). For x402/mppx, take identity and proofs from the ACTUAL payment,",
+  "not a directory listing: payment_reference = the settlement tx hash (x402)",
+  "or Payment-Receipt reference (mppx); payment_proof = the base64 response",
+  "header string (payment-response for x402, Payment-Receipt for mppx), not",
+  "the tx hash or decoded JSON — payment_proof is OPTIONAL but strongly",
+  "encouraged: with it the review counts as a verified purchase (double the",
+  "scoring weight of an unverified one); payment_target_ref = the real",
+  "on-chain payee (the 402 challenge recipient / Transfer `to`), not a",
+  "directory payTo.",
+  "",
+  "Workflow: 1) get_service_score on each candidate; 2) pay and use the",
+  "service; 3) review_service with the payment_reference and (ideally) the",
+  "payment_proof header. Reviews are limited to 1 per service per wallet per",
+  "24h; failed calls return a next_step object with the exact command or",
+  "retry that fixes them — follow it.",
   "",
   "When no fitting paid service exists, call request_service once with a",
-  "specific, reusable capability description. Only request things a provider",
-  "could sell as a remote paid API — the test is: could you pay for it with",
-  "an x402/mpp request to someone else's endpoint? Never runtime or",
-  "agent-harness wishes (context management, local compute). Never send",
-  "secrets or private data — free-text fields are redacted locally before",
-  "anything is sent.",
+  "specific, reusable capability description (requires a wallet identity,",
+  "attached automatically; limited to 5 requests per wallet per 24h). Only",
+  "request things a provider could sell as a remote paid API — the test is:",
+  "could you pay for it with an x402/mpp request to someone else's endpoint?",
+  "Never runtime or agent-harness wishes (context management, local compute).",
+  "Never send secrets or private data — free-text fields are redacted locally",
+  "before anything is sent.",
 ].join("\n");
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.1.3" },
+    { name: "crowdcode", version: "0.2.0" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -167,9 +297,11 @@ export function buildServer(deps: ServerDeps): McpServer {
         "citations'; 'live versioned registry of current API schemas'. Bad: " +
         "wishes about your own runtime or harness ('cleaner context', 'more " +
         "memory', local compute/IDE features) and one-off task help ('fix my " +
-        "CI'). Free-text fields are redacted locally (PII and secrets become " +
-        "[PLACEHOLDER]s) before anything is sent to the shared CrowdCode " +
-        "backend.",
+        "CI'). Requires a wallet identity (attached automatically from your " +
+        "local agentcash/X402_PRIVATE_KEY wallet); limited to 5 requests per " +
+        "wallet per 24h. Free-text fields are redacted locally (PII and " +
+        "secrets become [PLACEHOLDER]s) before anything is sent to the shared " +
+        "CrowdCode backend.",
       inputSchema: requestServiceShape,
     },
     (args) => handlers.request_service(args),
@@ -192,14 +324,16 @@ export function buildServer(deps: ServerDeps): McpServer {
     "get_review_signing_payload",
     {
       description:
-        "Build the exact EIP-191 message to sign before submitting an mppx or " +
-        "x402 review. Runs entirely locally: the review reason is redacted on " +
-        "this machine and only its hash enters the payload. Sign the returned " +
-        "`message` VERBATIM (byte-for-byte) with the payer wallet — the same " +
-        "self-custody wallet that sent the payment, whose key you hold " +
-        "(custodial or login-only wallets cannot sign an arbitrary message). " +
-        "Then call review_service with the returned `reason` and `identity` " +
-        "fields passed through verbatim, in this same session.",
+        "Build the exact EIP-191 message for an mppx/x402 review — usually " +
+        "UNNECESSARY: review_service signs automatically with your local " +
+        "wallet. Use this only for transparency/debugging or when signing " +
+        "with an external wallet. Runs entirely locally: the review reason is " +
+        "redacted on this machine and only its hash enters the payload. Pass " +
+        "auto_sign=true to also sign with the local wallet and get " +
+        "review_signature + reviewer_wallet back. If signing externally, sign " +
+        "`message` VERBATIM (byte-for-byte) with the payer wallet, then call " +
+        "review_service with the returned `reason` and `identity` fields " +
+        "verbatim, in this same session.",
       inputSchema: signingPayloadShape,
     },
     (args) => handlers.get_review_signing_payload(args as SigningPayloadArgs),
@@ -212,29 +346,34 @@ export function buildServer(deps: ServerDeps): McpServer {
         "Submit a review after paying for a service — call this after EVERY " +
         "paid x402/mppx use, including slow responses and failures. A bad " +
         "outcome is not a reason to skip the review; it IS the review: rate " +
-        "1-2 with the failure in the reason. Rating scale: 5 = excellent " +
-        "(clear schema, useful output, fast, clean receipt — would reuse " +
-        "confidently); 4 = works but a real schema/docs/latency/output " +
-        "caveat; 3 = paid but thin/confusing/needed guesswork; 2 = paid but " +
-        "poor (client error, unclear failure, hard to use); 1 = paid and " +
-        "broken (server error, unusable output, misleading challenge, " +
-        "timeout). A service that simply worked well is a 5 — do not hedge " +
-        "to 4 without a concrete caveat. " +
-        "Requires the payment reference; mppx/x402 reviews also " +
-        "require payment_proof, reviewer_wallet, and review_signature over the " +
-        "message from get_review_signing_payload. Get these from the ACTUAL " +
-        "payment, not a directory listing: " +
+        "1-2 with the failure in the reason. Rate against the ORIGINAL task " +
+        "you were solving: was the response relevant and did it actually " +
+        "help answer that question? Rating scale: 5 = excellent (clear " +
+        "schema, relevant output that answered the original question, fast, " +
+        "clean receipt — would reuse confidently); 4 = helped but a real " +
+        "schema/docs/latency/output caveat; 3 = paid but " +
+        "thin/confusing/needed guesswork or not actually relevant/helpful " +
+        "for the task (a technically valid answer that did not help is a 3 " +
+        "at best); 2 = paid but poor (client error, unclear failure, hard " +
+        "to use); 1 = paid and broken (server error, unusable output, " +
+        "misleading challenge, timeout). A service that simply worked well " +
+        "AND helped is a 5 — do not hedge to 4 without a concrete caveat. " +
+        "SIGNING IS AUTOMATIC: this tool signs with your local " +
+        "agentcash/X402_PRIVATE_KEY wallet (auto-created if missing) — do not " +
+        "call get_review_signing_payload or sign externally. Get identity and " +
+        "proofs from the ACTUAL payment, not a directory listing: " +
         "payment_reference = the settlement tx hash (x402) or Payment-Receipt " +
         "`reference` (mppx); " +
         "payment_proof = the base64 response header STRING — `payment-response` " +
         "for x402, `Payment-Receipt` for mppx — NOT the tx hash and NOT decoded " +
-        "JSON; " +
+        "JSON. payment_proof is OPTIONAL but strongly encouraged: with it the " +
+        "review is a verified purchase (double scoring weight); " +
         "payment_target_ref = the real payee (the 402 challenge recipient / " +
-        "on-chain Transfer `to`), not a bazaar/directory payTo; " +
-        "reviewer_wallet = the wallet that SENT the payment (the ERC-20 " +
-        "Transfer `from`) — for gasless x402/mppx the tx sender is a " +
-        "facilitator, not the payer. Free-text is redacted locally; pass the " +
-        "exact `reason` returned by get_review_signing_payload.",
+        "on-chain Transfer `to`), not a bazaar/directory payTo. If you paid " +
+        "from a different wallet than the local one, pass reviewer_wallet and " +
+        "review_signature yourself (the wallet that SENT the payment — the " +
+        "ERC-20 Transfer `from`, not the gasless facilitator). Limited to 1 " +
+        "review per service per wallet per 24h. Free-text is redacted locally.",
       inputSchema: reviewServiceShape,
     },
     (args) => handlers.review_service(args),

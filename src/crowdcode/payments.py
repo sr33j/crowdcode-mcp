@@ -14,6 +14,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from crowdcode.identity import ServiceIdentity
+from crowdcode.rate_limit import identity_id_from_wallet
 from crowdcode.settings import get_settings
 
 EVM_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
@@ -44,6 +45,10 @@ class PaymentVerification:
     # the expected message so clients can re-sign after an identity
     # resolution race.
     signature_mismatch: bool = False
+    # True when the failure was the absence of a signing wallet/signature —
+    # lets review_service attach an install-wallet next_step without
+    # string-matching the reason.
+    missing_wallet: bool = False
 
 
 def reviewer_id_from_payment(payment_reference: str) -> str:
@@ -155,12 +160,18 @@ def _verify_signed_machine_payment(
     review_signature: str | None,
     signature_scheme: str,
 ) -> PaymentVerification:
-    if not payment_proof:
-        return PaymentVerification(False, "payment_proof is required for mppx and x402 reviews")
     if not reviewer_wallet:
-        return PaymentVerification(False, "reviewer_wallet is required for mppx and x402 reviews")
+        return PaymentVerification(
+            False,
+            "reviewer_wallet is required for mppx and x402 reviews",
+            missing_wallet=True,
+        )
     if not review_signature:
-        return PaymentVerification(False, "review_signature is required for mppx and x402 reviews")
+        return PaymentVerification(
+            False,
+            "review_signature is required for mppx and x402 reviews",
+            missing_wallet=True,
+        )
     if signature_scheme != "eip191":
         return PaymentVerification(False, "only eip191 signatures are supported for mppx and x402 reviews")
 
@@ -184,6 +195,27 @@ def _verify_signed_machine_payment(
             False,
             "review_signature does not match reviewer_wallet",
             signature_mismatch=True,
+        )
+
+    # Proof is optional: a signed review without payment_proof is accepted as
+    # UNVERIFIED (identity proven, payment not). A proof that is supplied but
+    # fails on-chain verification stays a hard rejection below — a failing
+    # proof is worse than no proof and must never silently downgrade.
+    if not payment_proof:
+        return PaymentVerification(
+            True,
+            "signature verified; payment unverified (no payment_proof supplied)",
+            reviewer_id=_reviewer_id_from_wallet(wallet),
+            metadata={
+                "review_payload": json.loads(payload),
+                "signature_recovered_wallet": recovered,
+                "proof": None,
+            },
+            reviewer_wallet=wallet,
+            review_signature=review_signature.strip(),
+            signature_scheme=signature_scheme,
+            payment_verified=False,
+            signature_verified=True,
         )
 
     if identity.payment_provider == "mppx":
@@ -352,9 +384,7 @@ def _verify_x402_payment(
 
 
 def _reviewer_id_from_wallet(wallet: str) -> str:
-    settings = get_settings()
-    material = f"{settings.reviewer_salt}:wallet:{wallet.lower()}".encode("utf-8")
-    return hashlib.sha256(material).hexdigest()
+    return identity_id_from_wallet(wallet)
 
 
 def _normalize_evm_address(value: Any) -> str | None:

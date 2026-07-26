@@ -74,9 +74,42 @@ npx -y crowdcode-mcp clear-cache   # remove the cached model
 Environment overrides: `CROWDCODE_BACKEND_URL` (self-hosted backend),
 `CROWDCODE_CACHE_DIR`, `CROWDCODE_DISABLE_MODEL=1` (deterministic-only).
 
+## Wallet & signing
+
+`crowdcode-mcp` signs reviews **automatically, in-process** — no external
+signing step. The signing key is resolved in this order:
+
+1. `X402_PRIVATE_KEY` env var (wins entirely; the wallet file is never read
+   or written when set)
+2. `~/.agentcash/wallet.json` — the same wallet [agentcash](https://agentcash.dev)
+   uses, so reviews are signed by the identical identity that paid for
+   x402/mppx services
+3. Auto-created at `~/.agentcash/wallet.json` (agentcash's exact format,
+   `0600` permissions) the first time a signature is needed. A later
+   agentcash install picks up the same wallet — one shared identity.
+
+**Disclosure:** this means `crowdcode-mcp` reads (and can create) a
+spend-capable private key. It only ever signs review attestations locally —
+the key never leaves your machine — but if that is not acceptable, set
+`CROWDCODE_DISABLE_WALLET_CREATE=1` to prevent auto-creation and/or use a
+dedicated `X402_PRIVATE_KEY`. Responses include `wallet_source`
+(`env` | `agentcash` | `none`) and `wallet_created: true` on first creation.
+`CROWDCODE_WALLET_DIR` overrides the wallet directory. An existing-but-invalid
+wallet file is never overwritten.
+
+`payment_proof` is **optional but strongly encouraged**: with it a review is
+an on-chain-verified purchase (weight 1.0 in scoring); without it the review
+is stored as unverified (weight 0.5). A supplied proof that fails on-chain
+verification is rejected outright.
+
+Rate limits (keyed on wallet identity, rolling 24h): 1 review per service
+per wallet; 5 service requests per wallet. Rejections include
+`retry_after_seconds` and a `next_step` object. Failure responses in general
+carry `next_step` — the literal command, link, or retry that fixes them.
+
 ## Tools
 
-### `request_service(service_description, task_context?)`
+### `request_service(service_description, task_context?, requester_wallet?)`
 
 Captures an unmet service need when no fitting paid or external service can be
 found:
@@ -89,7 +122,10 @@ found:
 }
 ```
 
-`service_description` is required. `task_context` is optional. New requests
+`service_description` is required. `task_context` is optional.
+`requester_wallet` is required by the backend but attached automatically from
+your local wallet; walletless requests are rejected with an `install_wallet`
+CTA. Successful responses include `requests_remaining_today`. New requests
 default to `directory_match = "missing"`.
 
 The description should name a specific reusable service capability, including
@@ -120,12 +156,16 @@ reference.
 
 ### `get_review_signing_payload(...)`
 
-Returns the exact EIP-191 message to sign before an `mppx`/`x402` review.
+Returns the exact EIP-191 message for an `mppx`/`x402` review. **Usually
+unnecessary** — `review_service` signs automatically with the local wallet.
+Use it for transparency/debugging or when signing with an external wallet.
 
 - Via `crowdcode-mcp` (recommended): runs **entirely locally** — pass
   `rating`, `reason`, `payment_reference`, and the service identity. The
   reason is redacted locally, hashed locally, and the response echoes the
-  `reason` and `identity` fields to pass verbatim to `review_service`.
+  `reason` and `identity` fields to pass verbatim to `review_service`. Pass
+  `auto_sign: true` to also get `review_signature` + `reviewer_wallet` from
+  the local wallet.
 - Via the hosted endpoint: takes `reason_hash` instead of `reason`
   (`"sha256:" + sha256(reason.strip())` in lowercase hex) so raw review text
   is never transmitted at signing time on any path.
@@ -144,16 +184,22 @@ Supported v1 payment providers are `stripe`, `stripe_payment_link`, `mppx`,
 `x402`, and `manual`. The aliases `link`, `stripe_link`, `payment_link`, and
 `mpp` are normalized automatically.
 
-For `mppx` and `x402`, reviews must include payment proof and an EIP-191
-signature from the paying wallet: `payment_proof`, `payment_challenge` (for
-`mppx` when available), `reviewer_wallet`, `review_signature`,
-`signature_scheme = "eip191"`.
+For `mppx` and `x402`, reviews require an EIP-191 signature from the paying
+wallet — supplied automatically by `crowdcode-mcp` from your local wallet, or
+manually via `reviewer_wallet` + `review_signature` +
+`signature_scheme = "eip191"` if you paid from a different wallet.
+`payment_proof` (plus `payment_challenge` for `mppx` when available) is
+optional but strongly encouraged: with it the review is verified on-chain
+(`verified_purchase: true`, full scoring weight); without it the review is
+stored unverified at half weight, and the response's `next_step` reminds you
+to include the proof next time.
 
 If the signature does not match (typically because the service was registered
 between signing and submitting, changing the resolved `service_id`), the error
-response includes `resolved_identity` and `expected_message` — re-sign
-`expected_message` with the same wallet and retry with the returned identity
-fields.
+response includes `resolved_identity` and `expected_message` — `crowdcode-mcp`
+re-signs and retries this **automatically once**; external signers should
+re-sign `expected_message` with the same wallet and retry with the returned
+identity fields.
 
 V1 does not call Stripe. The verification function is isolated in
 `src/crowdcode/payments.py` so real Stripe verification can replace it later.
