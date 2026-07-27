@@ -11,6 +11,7 @@ from eth_account.messages import encode_defunct
 from crowdcode.identity import ServiceIdentity
 from crowdcode import payments as payments_mod
 from crowdcode.payments import (
+    BASE_USDC_ADDRESS,
     ERC20_TRANSFER_TOPIC,
     REASON_HASH_RE,
     canonical_review_payload,
@@ -124,7 +125,9 @@ def _addr_topic(addr: str) -> str:
     return "0x" + "0" * 24 + addr[2:].lower()
 
 
-def _transfer_receipt(*, payer: str, payee: str, value: int = 1000) -> dict:
+def _transfer_receipt(
+    *, payer: str, payee: str, value: int = 1000, token: str = BASE_USDC_ADDRESS
+) -> dict:
     """A receipt whose tx sender is a facilitator but whose Transfer event
     proves the real payer — mirrors a gasless x402/mppx settlement."""
     return {
@@ -133,7 +136,7 @@ def _transfer_receipt(*, payer: str, payee: str, value: int = 1000) -> dict:
         "blockNumber": "0x1867543",
         "logs": [
             {
-                "address": "0x" + "cc" * 20,
+                "address": token,
                 "topics": [
                     ERC20_TRANSFER_TOPIC,
                     _addr_topic(payer),
@@ -203,7 +206,7 @@ def test_x402_rejects_when_payer_is_not_reviewer_wallet(monkeypatch):
         review_signature=_signed_for(identity, reason),
     )
     assert not verification.ok
-    assert verification.reason == "reviewer_wallet did not send the x402 payment"
+    assert verification.reason == "reviewer_wallet did not send the x402 payment in USDC"
 
 
 def test_x402_accepts_dict_payment_proof(monkeypatch):
@@ -227,6 +230,68 @@ def test_x402_accepts_dict_payment_proof(monkeypatch):
     )
     assert verification.ok, verification.reason
     assert verification.payment_verified
+
+
+def test_x402_rejects_a_transfer_of_a_different_token(monkeypatch):
+    # Token pinning (docs/SCORING.md §3.4): without it a self-minted worthless
+    # ERC-20 would buy the verified-purchase weight multiplier.
+    identity = _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(
+            payer=ACCOUNT.address, payee=PAYEE, token="0x" + "cc" * 20
+        ),
+    )
+    verification = verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=TX_HASH,
+        payment_proof=json.dumps({"transaction": TX_HASH, "network": "base"}),
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_signed_for(identity, reason),
+    )
+    assert not verification.ok
+    assert "USDC" in verification.reason
+
+
+def test_x402_rejects_an_underpayment_and_records_the_amount(monkeypatch):
+    identity = _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(
+            payer=ACCOUNT.address, payee=PAYEE, value=1000
+        ),
+    )
+
+    def verify(max_amount: str):
+        return verify_review_payment(
+            identity=identity,
+            rating=5,
+            reason=reason,
+            payment_reference=TX_HASH,
+            payment_proof=json.dumps(
+                {
+                    "transaction": TX_HASH,
+                    "network": "base",
+                    "maxAmountRequired": max_amount,
+                }
+            ),
+            reviewer_wallet=ACCOUNT.address,
+            review_signature=_signed_for(identity, reason),
+        )
+
+    under = verify("5000")
+    assert not under.ok
+    assert "below the challenge price" in under.reason
+
+    paid = verify("1000")
+    assert paid.ok, paid.reason
+    assert paid.amount == 1000
 
 
 def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):

@@ -136,7 +136,8 @@ opens a pull request with a focused fix" over "fix my CI."
 
 ### `get_service_score(service_id?, api_endpoint?, payment_provider?, payment_target_ref?, directory_slug?)`
 
-Returns a simple average rating:
+Returns the canonical trust-weighted score (see `docs/SCORING.md`) plus raw
+rating stats and an AI-generated review summary when one exists:
 
 ```json
 {
@@ -144,15 +145,29 @@ Returns a simple average rating:
   "service_name": "Code Review Agent",
   "directory_slug": "code-review-agent",
   "found": true,
+  "score": 4.32,
+  "n_eff": 5.8,
+  "unproven": false,
+  "score_algorithm": "crowdcode-scoring-v1",
   "avg_rating": 4.5,
   "num_reviews": 2,
+  "summary": {
+    "strengths": ["Consistently relevant review comments."],
+    "failure_modes": [],
+    "caveats": ["Slower on large diffs."],
+    "n_reviews": 2,
+    "through_date": "2026-07-25"
+  },
   "recent_reviews": []
 }
 ```
 
-Services can be looked up by the internal `service_id`, a directory slug, or a
-strong payment identity: normalized API endpoint plus payment provider and payee
-reference.
+Prefer `score` with `n_eff` as evidence context; `unproven: true` means the
+service does not yet have enough trusted reviews — insufficient evidence, not
+a bad score. `weighted_rating` is kept as a deprecated alias of `score`. The
+same score is served on the website. Services can be looked up by the internal
+`service_id`, a directory slug, or a strong payment identity: normalized API
+endpoint plus payment provider and payee reference.
 
 ### `get_review_signing_payload(...)`
 

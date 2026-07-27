@@ -14,6 +14,8 @@ let services = [];
 let provFilter = "all";
 let sortKey = "rank_score";
 let page = 1;
+let expandedId = null;
+const detailCache = new Map();
 
 const tbody = document.querySelector("#tbody");
 const pager = document.querySelector("#pager");
@@ -72,19 +74,23 @@ function renderTable() {
     tbody.innerHTML =
       '<tr><td colspan="5" class="state">No services match.</td></tr>';
   } else {
+    expandedId = null;
     tbody.innerHTML = slice
       .map((s, i) => {
-        const score = Number(s.rank_score) || 0;
-        const width = Math.max(4, ((score - 3.5) / (5 - 3.5)) * 100);
+        const score = Number(s.score ?? s.rank_score) || 0;
+        const width = Math.max(4, ((score - 1) / 4) * 100);
         const endpoint = s.canonical_endpoint || s.directory_slug || s.service_id;
+        const scoreCell = s.unproven
+          ? '<span class="chip unproven" title="Not enough trusted reviews yet">unproven</span>'
+          : `<div class="score-cell"><span class="score-num">${score.toFixed(2)}</span><span class="score-bar"><i style="width:${width}%"></i></span></div>`;
         return `
-        <tr>
+        <tr data-service-id="${esc(s.service_id)}">
           <td class="rank">${start + i + 1}</td>
           <td class="name"><div class="nm">${esc(s.name || s.service_id)}</div><div class="ep">${esc(endpoint)}</div></td>
           <td><span class="chip ${railClass(s.payment_provider)}">${esc(railLabel(s.payment_provider))}</span></td>
-          <td class="score"><div class="score-cell"><span class="score-num">${score.toFixed(2)}</span><span class="score-bar"><i style="width:${width}%"></i></span></div></td>
+          <td class="score">${scoreCell}</td>
           <td class="reviews">${
-            s.num_reviews < 3
+            s.unproven
               ? '<span class="lo">' + s.num_reviews + "</span>"
               : s.num_reviews
           }</td>
@@ -110,6 +116,107 @@ function renderTable() {
   document.querySelectorAll(".arr").forEach((el) => (el.textContent = ""));
   const arrow = document.querySelector(`#arr-${sortKey}`);
   if (arrow) arrow.textContent = "▼";
+}
+
+function renderDetail(d) {
+  const histogram = d.histogram || {};
+  const total =
+    Object.values(histogram).reduce((sum, n) => sum + (n || 0), 0) || 1;
+  const bars = [5, 4, 3, 2, 1]
+    .map((star) => {
+      const n = histogram[String(star)] || 0;
+      const width = Math.round((n / total) * 100);
+      return `<div class="hist-row"><span class="hist-star">★${star}</span><span class="hist-bar"><i style="width:${width}%"></i></span><span class="hist-n">${n}</span></div>`;
+    })
+    .join("");
+
+  const summary = d.summary;
+  const sections = [
+    ["Strengths", summary?.strengths],
+    ["Failure modes", summary?.failure_modes],
+    ["Caveats", summary?.caveats],
+  ]
+    .filter(([, items]) => Array.isArray(items) && items.length)
+    .map(
+      ([label, items]) => `
+      <div class="sum-section">
+        <div class="sum-label">${label}</div>
+        <ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
+      </div>`
+    )
+    .join("");
+  const summaryBlock = sections
+    ? `<div class="sum">
+         <div class="sum-note">AI-generated from ${summary.n_reviews} review${
+           summary.n_reviews === 1 ? "" : "s"
+         }${summary.through_date ? ` through ${esc(summary.through_date)}` : ""}</div>
+         ${sections}
+       </div>`
+    : '<div class="sum state">No review summary yet — summaries are generated nightly once a service has trusted reviews.</div>';
+
+  const scoreLine = d.unproven
+    ? '<span class="chip unproven">unproven</span>'
+    : `<span class="score-num">${(Number(d.score) || 0).toFixed(2)}</span>`;
+
+  const reviews = Array.isArray(d.recent_reviews) ? d.recent_reviews : [];
+  const reviewItems = reviews
+    .filter((review) => review.reason)
+    .map(
+      (review) => `
+      <div class="rev">
+        <span class="rev-stars">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</span>
+        ${review.payment_verified ? '<span class="chip verified">verified</span>' : ""}
+        <span class="rev-text">${esc(review.reason)}</span>
+      </div>`
+    )
+    .join("");
+
+  return `
+    <div class="detail">
+      <div class="detail-head">
+        ${scoreLine}
+        <span class="detail-meta">n_eff ${(Number(d.n_eff) || 0).toFixed(1)}
+          · ${d.num_reviews} review${d.num_reviews === 1 ? "" : "s"}
+          · ${d.num_verified_reviews} verified</span>
+      </div>
+      <div class="detail-grid">
+        ${summaryBlock}
+        <div class="hist">${bars}</div>
+      </div>
+      ${reviewItems ? `<div class="revs">${reviewItems}</div>` : ""}
+    </div>`;
+}
+
+async function toggleDetail(row) {
+  const id = row.dataset.serviceId;
+  const open = tbody.querySelector("tr.detail-row");
+  const wasOpen = expandedId === id;
+  if (open) open.remove();
+  expandedId = null;
+  if (wasOpen) return;
+
+  expandedId = id;
+  const detail = document.createElement("tr");
+  detail.className = "detail-row";
+  detail.innerHTML = '<td colspan="5"><div class="detail state">Loading…</div></td>';
+  row.after(detail);
+
+  try {
+    let payload = detailCache.get(id);
+    if (!payload) {
+      payload = await fetchJson(`/api/services/${encodeURIComponent(id)}`);
+      detailCache.set(id, payload);
+    }
+    if (expandedId === id && detail.isConnected) {
+      detail.innerHTML = `<td colspan="5">${renderDetail(payload)}</td>`;
+    }
+  } catch (error) {
+    if (expandedId === id && detail.isConnected) {
+      detail.innerHTML = `<td colspan="5"><div class="detail state error">${esc(
+        error.message
+      )}</div></td>`;
+    }
+  }
 }
 
 function renderStatline(stats) {
@@ -186,6 +293,12 @@ async function loadIdeas() {
 searchInput.addEventListener("input", () => {
   page = 1;
   renderTable();
+});
+
+tbody.addEventListener("click", (event) => {
+  const row = event.target.closest("tr[data-service-id]");
+  if (!row) return;
+  toggleDetail(row);
 });
 
 document.querySelectorAll(".seg button").forEach((button) => {

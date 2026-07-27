@@ -28,6 +28,13 @@ ERC20_TRANSFER_TOPIC = (
 TEMPO_RPC_URL = "https://rpc.tempo.xyz"
 BASE_RPC_URL = "https://mainnet.base.org"
 
+# Token pinning (docs/SCORING.md §3.4): a verified payment must move the
+# expected token, otherwise a self-minted worthless ERC-20 buys the verified
+# multiplier. x402 on Base is pinned to native USDC by default; the Tempo
+# token for mppx must be configured (until then mppx proofs verify unpinned,
+# which the operator should treat as weaker evidence).
+BASE_USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+
 
 @dataclass(frozen=True)
 class PaymentVerification:
@@ -40,6 +47,9 @@ class PaymentVerification:
     signature_scheme: str | None = None
     payment_verified: bool = False
     signature_verified: bool = False
+    # Token base units actually transferred (ERC-20 Transfer value) when a
+    # payment proof verified; persisted to reviews.amount.
+    amount: int | None = None
     # True when the failure was specifically the EIP-191 signature not
     # matching the server-side canonical payload — lets review_service return
     # the expected message so clients can re-sign after an identity
@@ -253,6 +263,7 @@ def _verify_signed_machine_payment(
         signature_scheme=signature_scheme,
         payment_verified=True,
         signature_verified=True,
+        amount=payment.amount,
     )
 
 
@@ -290,11 +301,16 @@ def _verify_mppx_payment(
     # MPP/Tempo payments are settled by a facilitator, so the tx sender is the
     # settler, not the payer. Verify the payer via the Transfer event `from`.
     target = _normalize_evm_address(identity.payment_target_ref)
+    pinned_token = _normalize_evm_address(os.environ.get("MPPX_TEMPO_TOKEN_ADDRESS"))
     transfer = _find_erc20_transfer(
-        chain_receipt, sender=reviewer_wallet, recipient=target
+        chain_receipt, sender=reviewer_wallet, recipient=target, token=pinned_token
     )
     if transfer is None:
-        return PaymentVerification(False, "reviewer_wallet did not send the mppx payment")
+        return PaymentVerification(
+            False,
+            "reviewer_wallet did not send the mppx payment"
+            + (" in the expected token" if pinned_token else ""),
+        )
 
     metadata: dict[str, Any] = {
         "provider": "mppx",
@@ -318,11 +334,20 @@ def _verify_mppx_payment(
             target = _normalize_evm_address(identity.payment_target_ref)
             if target and target.lower() != recipient.lower():
                 return PaymentVerification(False, "mppx payment recipient does not match payment_target_ref")
-        amount = challenge.get("amount")
+        amount = _amount_to_int(challenge.get("amount"))
         if amount is not None:
             metadata["transaction"]["amount"] = str(amount)
+            if transfer["value"] is not None and transfer["value"] < amount:
+                return PaymentVerification(
+                    False, "mppx payment amount is below the challenge price"
+                )
 
-    return PaymentVerification(True, "verified mppx payment and reviewer wallet", metadata=metadata)
+    return PaymentVerification(
+        True,
+        "verified mppx payment and reviewer wallet",
+        metadata=metadata,
+        amount=transfer["value"],
+    )
 
 
 def _verify_x402_payment(
@@ -361,12 +386,31 @@ def _verify_x402_payment(
 
     # x402 on Base uses EIP-3009 (gasless): a facilitator submits the tx, so the
     # payer is the `from` of the USDC Transfer event, not the tx sender.
+    # The token is pinned to Base USDC: any other ERC-20 transfer (e.g. a
+    # self-minted token) is not a verified payment.
     target = _normalize_evm_address(identity.payment_target_ref)
+    pinned_token = _normalize_evm_address(
+        os.environ.get("X402_USDC_ADDRESS") or BASE_USDC_ADDRESS
+    )
     transfer = _find_erc20_transfer(
-        chain_receipt, sender=reviewer_wallet, recipient=target
+        chain_receipt, sender=reviewer_wallet, recipient=target, token=pinned_token
     )
     if transfer is None:
-        return PaymentVerification(False, "reviewer_wallet did not send the x402 payment")
+        return PaymentVerification(
+            False, "reviewer_wallet did not send the x402 payment in USDC"
+        )
+
+    required = _amount_to_int(
+        proof.get("maxAmountRequired") or proof.get("amount")
+    )
+    if (
+        required is not None
+        and transfer["value"] is not None
+        and transfer["value"] < required
+    ):
+        return PaymentVerification(
+            False, "x402 payment amount is below the challenge price"
+        )
 
     metadata = {
         "provider": "x402",
@@ -380,7 +424,12 @@ def _verify_x402_payment(
             "block_number": _hex_to_int(chain_receipt.get("blockNumber")),
         },
     }
-    return PaymentVerification(True, "verified x402 payment and reviewer wallet", metadata=metadata)
+    return PaymentVerification(
+        True,
+        "verified x402 payment and reviewer wallet",
+        metadata=metadata,
+        amount=transfer["value"],
+    )
 
 
 def _reviewer_id_from_wallet(wallet: str) -> str:
@@ -531,6 +580,24 @@ def _find_erc20_transfer(
             "value": _hex_to_int(log.get("data")),
             "token": log_token,
         }
+    return None
+
+
+def _amount_to_int(value: Any) -> int | None:
+    """Parse a challenge/proof amount (int, decimal string, or hex) into token
+    base units; None when absent or unparseable."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned, 16) if cleaned.lower().startswith("0x") else int(cleaned)
+        except ValueError:
+            return None
     return None
 
 

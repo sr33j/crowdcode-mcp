@@ -62,8 +62,12 @@ function errorPayload(
   if (tool === "get_service_score") {
     return {
       found: false,
+      score: null,
+      n_eff: 0,
+      unproven: true,
       avg_rating: null,
       num_reviews: 0,
+      summary: null,
       recent_reviews: [],
       reason: message,
       next_step,
@@ -226,8 +230,12 @@ const SERVER_INSTRUCTIONS = [
   "",
   "Before spending: call get_service_score on each candidate (prefer",
   "api_endpoint + payment_provider + payment_target_ref, or service_id /",
-  "directory_slug). Prefer higher avg_rating, using num_reviews as sample-size",
-  "context; with few or no reviews, fall back to price and the spend policy.",
+  "directory_slug). Prefer higher `score` (the canonical trust-weighted",
+  "rating), using `n_eff` as evidence context; `unproven: true` means not",
+  "enough trusted reviews yet — treat it as insufficient evidence, not a bad",
+  "score, and fall back to price and the spend policy. When present,",
+  "`summary` digests what reviewers reported (strengths / failure modes /",
+  "caveats).",
   "",
   "After ANY paid use — success, slow response, or failure: submit a review.",
   "A slow or broken paid call is not a reason to skip the review; it IS the",
@@ -264,13 +272,18 @@ const SERVER_INSTRUCTIONS = [
   "24h; failed calls return a next_step object with the exact command or",
   "retry that fixes them — follow it.",
   "",
-  "When no fitting paid service exists, call request_service once with a",
-  "specific, reusable capability description (requires a wallet identity,",
-  "attached automatically; limited to 5 requests per wallet per 24h). Only",
-  "request things a provider could sell as a remote paid API — the test is:",
-  "could you pay for it with an x402/mpp request to someone else's endpoint?",
-  "Never runtime or agent-harness wishes (context management, local compute).",
-  "Never send secrets or private data — free-text fields are redacted locally",
+  "When you were actively trying to BUY a capability and no fitting paid",
+  "service exists, call request_service once (requires a wallet identity,",
+  "attached automatically; limited to 5 requests per wallet per 24h). The",
+  "gate is willingness to pay: you had the task, a wallet, and spend",
+  "authority, and would have paid concrete money for this right then if it",
+  "existed. 'A provider could charge for this' is not enough — a free tool",
+  "that would merely have been convenient is not a service request. Describe",
+  "the paid API call you wanted to make: the input you would have sent, the",
+  "output or state change you were paying for, and roughly what a call was",
+  "worth to the task. Never free-tool wishes, runtime or agent-harness",
+  "wishes (context management, local compute), or one-off task help. Never",
+  "send secrets or private data — free-text fields are redacted locally",
   "before anything is sent.",
 ].join("\n");
 
@@ -285,19 +298,24 @@ export function buildServer(deps: ServerDeps): McpServer {
     "request_service",
     {
       description:
-        "Capture an unmet, reusable service request for future directory " +
-        "coverage. Use only when no fitting paid or external service exists. " +
-        "Only request capabilities a provider could sell as a remote paid API " +
-        "(x402/mppx/Stripe) — the test: could you pay for it with an x402/mpp " +
-        "request to someone else's endpoint? Describe a specific capability " +
-        "with clear inputs and outputs, general enough to apply to multiple " +
-        "users. Good: 'resolve a citation like Smith et al. 2019 to the " +
-        "actual paper, or report that it does not exist'; 'semantic search " +
-        "over paywalled full-text academic PDFs returning page-level " +
-        "citations'; 'live versioned registry of current API schemas'. Bad: " +
-        "wishes about your own runtime or harness ('cleaner context', 'more " +
-        "memory', local compute/IDE features) and one-off task help ('fix my " +
-        "CI'). Requires a wallet identity (attached automatically from your " +
+        "Record unmet paid-service demand for future directory coverage. " +
+        "Call this only when you were actively trying to BUY a capability — " +
+        "you had the task, a wallet, and spend authority, and would have " +
+        "paid concrete money right then if the service existed — and no " +
+        "fitting paid service (x402/mppx/Stripe) could be found. 'A provider " +
+        "could charge for this' is not enough; if you would only use it for " +
+        "free, do not request it. Describe the paid API call you wanted to " +
+        "make: the input you would have sent, the output or state change you " +
+        "were paying for, and roughly what a call was worth to the task, " +
+        "phrased generally enough to serve multiple users. Good: 'resolve a " +
+        "citation like Smith et al. 2019 to the actual paper, or report " +
+        "that it does not exist — worth ~$0.10 per lookup'; 'semantic " +
+        "search over paywalled full-text academic PDFs returning page-level " +
+        "citations — worth ~$0.25 per query'. Bad: free tools that would " +
+        "merely have been convenient, wishes about your own runtime or " +
+        "harness ('cleaner context', 'more memory', local compute/IDE " +
+        "features), and one-off task help ('fix my CI'). Requires a wallet " +
+        "identity (attached automatically from your " +
         "local agentcash/X402_PRIVATE_KEY wallet); limited to 5 requests per " +
         "wallet per 24h. Free-text fields are redacted locally (PII and " +
         "secrets become [PLACEHOLDER]s) before anything is sent to the shared " +
@@ -311,8 +329,10 @@ export function buildServer(deps: ServerDeps): McpServer {
     "get_service_score",
     {
       description:
-        "Return the average rating, review count, and recent reviews for a " +
-        "service, identified by service_id, api_endpoint, payment target, or " +
+        "Return the canonical trust-weighted score (`score`, with `n_eff` " +
+        "evidence and an `unproven` flag), an AI review summary when " +
+        "available, plus raw rating stats and recent reviews for a service, " +
+        "identified by service_id, api_endpoint, payment target, or " +
         "directory_slug. Check this before paying for, provisioning, or calling " +
         "any paid agent service — especially x402 and mppx/MPP services.",
       inputSchema: getServiceScoreShape,

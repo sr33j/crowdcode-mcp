@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased (backend)
+
+### One canonical score (docs/SCORING.md v1)
+- `src/crowdcode/scoring.py` is now the single scoring implementation:
+  `score = (Σ wᵢrᵢ + κμ₀)/(Σ wᵢ + κ)` with κ=2, μ₀=3.0, review weight =
+  wallet trust × payment proof (2× verified / 1× signed) × 180-day decay.
+  The MCP `get_service_score` tool, `/api/services`, `/api/services/top`, and
+  the new detail endpoint all serve the identical value.
+- Reviewer trust is earned, not granted: raw trust ∈ [−5, 1.0] updated by a
+  proper scoring rule against the **leave-one-out** consensus (η=0.02), and
+  rounded to **zero weight below θ=0.1** — so fresh and adversarial wallets
+  contribute exactly nothing. Seed wallets are pinned at 1.0 via
+  `CROWDCODE_SEED_WALLETS`.
+- New fields on `get_service_score`: `score`, `n_eff`, `unproven`,
+  `score_algorithm`, `summary`. `weighted_rating` becomes a deprecated alias
+  of `score`; `rank_score` on `/api/services` likewise. `/api/services` now
+  LEFT JOINs reviews, so zero-review services appear as unproven at the prior
+  instead of being invisible.
+- Trust and scores are updated on the review write path, inside the same
+  transaction as the insert.
+
+### Payment verification hardening
+- x402 payments are pinned to Base USDC (`X402_USDC_ADDRESS` to override) and
+  mppx to `MPPX_TEMPO_TOKEN_ADDRESS` — a transfer of any other token is no
+  longer a verified purchase.
+- When the challenge price is visible, an underpayment is rejected; the
+  transferred amount is recorded in `reviews.amount`.
+
+### Nightly cron (`crowdcode-cron`, new Render cron service)
+- Consistency sweep: replays review history to recompute all trust and scores
+  from scratch, logs drift, backfills `wallet_users` + `reviews.user_id`.
+- Per-service LLM review summaries (strengths / failure modes / caveats),
+  watermarked on `services.last_summarized_at`, generated only from
+  trust-weighted reviews, served in `get_service_score` and on the website.
+- Requested-services summary written to `app_cache`, so `/api/project-ideas`
+  survives free-tier cold starts.
+
+### Website
+- Clicking a service row expands it in place: AI review summary, rating
+  histogram, and recent reviews, fetched from the new
+  `GET /api/services/{service_id}`.
+- Score bar rescaled to the full 1–5 range (the old hardcoded 3.5 floor broke
+  under the new prior); unproven services show an "unproven" chip.
+
+### Schema
+- New `wallet_users` (per-wallet trust; named to avoid the unrelated
+  `public.users` table) and `app_cache` tables; `services` gains `score`,
+  `n_eff`, `score_updated_at`, `review_summary`, `last_summarized_at`,
+  `resource_type`; `reviews` gains `user_id` and `amount`.
+
 ## 0.2.0 (backend) — 2026-07-25
 
 ### payment_proof is now optional for mppx/x402 reviews

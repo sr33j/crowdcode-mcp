@@ -40,6 +40,34 @@ services:
         sync: false
       - key: REDACTOR_TOKEN
         sync: false
+      # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5).
+      - key: CROWDCODE_SEED_WALLETS
+        sync: false
+
+  # Nightly batch (docs/SCORING.md §8.2): consistency sweep, per-service
+  # review summaries, requested-services summary.
+  - type: cron
+    name: crowdcode-cron
+    runtime: python
+    plan: starter
+    schedule: "30 6 * * *"
+    buildCommand: pip install -e .
+    startCommand: crowdcode-cron
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: CROWDCODE_REVIEWER_SALT
+        sync: false
+      - key: CROWDCODE_SEED_WALLETS
+        sync: false
+      - key: REDACTOR_URL
+        sync: false
+      - key: REDACTOR_TOKEN
+        sync: false
 
   # Internal-only redaction sidecar: same Rampart + secret-recognizer
   # pipeline as crowdcode-mcp, called by the backend on ingest/egress.

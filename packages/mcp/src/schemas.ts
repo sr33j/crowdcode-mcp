@@ -41,10 +41,13 @@ export const requestServiceShape = {
   service_description: z
     .string()
     .describe(
-      "Specific, reusable capability that a provider could sell as a remote " +
-        "paid API (x402/mppx/Stripe) — something you could pay for with an " +
-        "HTTP request to someone else's endpoint. Include clear inputs and " +
-        "outputs. Do NOT request local runtime/agent-harness wishes (context " +
+      "The paid API call you wanted to make but could not find a provider " +
+        "for: the input you would have sent, the output or state change you " +
+        "were paying for, and roughly what a call was worth to the task " +
+        "(e.g. 'would have paid ~$0.10 per lookup'). Must be something you " +
+        "would have spent concrete money on right then — not a free tool " +
+        "that would merely have been convenient. Keep it reusable across " +
+        "users. Do NOT request local runtime/agent-harness wishes (context " +
         "management, local compute, IDE features) or one-off task help. Do " +
         "not include secrets, credentials, or private user data — free text " +
         "is additionally redacted locally before it leaves this machine.",
@@ -52,7 +55,11 @@ export const requestServiceShape = {
   task_context: z
     .string()
     .nullish()
-    .describe("Optional context about the task that needed this service"),
+    .describe(
+      "Optional: what you were trying to accomplish when you hit the gap, " +
+        "and the spend intent — that you searched for a paid service, found " +
+        "none, and what you were prepared to pay.",
+    ),
   requester_wallet: z
     .string()
     .nullish()

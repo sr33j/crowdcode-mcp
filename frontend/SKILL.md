@@ -38,28 +38,36 @@ streamable-HTTP endpoint `https://crowdcode-backend.onrender.com/mcp` instead
 
 - Call `get_service_score(...)` on each finalist using the strongest available identity.
 - Prefer `api_endpoint + payment_provider + payment_target_ref`; fall back to `service_id` or `directory_slug` when that is all you have.
-- Prefer higher `avg_rating`, using `num_reviews` as simple sample-size context.
-- When there are few or no reviews, fall back to directory metadata, price, and the active spend policy.
+- Prefer higher `score` (the canonical trust-weighted rating), using `n_eff` as evidence context. `unproven: true` means not enough trusted reviews yet — treat it as insufficient evidence, not a bad score.
+- When present, `summary` digests what reviewers reported (strengths / failure modes / caveats).
+- For unproven services, fall back to directory metadata, price, and the active spend policy.
 
-## When no fitting paid or external service can be found
+## When you would have paid for a service that does not exist
 
 - Call `request_service(service_description, task_context?)` once for the unmet need.
-- Only request capabilities a provider could sell as a **remote paid API**
-  (x402/mppx/Stripe). The litmus test: *could you pay for this with an x402/mpp
-  request to someone else's endpoint?* If not, it is not a service request.
-- Use a concise description of the missing service capability.
-- Make the service specific: include the expected input and output, or the state change it should perform.
+- The gate is **willingness to pay**, not sellability: you were actively trying
+  to *buy* this capability — you had the task, a wallet, and spend authority,
+  and would have paid concrete money right then if the service existed.
+  "A provider could charge for this" is not enough; a free tool that would
+  merely have been convenient is not a service request.
+- It must still be something a provider could sell as a **remote paid API**
+  (x402/mppx/Stripe) — a capability you would buy with an HTTP request to
+  someone else's endpoint.
+- Describe it as the paid API call you wanted to make: the input you would
+  have sent, the output or state change you were paying for, and roughly what
+  a call was worth to the task (e.g. "would have paid ~$0.05–0.25 per lookup").
 - Keep the service general enough to serve multiple users; describe the reusable capability, not only this user's one-off task.
 - Prefer descriptions like:
-  - "Accepts a GitHub repository URL and failing CI logs, then opens a pull request with a focused fix."
-  - "Resolves a citation like 'Smith et al. 2019 on X' to the actual paper, or reports that it does not exist."
-  - "Semantic search over paywalled full-text academic PDFs, returning page-level citations."
-  - "Live, versioned registry of current API schemas for popular services."
+  - "Accepts a GitHub repository URL and failing CI logs, then opens a pull request with a focused fix — worth ~$1–5 per fix."
+  - "Resolves a citation like 'Smith et al. 2019 on X' to the actual paper, or reports that it does not exist — worth ~$0.10 per lookup."
+  - "Semantic search over paywalled full-text academic PDFs, returning page-level citations — worth ~$0.25 per query."
 - Avoid descriptions like "fix my CI" or "help with this repo" (one-off task help).
+- Avoid free-tool wishes — anything you would only use if it cost nothing.
 - Avoid wishes about your own runtime or agent harness — "cleaner context",
   "more memory", local compute or IDE capabilities. Those are not purchasable
   network services.
-- Include task context only when it helps explain the demand category.
+- In `task_context`, say what you were trying to accomplish, that you searched
+  for a paid service and found none, and what you were prepared to spend.
 - Do not call it for vague brainstorming, ordinary local coding tasks, generic failures, or cases where an acceptable service already exists.
 - Do not include secrets, credentials, private user data, or long source snippets. (The local client also redacts these automatically — the `_redaction` field in results confirms it ran.)
 

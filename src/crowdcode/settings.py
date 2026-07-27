@@ -38,6 +38,9 @@ class Settings:
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
     openai_base_url: str = "https://api.openai.com/v1"
+    # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5). Synced into
+    # the users table at startup and at each cron run.
+    seed_wallets: tuple[str, ...] = ()
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -108,4 +111,8 @@ def get_settings() -> Settings:
             "https://api.openai.com/v1",
         ).strip()
         or "https://api.openai.com/v1",
+        seed_wallets=tuple(
+            wallet.lower()
+            for wallet in _csv(os.environ.get("CROWDCODE_SEED_WALLETS", ""))
+        ),
     )

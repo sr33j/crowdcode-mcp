@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 crowdcode-mcp = "crowdcode.server:main"
+crowdcode-cron = "crowdcode.cron:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

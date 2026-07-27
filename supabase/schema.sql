@@ -99,6 +99,45 @@ create index if not exists service_requests_requester_id_created_at_idx
 create index if not exists reviews_reviewer_service_created_idx
   on reviews (reviewer_id, service_id, created_at desc);
 
+-- Scoring & reputation (docs/SCORING.md v1): one row per reviewing wallet
+-- holding its raw trust; seeds are pinned at 1.0 via CROWDCODE_SEED_WALLETS.
+-- Scores are stored on services and refreshed on the review write path plus
+-- the nightly consistency sweep (crowdcode-cron).
+--
+-- Named wallet_users, not users: this database already carries an unrelated
+-- public.users table (Privy auth) belonging to another app.
+create table if not exists wallet_users (
+  user_id bigserial primary key,
+  wallet_address text not null unique,
+  created_at timestamptz not null default now(),
+  is_seed boolean not null default false,
+  raw_trust double precision not null default 0,
+  trust_updated_at timestamptz,
+  slashed_at timestamptz
+);
+
+alter table reviews
+  add column if not exists user_id bigint references wallet_users(user_id),
+  add column if not exists amount numeric;
+
+alter table services
+  add column if not exists resource_type text not null default 'api',
+  add column if not exists score double precision not null default 3.0,
+  add column if not exists n_eff double precision not null default 0,
+  add column if not exists score_updated_at timestamptz,
+  add column if not exists review_summary jsonb,
+  add column if not exists last_summarized_at timestamptz;
+
+-- Cross-restart cache for cron-generated payloads (e.g. project_ideas).
+create table if not exists app_cache (
+  key text primary key,
+  payload jsonb not null,
+  generated_at timestamptz not null default now()
+);
+
+create index if not exists reviews_wallet_created_idx
+  on reviews (reviewer_wallet, created_at);
+
 -- RLS is enabled with NO policies on purpose: that is default-deny for the
 -- Supabase anon/authenticated API roles. The backend connects with a
 -- privileged role that bypasses RLS and owns all reads/writes. Do not add
@@ -107,3 +146,5 @@ alter table services enable row level security;
 alter table reviews enable row level security;
 alter table service_identifiers enable row level security;
 alter table service_requests enable row level security;
+alter table wallet_users enable row level security;
+alter table app_cache enable row level security;

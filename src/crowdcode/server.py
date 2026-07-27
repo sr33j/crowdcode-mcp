@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 from typing import Any
 
-import httpx
 import psycopg
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -44,7 +42,21 @@ from crowdcode.redaction import (
     redact_texts,
     redaction_enabled,
 )
-from crowdcode.scoring import as_float
+from crowdcode.reputation import (
+    apply_review_trust_update,
+    ensure_user,
+    recompute_service_score,
+    sync_seed_wallets,
+)
+from crowdcode.scoring import (
+    ALGORITHM as SCORE_ALGORITHM,
+    as_float,
+    is_unproven,
+)
+from crowdcode.summaries import (
+    fetch_recent_requests,
+    summarize_project_ideas,
+)
 from crowdcode.settings import (
     get_mcp_allowed_hosts,
     get_mcp_allowed_origins,
@@ -72,7 +84,6 @@ _PROJECT_IDEAS_CACHE: dict[str, Any] = {
     "payload": None,
 }
 _PROJECT_IDEAS_REFRESH_LOCK = threading.Lock()
-_REQUESTS_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _json_ready(row: dict[str, Any]) -> dict[str, Any]:
@@ -108,27 +119,33 @@ def request_service(
     task_context: str | None = None,
     requester_wallet: str | None = None,
 ) -> dict[str, Any]:
-    """Capture an unmet, reusable service request for future directory coverage.
+    """Record unmet paid-service demand for future directory coverage.
 
-    Use this only when no fitting paid or external service exists. Only request
-    capabilities a provider could sell as a remote paid API (x402/mppx/Stripe) —
-    the test: could you pay for it with an x402/mpp request to someone else's
-    endpoint? Describe a specific capability with clear inputs and expected
-    outputs or state changes, general enough to apply to multiple users.
+    Use this only when you were actively trying to BUY a capability — you had
+    the task, a wallet, and spend authority, and would have paid concrete
+    money right then if the service existed — and no fitting paid service
+    (x402/mppx/Stripe) could be found. "A provider could charge for this" is
+    not enough; a free tool that would merely have been convenient is not a
+    service request. Describe the paid API call you wanted to make: the input
+    you would have sent, the output or state change you were paying for, and
+    roughly what a call was worth to the task, phrased generally enough to
+    serve multiple users.
 
     Requires requester_wallet (an EVM 0x address identifying who is asking;
     crowdcode-mcp attaches your local wallet automatically). Requests are
     rate-limited per wallet identity per day.
 
     Good: "Accepts a GitHub repository URL and failing CI logs, then opens a
-    pull request with the focused fix." / "Resolves a citation like 'Smith et
-    al. 2019' to the actual paper, or reports that it does not exist." /
-    "Semantic search over paywalled full-text academic PDFs with page-level
-    citations."
+    pull request with the focused fix — worth ~$1-5 per fix." / "Resolves a
+    citation like 'Smith et al. 2019' to the actual paper, or reports that it
+    does not exist — worth ~$0.10 per lookup." / "Semantic search over
+    paywalled full-text academic PDFs with page-level citations — worth
+    ~$0.25 per query."
 
-    Bad: wishes about your own runtime or agent harness ("cleaner context",
-    "more memory", local compute/IDE features), one-off local tasks ("fix my
-    CI"), or descriptions tied to private user details.
+    Bad: free tools you would only use if they cost nothing, wishes about
+    your own runtime or agent harness ("cleaner context", "more memory",
+    local compute/IDE features), one-off local tasks ("fix my CI"), or
+    descriptions tied to private user details.
     """
     service_description = service_description.strip()
     task_context = task_context.strip() if task_context else None
@@ -249,13 +266,14 @@ def get_service_score(
               avg(rating) as avg_rating,
               count(*)::int as num_reviews,
               count(*) filter (where payment_verified)::int as num_verified_reviews,
-              avg(rating) filter (where payment_verified) as verified_avg_rating,
-              sum(rating * (case when payment_verified then 1.0 else 0.5 end))
-                / nullif(sum(case when payment_verified then 1.0 else 0.5 end), 0)
-                as weighted_rating
+              avg(rating) filter (where payment_verified) as verified_avg_rating
             from reviews
             where service_id = %s
             """,
+            (service["id"],),
+        ).fetchone()
+        stored = conn.execute(
+            "select score, n_eff, review_summary from services where id = %s",
             (service["id"],),
         ).fetchone()
         recent_reviews = conn.execute(
@@ -284,7 +302,8 @@ def get_service_score(
             review["reason"] = redacted[index * 2]
             review["task_context"] = redacted[index * 2 + 1]
 
-    num_reviews = score["num_reviews"]
+    canonical_score = as_float(stored["score"]) if stored else None
+    n_eff = as_float(stored["n_eff"]) if stored else 0.0
     return {
         "service_id": service["id"],
         "service_name": service["name"],
@@ -293,24 +312,66 @@ def get_service_score(
         "payment_target_ref": service.get("payment_target_ref"),
         "directory_slug": service.get("directory_slug"),
         "found": True,
+        "score": canonical_score,
+        "n_eff": n_eff,
+        "unproven": is_unproven(n_eff or 0.0),
+        "score_algorithm": SCORE_ALGORITHM,
         "avg_rating": as_float(score["avg_rating"]),
-        "num_reviews": num_reviews,
+        "num_reviews": score["num_reviews"],
         "num_verified_reviews": score["num_verified_reviews"],
         "verified_avg_rating": as_float(score["verified_avg_rating"]),
-        "weighted_rating": as_float(score["weighted_rating"]),
+        # Deprecated alias of the canonical score, kept so pre-0.3.0 clients
+        # silently upgrade instead of reading a dead formula.
+        "weighted_rating": canonical_score,
+        "summary": _redacted_summary(stored["review_summary"] if stored else None),
         "recent_reviews": [_json_ready(row) for row in recent_reviews],
     }
+
+
+def _redacted_summary(summary: Any) -> dict[str, Any] | None:
+    """Egress backstop for the cron-generated review summary: its inputs were
+    redacted, but re-redact on the way out anyway; drop the summary entirely
+    if the redactor is configured but down (never leak on failure)."""
+    if not isinstance(summary, dict):
+        return None
+    keys = ("strengths", "failure_modes", "caveats")
+    texts: list[str | None] = []
+    for key in keys:
+        items = summary.get(key)
+        if isinstance(items, list):
+            texts.extend(str(item) for item in items)
+    redacted = redact_texts(texts, fail_closed=False)
+    if redacted is None:
+        return None
+    clean = dict(summary)
+    cursor = 0
+    for key in keys:
+        items = summary.get(key)
+        if not isinstance(items, list):
+            clean[key] = []
+            continue
+        clean[key] = [
+            redacted[cursor + offset] or "" for offset in range(len(items))
+        ]
+        clean[key] = [item for item in clean[key] if item]
+        cursor += len(items)
+    return clean
 
 
 def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
     return {
         "service_id": service_id,
         "found": False,
+        "score": None,
+        "n_eff": 0,
+        "unproven": True,
+        "score_algorithm": SCORE_ALGORITHM,
         "avg_rating": None,
         "num_reviews": 0,
         "num_verified_reviews": 0,
         "verified_avg_rating": None,
         "weighted_rating": None,
+        "summary": None,
         "recent_reviews": [],
         "reason": reason,
     }
@@ -593,6 +654,14 @@ def review_service(
             service_created = created.created
 
         try:
+            # Write-path scoring (docs/SCORING.md §8.1): the review insert,
+            # the reviewer's trust update, and the service's stored score all
+            # land in one transaction.
+            user_id = None
+            if verification.reviewer_wallet:
+                user = ensure_user(conn, verification.reviewer_wallet)
+                user_id = user["user_id"]
+
             row = conn.execute(
                 """
                 insert into reviews (
@@ -600,9 +669,9 @@ def review_service(
                   reviewer_id, payment_provider, payment_target_ref,
                   payment_proof, payment_verified, payment_verified_at,
                   reviewer_wallet, review_signature, signature_scheme,
-                  signature_verified, redacted_at
+                  signature_verified, redacted_at, user_id, amount
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
                 (
@@ -622,8 +691,17 @@ def review_service(
                     verification.signature_scheme,
                     verification.signature_verified,
                     utc_now() if redaction_enabled() else None,
+                    user_id,
+                    verification.amount,
                 ),
             ).fetchone()
+
+            now = utc_now()
+            if verification.reviewer_wallet:
+                apply_review_trust_update(
+                    conn, verification.reviewer_wallet, service["id"], rating, now
+                )
+            recompute_service_score(conn, service["id"], now)
             conn.commit()
         except psycopg.errors.UniqueViolation:
             conn.rollback()
@@ -657,258 +735,11 @@ def _json_error(message: str, status_code: int = 500) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
-def _validate_requests_table(table_name: str) -> str:
-    if not _REQUESTS_TABLE_RE.match(table_name):
-        raise ValueError("CROWDCODE_REQUESTS_TABLE must be a simple table name")
-    return table_name
-
-
-def _table_columns(conn: psycopg.Connection, table_name: str) -> set[str]:
-    rows = conn.execute(
-        """
-        select column_name
-        from information_schema.columns
-        where table_schema = 'public'
-          and table_name = %s
-        """,
-        (table_name,),
-    ).fetchall()
-    return {row["column_name"] for row in rows}
-
-
-def _fetch_recent_requests(limit: int = 100) -> list[dict[str, Any]]:
-    settings = get_settings()
-    table_name = _validate_requests_table(settings.requests_table)
-
-    with connect() as conn:
-        columns = _table_columns(conn, table_name)
-        if not columns:
-            raise RuntimeError(f"request table not found: {table_name}")
-
-        text_columns = [
-            column
-            for column in (
-                "service_description",
-                "description",
-                "request",
-                "prompt",
-                "task_context",
-                "title",
-            )
-            if column in columns
-        ]
-        if not text_columns:
-            raise RuntimeError(f"request table has no supported text columns: {table_name}")
-
-        selected = ["id"] if "id" in columns else []
-        selected += ["created_at"] if "created_at" in columns else []
-        selected += ["directory_match"] if "directory_match" in columns else []
-        selected += text_columns
-        order_clause = "created_at desc" if "created_at" in columns else "1 desc"
-        sql = f"""
-            select {", ".join(selected)}
-            from {table_name}
-            order by {order_clause}
-            limit %s
-        """
-        rows = conn.execute(sql, (limit,)).fetchall()
-
-    requests: list[dict[str, Any]] = []
-    for row in rows:
-        parts = [str(row[column]).strip() for column in text_columns if row.get(column)]
-        text = " ".join(parts)
-        if not text:
-            continue
-        created_at = row.get("created_at")
-        requests.append(
-            {
-                "id": row.get("id"),
-                "created_at": created_at.isoformat() if created_at is not None else None,
-                "directory_match": row.get("directory_match"),
-                "text": text[:1500],
-            }
-        )
-
-    # Egress backstop before this text reaches OpenAI and the public
-    # frontend: redact pre-enforcement rows; drop everything if the redactor
-    # is configured but down (never leak on failure).
-    redacted = redact_texts([item["text"] for item in requests], fail_closed=False)
-    if redacted is None:
-        return []
-    for index, item in enumerate(requests):
-        item["text"] = redacted[index] or ""
-    return [item for item in requests if item["text"]]
-
-
-def _fallback_project_ideas(requests: list[dict[str, Any]], reason: str) -> dict[str, Any]:
-    ideas: dict[str, dict[str, Any]] = {}
-    for item in requests:
-        words = re.findall(r"[A-Za-z0-9]+", item["text"].lower())
-        key_words = [word for word in words if len(word) > 3][:5]
-        key = " ".join(key_words) or "general requests"
-        title = " ".join(word.capitalize() for word in key_words[:4]) or "General Requests"
-        idea = ideas.setdefault(
-            key,
-            {
-                "title": title,
-                "summary": item["text"][:260],
-                "request_count": 0,
-                "example_requests": [],
-                "tags": key_words[:4],
-            },
-        )
-        idea["request_count"] += 1
-        if len(idea["example_requests"]) < 3:
-            idea["example_requests"].append(item["text"][:220])
-
-    ordered = sorted(
-        ideas.values(),
-        key=lambda idea: (-idea["request_count"], idea["title"]),
-    )[:12]
-    return {
-        "ok": True,
-        "source": "fallback",
-        "fallback_reason": reason,
-        "generated_at": int(time.time()),
-        "source_request_count": len(requests),
-        "ideas": ordered,
-    }
-
-
-def _extract_json_object(content: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        start = content.find("{")
-        end = content.rfind("}")
-        if start < 0 or end < start:
-            raise
-        parsed = json.loads(content[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError("model response was not a JSON object")
-    return parsed
-
-
-def _summarize_project_ideas(requests: list[dict[str, Any]]) -> dict[str, Any]:
-    settings = get_settings()
-    if not requests:
-        return {
-            "ok": True,
-            "source": "empty",
-            "generated_at": int(time.time()),
-            "source_request_count": 0,
-            "ideas": [],
-        }
-    if not settings.openai_api_key:
-        return _fallback_project_ideas(requests, "OPENAI_API_KEY is not set")
-
-    compact_requests = [
-        {
-            "id": request["id"],
-            "created_at": request["created_at"],
-            "text": request["text"][:900],
-        }
-        for request in requests
-    ]
-    prompt = {
-        "task": "Cluster the latest CrowdCode service requests into distinct project ideas.",
-        "requirements": [
-            "Return only a JSON object.",
-            "Merge similar requests into one idea.",
-            "Sort ideas by request_count descending, then practical usefulness.",
-            "Use concise product-style titles.",
-            "Include 2-5 short tags per idea.",
-            "Do not invent details not grounded in the requests.",
-        ],
-        "schema": {
-            "ideas": [
-                {
-                    "title": "string",
-                    "summary": "string",
-                    "request_count": "integer",
-                    "example_requests": ["string"],
-                    "tags": ["string"],
-                }
-            ]
-        },
-        "requests": compact_requests,
-    }
-
-    try:
-        with httpx.Client(timeout=90) as client:
-            response = client.post(
-                f"{settings.openai_base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openai_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.openai_model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You aggregate user request logs into concrete "
-                                "software project ideas. Respond with valid JSON only."
-                            ),
-                        },
-                        {"role": "user", "content": json.dumps(prompt)},
-                    ],
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            response.raise_for_status()
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        if content is None:
-            raise ValueError("model returned empty content")
-        parsed = _extract_json_object(content)
-    except Exception as exc:
-        return _fallback_project_ideas(requests, f"OpenAI summarization failed: {exc}")
-
-    ideas = parsed.get("ideas", [])
-    if not isinstance(ideas, list):
-        return _fallback_project_ideas(requests, "OpenAI JSON did not include ideas[]")
-
-    clean_ideas: list[dict[str, Any]] = []
-    for idea in ideas[:20]:
-        if not isinstance(idea, dict):
-            continue
-        title = str(idea.get("title", "")).strip()
-        summary = str(idea.get("summary", "")).strip()
-        if not title or not summary:
-            continue
-        examples = idea.get("example_requests", [])
-        tags = idea.get("tags", [])
-        clean_ideas.append(
-            {
-                "title": title[:120],
-                "summary": summary[:700],
-                "request_count": int(idea.get("request_count") or 1),
-                "example_requests": [
-                    str(example).strip()[:260]
-                    for example in examples
-                    if str(example).strip()
-                ][:3],
-                "tags": [str(tag).strip()[:40] for tag in tags if str(tag).strip()][:5],
-            }
-        )
-
-    return {
-        "ok": True,
-        "source": "openai",
-        "model": settings.openai_model,
-        "generated_at": int(time.time()),
-        "source_request_count": len(requests),
-        "ideas": clean_ideas,
-    }
-
-
 def _refresh_project_ideas_cache() -> None:
     try:
         settings = get_settings()
-        requests = _fetch_recent_requests(limit=100)
-        payload = _summarize_project_ideas(requests)
+        requests = fetch_recent_requests(limit=100)
+        payload = summarize_project_ideas(requests)
         payload["cached"] = False
         _PROJECT_IDEAS_CACHE["payload"] = payload
         _PROJECT_IDEAS_CACHE["expires_at"] = (
@@ -918,6 +749,29 @@ def _refresh_project_ideas_cache() -> None:
         pass
     finally:
         _PROJECT_IDEAS_REFRESH_LOCK.release()
+
+
+def _cron_project_ideas_payload(ttl_seconds: int) -> dict[str, Any] | None:
+    """Read the requested-services summary the cron job wrote to app_cache.
+    Unlike the in-process cache this survives free-tier cold starts."""
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                """
+                select payload, generated_at
+                from app_cache
+                where key = 'project_ideas'
+                  and generated_at > now() - make_interval(secs => %s)
+                """,
+                (ttl_seconds,),
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None or not isinstance(row["payload"], dict):
+        return None
+    payload = dict(row["payload"])
+    payload["source"] = "cron"
+    return payload
 
 
 def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
@@ -936,8 +790,18 @@ def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
         payload["cached"] = True
         return payload
 
-    requests = _fetch_recent_requests(limit=100)
-    payload = _summarize_project_ideas(requests)
+    if not refresh:
+        payload = _cron_project_ideas_payload(settings.project_ideas_cache_seconds)
+        if payload is not None:
+            payload["cached"] = False
+            _PROJECT_IDEAS_CACHE["payload"] = payload
+            _PROJECT_IDEAS_CACHE["expires_at"] = (
+                now + settings.project_ideas_cache_seconds
+            )
+            return payload
+
+    requests = fetch_recent_requests(limit=100)
+    payload = summarize_project_ideas(requests)
     payload["cached"] = False
     _PROJECT_IDEAS_CACHE["payload"] = payload
     _PROJECT_IDEAS_CACHE["expires_at"] = now + settings.project_ideas_cache_seconds
@@ -945,11 +809,10 @@ def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
 
 
 def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
-    # Bayesian prior (toward 4.0 with weight 5) over EFFECTIVE review counts:
-    # a verified-purchase review counts 1.0, an unverified (signed, no
-    # payment_proof) review counts 0.5 — identity proven, payment not.
-    # sum(rating*w) is the weighted-average numerator already, so the prior
-    # reduces to (sum(rating*w) + 4.0*5) / (sum(w) + 5).
+    # Canonical score (docs/SCORING.md v1): stored on the services row,
+    # refreshed by the review write path and the nightly consistency sweep.
+    # The LEFT JOIN keeps zero-review services visible at the prior
+    # (score 3.0, n_eff 0 => displayed as "unproven", never as a rating).
     sql = """
         select
           s.id as service_id,
@@ -957,20 +820,16 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.directory_slug,
           s.canonical_endpoint,
           s.payment_provider,
+          s.score,
+          s.n_eff,
+          (s.review_summary is not null) as has_summary,
           avg(r.rating)::float as avg_rating,
           count(r.id)::int as num_reviews,
-          count(r.id) filter (where r.payment_verified)::int as num_verified_reviews,
-          (
-            sum(r.rating * (case when r.payment_verified then 1.0 else 0.5 end))
-            + (4.0 * 5)
-          ) / (
-            sum(case when r.payment_verified then 1.0 else 0.5 end) + 5
-          ) as rank_score
+          count(r.id) filter (where r.payment_verified)::int as num_verified_reviews
         from services s
-        join reviews r on r.service_id = s.id
-        group by s.id, s.name, s.directory_slug, s.canonical_endpoint,
-                 s.payment_provider
-        order by rank_score desc, num_reviews desc, avg_rating desc, s.name asc
+        left join reviews r on r.service_id = s.id
+        group by s.id
+        order by s.score desc, s.n_eff desc, num_reviews desc, s.name asc
         """
     with connect() as conn:
         if limit is None:
@@ -985,10 +844,15 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "directory_slug": row.get("directory_slug"),
             "canonical_endpoint": row.get("canonical_endpoint"),
             "payment_provider": row.get("payment_provider"),
+            "score": as_float(row["score"]),
+            "n_eff": as_float(row["n_eff"]),
+            "unproven": is_unproven(as_float(row["n_eff"]) or 0.0),
+            "has_summary": bool(row["has_summary"]),
             "avg_rating": as_float(row["avg_rating"]),
             "num_reviews": row["num_reviews"],
             "num_verified_reviews": row["num_verified_reviews"],
-            "rank_score": as_float(row["rank_score"]),
+            # Deprecated alias of the canonical score (pre-scoring-v1 field).
+            "rank_score": as_float(row["score"]),
         }
         for row in rows
     ]
@@ -1000,6 +864,91 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "total_reviews": sum(s["num_reviews"] for s in services),
         },
     }
+
+
+def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
+    with connect() as conn:
+        service = conn.execute(
+            """
+            select id, name, directory_slug, canonical_endpoint,
+                   payment_provider, score, n_eff, review_summary
+            from services
+            where id = %s
+            """,
+            (service_id,),
+        ).fetchone()
+        if service is None:
+            return {"ok": False, "error": "service not found"}, 404
+
+        counts = conn.execute(
+            """
+            select
+              count(*)::int as num_reviews,
+              count(*) filter (where payment_verified)::int as num_verified_reviews
+            from reviews
+            where service_id = %s
+            """,
+            (service_id,),
+        ).fetchone()
+        histogram_rows = conn.execute(
+            """
+            select rating, count(*)::int as n
+            from reviews
+            where service_id = %s
+            group by rating
+            """,
+            (service_id,),
+        ).fetchall()
+        recent_reviews = conn.execute(
+            """
+            select rating, reason, task_context, payment_verified, created_at
+            from reviews
+            where service_id = %s
+            order by created_at desc
+            limit 5
+            """,
+            (service_id,),
+        ).fetchall()
+
+    # Same egress backstop as get_service_score: re-redact free text on the
+    # way out, dropping it if the redactor is down.
+    review_texts: list[str | None] = []
+    for review in recent_reviews:
+        review_texts.append(review.get("reason"))
+        review_texts.append(review.get("task_context"))
+    redacted = redact_texts(review_texts, fail_closed=False)
+    for index, review in enumerate(recent_reviews):
+        if redacted is None:
+            review["reason"] = None
+            review["task_context"] = None
+        else:
+            review["reason"] = redacted[index * 2]
+            review["task_context"] = redacted[index * 2 + 1]
+
+    histogram = {str(rating): 0 for rating in range(1, 6)}
+    for row in histogram_rows:
+        histogram[str(row["rating"])] = row["n"]
+
+    n_eff = as_float(service["n_eff"]) or 0.0
+    return {
+        "ok": True,
+        "service": {
+            "service_id": service["id"],
+            "name": service["name"],
+            "directory_slug": service.get("directory_slug"),
+            "canonical_endpoint": service.get("canonical_endpoint"),
+            "payment_provider": service.get("payment_provider"),
+        },
+        "score": as_float(service["score"]),
+        "n_eff": n_eff,
+        "unproven": is_unproven(n_eff),
+        "score_algorithm": SCORE_ALGORITHM,
+        "num_reviews": counts["num_reviews"],
+        "num_verified_reviews": counts["num_verified_reviews"],
+        "histogram": histogram,
+        "summary": _redacted_summary(service.get("review_summary")),
+        "recent_reviews": [_json_ready(row) for row in recent_reviews],
+    }, 200
 
 
 async def health(_: Request) -> JSONResponse:
@@ -1036,8 +985,36 @@ async def all_services(_: Request) -> JSONResponse:
     return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
 
 
+async def service_detail(request: Request) -> JSONResponse:
+    service_id = request.path_params["service_id"]
+    try:
+        payload, status_code = await run_in_threadpool(
+            _service_detail_payload, service_id
+        )
+    except Exception as exc:
+        return _json_error(str(exc))
+    headers = {"Cache-Control": "public, max-age=60"} if status_code == 200 else None
+    return JSONResponse(payload, status_code=status_code, headers=headers)
+
+
+def _sync_seed_wallets_at_startup() -> None:
+    """Best-effort seed sync (docs/SCORING.md §3.5): pin the operator wallets
+    from CROWDCODE_SEED_WALLETS at trust 1.0. Failures must not stop the
+    server — the cron run repeats the sync."""
+    settings = get_settings()
+    if not settings.seed_wallets:
+        return
+    try:
+        with connect() as conn:
+            sync_seed_wallets(conn, settings.seed_wallets)
+            conn.commit()
+    except Exception as exc:
+        print(f"seed wallet sync failed: {exc}")
+
+
 def create_app() -> Starlette:
     settings = get_settings()
+    _sync_seed_wallets_at_startup()
     mcp_app = mcp.streamable_http_app()
     app = Starlette(
         routes=[
@@ -1045,6 +1022,7 @@ def create_app() -> Starlette:
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
+            Route("/api/services/{service_id}", service_detail, methods=["GET"]),
             *mcp_app.routes,
         ],
         lifespan=mcp_app.router.lifespan_context,
