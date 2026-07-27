@@ -10,6 +10,7 @@ from eth_account.messages import encode_defunct
 
 from crowdcode.identity import ServiceIdentity
 from crowdcode import payments as payments_mod
+from crowdcode import settings as settings_mod
 from crowdcode.payments import (
     BASE_USDC_ADDRESS,
     ERC20_TRANSFER_TOPIC,
@@ -28,6 +29,13 @@ IDENTITY = ServiceIdentity(
 )
 
 ACCOUNT = Account.from_key("0x" + "42" * 32)
+
+
+@pytest.fixture(autouse=True)
+def _default_token_pinning(monkeypatch):
+    """Token pinning must be decided by each test, never by whatever the
+    developer happens to have in .env."""
+    monkeypatch.delenv("X402_USDC_ADDRESS", raising=False)
 
 
 def _sign(message: str) -> str:
@@ -294,17 +302,15 @@ def test_x402_rejects_an_underpayment_and_records_the_amount(monkeypatch):
     assert paid.amount == 1000
 
 
-def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
+TEMPO_TOKEN = "0x20c000000000000000000000b9537d11c60e8b50"
+
+
+def _verify_mppx(token: str):
     reason = "solid data"
-    monkeypatch.setattr(
-        payments_mod,
-        "_rpc_transaction_receipt",
-        lambda rpc, h: _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
-    )
     receipt_proof = json.dumps(
         {"status": "success", "method": "tempo", "reference": TX_HASH}
     )
-    verification = verify_review_payment(
+    return verify_review_payment(
         identity=IDENTITY,  # provider mppx, target PAYEE
         rating=5,
         reason=reason,
@@ -313,9 +319,50 @@ def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
         reviewer_wallet=ACCOUNT.address,
         review_signature=_signed_for(IDENTITY, reason),
     )
+
+
+def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
+    # Unpinned (MPPX_TEMPO_TOKEN_ADDRESS unset): any token verifies. Stub
+    # load_dotenv too — otherwise a get_settings() call mid-verification
+    # re-reads the developer's .env and silently re-pins the token.
+    monkeypatch.setattr(settings_mod, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("MPPX_TEMPO_TOKEN_ADDRESS", raising=False)
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(
+            payer=ACCOUNT.address, payee=PAYEE, token="0x" + "cc" * 20
+        ),
+    )
+    verification = _verify_mppx("0x" + "cc" * 20)
     assert verification.ok, verification.reason
     assert verification.payment_verified
     assert verification.metadata["provider"] == "mppx"
+
+
+def test_mppx_pins_the_configured_tempo_token(monkeypatch):
+    monkeypatch.setenv("MPPX_TEMPO_TOKEN_ADDRESS", TEMPO_TOKEN)
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(
+            payer=ACCOUNT.address, payee=PAYEE, token=TEMPO_TOKEN
+        ),
+    )
+    paid = _verify_mppx(TEMPO_TOKEN)
+    assert paid.ok, paid.reason
+    assert paid.amount == 1000
+
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(
+            payer=ACCOUNT.address, payee=PAYEE, token="0x" + "cc" * 20
+        ),
+    )
+    wrong = _verify_mppx("0x" + "cc" * 20)
+    assert not wrong.ok
+    assert "expected token" in wrong.reason
 
 
 def _raise_if_rpc_called(rpc, tx_hash):

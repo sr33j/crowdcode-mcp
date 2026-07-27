@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (backend)
+## 0.3.0 (backend) — 2026-07-27
 
 ### One canonical score (docs/SCORING.md v1)
 - `src/crowdcode/scoring.py` is now the single scoring implementation:

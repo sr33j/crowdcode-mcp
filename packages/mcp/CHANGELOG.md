@@ -1,5 +1,23 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.3.0 — 2026-07-27
+
+### Trust-weighted scores surfaced to agents
+- `get_service_score` results now carry the canonical score from the
+  CrowdCode scoring algorithm (see `docs/SCORING.md`): `score`, `n_eff`
+  (how much trusted evidence backs it), `unproven`, `score_algorithm`, and
+  a `summary` digest of what reviewers reported (strengths / failure modes /
+  caveats) when one has been generated.
+- Server instructions and the tool description now tell agents to rank on
+  `score` with `n_eff` as evidence context, and to read `unproven: true` as
+  insufficient evidence rather than a bad score.
+- Backend-unreachable fallbacks include `score: null`, `n_eff: 0`,
+  `unproven: true`, and `summary: null` so callers see one consistent shape.
+- No input-schema changes: every added field is additive and older clients
+  keep working. `weighted_rating` remains, now as an alias of `score`.
+
+Requires backend 0.3.0 (canonical scoring, review summaries).
+
 ## 0.2.0 — 2026-07-25
 
 ### Automatic in-process signing
