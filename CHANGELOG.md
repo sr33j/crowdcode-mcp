@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0 (backend) — 2026-07-27
+
+### Tx-hash-only payment verification & honest verification levels
+- Reviews now carry `payment_verification_level`
+  (`unverified` | `signature_only` | `onchain_verified` |
+  `response_attested`): what the check actually proved. `payment_verified`
+  is derived from it (`onchain_verified`/`response_attested`). Legacy rows
+  are backfilled by the schema migration.
+- **A settlement tx hash in `payment_reference` alone now earns
+  `onchain_verified`** — no `payment_proof` header needed. The proof header
+  is unsigned client JSON; both routes run the identical on-chain check
+  (receipt status 1, ERC-20 Transfer from reviewer wallet to service payee,
+  pinned token) and weigh the same 2× in scoring. Clients that only get a tx
+  hash (e.g. agentcash) are no longer second-class.
+- Failed tx-only checks accept the review at `signature_only` (never reject)
+  with a machine-readable `verification_failure`. An unreachable RPC is the
+  one retryable failure: the nightly cron re-checks those reviews (≤5
+  attempts / 14 days) and upgrades them when the transfer verifies, so a
+  network flake never permanently costs the verified multiplier.
+- Token pinning is now symmetric: without `MPPX_TEMPO_TOKEN_ADDRESS`, mppx
+  reviews cap at `signature_only` on both the proof and tx-only paths
+  (previously an unpinned mppx proof verified against any token). Set the
+  env var — it ships in render.yaml and .env.example.
+- Dedup hardened: `payment_reference` is canonicalized (provider prefixes
+  `x402:base:`/`mppx:tempo:` stripped) with a unique index, closing the
+  loophole where the same settlement could be reviewed twice under two
+  spellings.
+- APIs expose the levels: `verification_level` on recent reviews plus
+  `num_onchain_verified_reviews` / `num_signature_only_reviews` counts on
+  `get_service_score`, `/api/services/top`, and the service detail endpoint.
+- Apply `supabase/schema.sql` BEFORE deploying this version (the code
+  selects and inserts the new columns).
+
 ## 0.3.0 (backend) — 2026-07-27
 
 ### One canonical score (docs/SCORING.md v1)

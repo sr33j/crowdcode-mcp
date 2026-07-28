@@ -102,9 +102,11 @@ export const reviewServiceShape = {
     .string()
     .nullish()
     .describe(
-      "Strongly recommended: the base64 payment-response (x402) or " +
-        "Payment-Receipt (mppx) header string. Omitting it stores the review " +
-        "as UNVERIFIED, which carries half weight in scoring.",
+      "Optional: the base64 payment-response (x402) or Payment-Receipt " +
+        "(mppx) header string. Verified-purchase status comes from on-chain " +
+        "transfer verification, which also works from a settlement tx hash " +
+        "in payment_reference alone — without either, the review is stored " +
+        "as UNVERIFIED and carries half weight in scoring.",
     ),
   payment_challenge: z.string().nullish(),
   reviewer_wallet: z

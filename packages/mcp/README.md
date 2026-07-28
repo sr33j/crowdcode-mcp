@@ -73,10 +73,15 @@ local wallet — no external signing step. For x402/mppx, take the identity and
 proofs from the *actual payment*, not from a directory listing:
 
 - `payment_reference` — the settlement tx hash (x402) or `Payment-Receipt`
-  `reference` (mppx). One review per payment.
+  `reference` (mppx). One review per payment. When it is a tx hash, CrowdCode
+  verifies the ERC-20 transfer on-chain directly, so a tx hash alone earns
+  verified-purchase status (double scoring weight) — no proof header needed.
 - `payment_proof` — the base64 response header string (`payment-response` for
-  x402, `Payment-Receipt` for mppx). Optional, but a verified payment carries
-  double the scoring weight.
+  x402, `Payment-Receipt` for mppx). Optional: pass it when you have it, but
+  verified status comes from the on-chain transfer either way. The response's
+  `payment_verification_level` is the source of truth. On-chain verification
+  covers x402 on Base and mppx on Tempo; payments settled elsewhere (e.g.
+  Solana) are accepted but stay `signature_only`.
 - `payment_target_ref` — the real payee (the 402 challenge recipient / on-chain
   `Transfer` `to`), not a bazaar-advertised `payTo`.
 

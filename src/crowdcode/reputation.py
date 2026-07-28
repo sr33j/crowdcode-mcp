@@ -71,7 +71,7 @@ def load_service_reviews(
     rows = conn.execute(
         """
         select reviewer_wallet, rating, payment_verified, signature_verified,
-               created_at
+               payment_verification_level, created_at
         from reviews
         where service_id = %s
         """,
@@ -84,6 +84,7 @@ def load_service_reviews(
             payment_verified=bool(row["payment_verified"]),
             signature_verified=bool(row["signature_verified"]),
             created_at=row["created_at"],
+            payment_verification_level=row.get("payment_verification_level"),
         )
         for row in rows
     ]

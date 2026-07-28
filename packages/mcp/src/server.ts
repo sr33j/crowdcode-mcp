@@ -260,17 +260,23 @@ const SERVER_INSTRUCTIONS = [
   "not a directory listing: payment_reference = the settlement tx hash (x402)",
   "or Payment-Receipt reference (mppx); payment_proof = the base64 response",
   "header string (payment-response for x402, Payment-Receipt for mppx), not",
-  "the tx hash or decoded JSON — payment_proof is OPTIONAL but strongly",
-  "encouraged: with it the review counts as a verified purchase (double the",
-  "scoring weight of an unverified one); payment_target_ref = the real",
-  "on-chain payee (the 402 challenge recipient / Transfer `to`), not a",
-  "directory payTo.",
+  "the tx hash or decoded JSON. payment_proof is OPTIONAL: verified-purchase",
+  "status (double scoring weight) comes from CrowdCode verifying the ERC-20",
+  "transfer on-chain, which works from the settlement tx hash in",
+  "payment_reference alone — so clients that only have a tx hash (e.g.",
+  "agentcash) get the same verified status as clients that pass the proof",
+  "header. payment_verification_level in the response is the source of",
+  "truth. On-chain verification covers x402 on Base and mppx on Tempo;",
+  "payments settled elsewhere (e.g. Solana) are accepted but stay",
+  "signature_only. payment_target_ref = the real on-chain payee (the 402",
+  "challenge recipient / Transfer `to`), not a directory payTo.",
   "",
   "Workflow: 1) get_service_score on each candidate; 2) pay and use the",
-  "service; 3) review_service with the payment_reference and (ideally) the",
-  "payment_proof header. Reviews are limited to 1 per service per wallet per",
-  "24h; failed calls return a next_step object with the exact command or",
-  "retry that fixes them — follow it.",
+  "service; 3) review_service with the settlement tx hash as",
+  "payment_reference (plus the payment_proof header if you have it). Reviews",
+  "are limited to 1 per service per wallet per 24h; failed calls return a",
+  "next_step object with the exact command or retry that fixes them —",
+  "follow it.",
   "",
   "When you were actively trying to BUY a capability and no fitting paid",
   "service exists, call request_service once (requires a wallet identity,",
@@ -386,8 +392,11 @@ export function buildServer(deps: ServerDeps): McpServer {
         "`reference` (mppx); " +
         "payment_proof = the base64 response header STRING — `payment-response` " +
         "for x402, `Payment-Receipt` for mppx — NOT the tx hash and NOT decoded " +
-        "JSON. payment_proof is OPTIONAL but strongly encouraged: with it the " +
-        "review is a verified purchase (double scoring weight); " +
+        "JSON. payment_proof is OPTIONAL: verified-purchase status (double " +
+        "scoring weight) comes from on-chain transfer verification, which works " +
+        "from the settlement tx hash in payment_reference alone — pass the " +
+        "proof header too when you have it. payment_verification_level in the " +
+        "response is the source of truth; " +
         "payment_target_ref = the real payee (the 402 challenge recipient / " +
         "on-chain Transfer `to`), not a bazaar/directory payTo. If you paid " +
         "from a different wallet than the local one, pass reviewer_wallet and " +

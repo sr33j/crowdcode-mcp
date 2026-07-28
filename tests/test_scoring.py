@@ -28,13 +28,37 @@ NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
 SEED = TrustRow(raw_trust=1.0, is_seed=True)
 
 
-def review(wallet, rating, *, verified=True, age_days=0.0):
+def review(wallet, rating, *, verified=True, age_days=0.0, level=None):
     return ReviewRow(
         wallet=wallet,
         rating=rating,
         payment_verified=verified,
         signature_verified=True,
         created_at=NOW - timedelta(days=age_days),
+        payment_verification_level=level,
+    )
+
+
+def test_level_multipliers_gate_the_verified_upweight():
+    # Proof-based and tx-hash-only verification weigh the same (both prove
+    # exactly the on-chain transfer); unverified/signature_only weigh 1.
+    from crowdcode.scoring import proof_multiplier
+
+    assert proof_multiplier(review("0x1", 5, level="unverified")) == 1.0
+    assert proof_multiplier(review("0x1", 5, level="signature_only")) == 1.0
+    assert proof_multiplier(review("0x1", 5, level="onchain_verified")) == 2.0
+    assert proof_multiplier(review("0x1", 5, level="response_attested")) == 2.0
+
+
+def test_legacy_rows_without_a_level_fall_back_to_payment_verified():
+    from crowdcode.scoring import proof_multiplier
+
+    assert proof_multiplier(review("0x1", 5, verified=True, level=None)) == 2.0
+    assert proof_multiplier(review("0x1", 5, verified=False, level=None)) == 1.0
+    # The level wins over a stale boolean when both are present.
+    assert (
+        proof_multiplier(review("0x1", 5, verified=True, level="signature_only"))
+        == 1.0
     )
 
 

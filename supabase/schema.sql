@@ -138,6 +138,59 @@ create table if not exists app_cache (
 create index if not exists reviews_wallet_created_idx
   on reviews (reviewer_wallet, created_at);
 
+-- Payment verification levels (docs/SCORING.md §3.4): what the payment check
+-- actually proved. payment_verified stays as the derived boolean
+-- (level in onchain_verified/response_attested) for compatibility.
+--   unverified        no wallet signature verified (legacy placeholder rows)
+--   signature_only    review signature verified; payment not verified on-chain
+--   onchain_verified  matching ERC-20 transfer found on-chain
+--   response_attested reserved for signed receipts binding payment to a
+--                     specific request/response (not yet issued)
+-- payment_reference_canonical is the reference with any x402:base:/mppx:tempo:
+-- prefix stripped; deduplication keys on it so the same settlement tx cannot
+-- yield two reviews under different spellings.
+alter table reviews
+  add column if not exists payment_verification_level text not null default 'unverified'
+    check (payment_verification_level in
+      ('unverified', 'signature_only', 'onchain_verified', 'response_attested')),
+  add column if not exists payment_verification_metadata jsonb not null default '{}'::jsonb,
+  add column if not exists payment_reference_canonical text;
+
+-- Backfill legacy rows (payment_reference_canonical is null exactly for rows
+-- that predate this migration; new inserts always set it).
+update reviews
+set payment_verification_level = case
+  when payment_verified then 'onchain_verified'
+  when signature_verified then 'signature_only'
+  else 'unverified'
+end
+where payment_reference_canonical is null;
+
+-- Canonical backfill: the row whose reference already IS the raw form wins the
+-- canonical value; any legacy duplicate that only differs by prefix keeps its
+-- verbatim reference so the unique index below cannot fail on old data.
+with ranked as (
+  select
+    id,
+    payment_reference,
+    regexp_replace(payment_reference, '^(x402:base:|mppx:tempo:)', '') as canon,
+    row_number() over (
+      partition by regexp_replace(payment_reference, '^(x402:base:|mppx:tempo:)', '')
+      order by (payment_reference = regexp_replace(payment_reference, '^(x402:base:|mppx:tempo:)', '')) desc,
+               created_at, id
+    ) as rn
+  from reviews
+  where payment_reference_canonical is null
+)
+update reviews r
+set payment_reference_canonical =
+  case when ranked.rn = 1 then ranked.canon else ranked.payment_reference end
+from ranked
+where ranked.id = r.id;
+
+create unique index if not exists reviews_payment_reference_canonical_idx
+  on reviews (payment_reference_canonical);
+
 -- RLS is enabled with NO policies on purpose: that is default-deny for the
 -- Supabase anon/authenticated API roles. The backend connects with a
 -- privileged role that bypasses RLS and owns all reads/writes. Do not add

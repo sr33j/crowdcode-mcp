@@ -192,6 +192,9 @@ def test_x402_gasless_payment_verifies_via_transfer_event(monkeypatch):
     )
     assert verification.ok, verification.reason
     assert verification.payment_verified
+    assert verification.payment_verification_level == "onchain_verified"
+    assert verification.payment_verification_metadata["proof_present"] is True
+    assert verification.payment_verification_metadata["source"] == "payment_proof"
     assert verification.metadata["transaction"]["from"] == ACCOUNT.address.lower()
 
 
@@ -321,23 +324,25 @@ def _verify_mppx(token: str):
     )
 
 
-def test_mppx_gasless_payment_verifies_via_transfer_event(monkeypatch):
-    # Unpinned (MPPX_TEMPO_TOKEN_ADDRESS unset): any token verifies. Stub
-    # load_dotenv too — otherwise a get_settings() call mid-verification
-    # re-reads the developer's .env and silently re-pins the token.
+def test_mppx_proof_without_token_pin_caps_at_signature_only(monkeypatch):
+    # Unpinned (MPPX_TEMPO_TOKEN_ADDRESS unset): pinning is symmetric across
+    # the proof and tx-only paths, so nothing upgrades to onchain_verified —
+    # but a missing pin is server config, never the client's fault, so the
+    # review is accepted at signature_only (not rejected) and the chain is
+    # never consulted. Stub load_dotenv too — otherwise a get_settings() call
+    # mid-verification re-reads the developer's .env and re-pins the token.
     monkeypatch.setattr(settings_mod, "load_dotenv", lambda *a, **k: None)
     monkeypatch.delenv("MPPX_TEMPO_TOKEN_ADDRESS", raising=False)
-    monkeypatch.setattr(
-        payments_mod,
-        "_rpc_transaction_receipt",
-        lambda rpc, h: _transfer_receipt(
-            payer=ACCOUNT.address, payee=PAYEE, token="0x" + "cc" * 20
-        ),
-    )
+    monkeypatch.setattr(payments_mod, "_rpc_transaction_receipt", _raise_if_rpc_called)
     verification = _verify_mppx("0x" + "cc" * 20)
     assert verification.ok, verification.reason
-    assert verification.payment_verified
-    assert verification.metadata["provider"] == "mppx"
+    assert verification.payment_verified is False
+    assert verification.payment_verification_level == "signature_only"
+    assert verification.payment_verification_metadata["token_pinned"] is False
+    assert (
+        verification.payment_verification_metadata["verification_failure"]
+        == "token_not_pinned"
+    )
 
 
 def test_mppx_pins_the_configured_tempo_token(monkeypatch):
@@ -369,27 +374,35 @@ def _raise_if_rpc_called(rpc, tx_hash):
     raise AssertionError("chain RPC must not be called for proofless reviews")
 
 
-def test_proofless_review_accepted_unverified(monkeypatch):
-    # No payment_proof: the review passes on signature alone, marked
-    # unverified, and never touches the chain RPC.
+def test_proofless_non_tx_reference_accepted_unverified_without_rpc(monkeypatch):
+    # No payment_proof and a payment_reference that is not a tx hash: the
+    # review passes on signature alone, marked signature_only, and never
+    # touches the chain RPC (there is nothing to look up).
     monkeypatch.setattr(payments_mod, "_rpc_transaction_receipt", _raise_if_rpc_called)
     reason = "worked well, forgot to save the receipt"
+    reference = "receipt-ref-1"
     verification = verify_review_payment(
         identity=IDENTITY,
         rating=5,
         reason=reason,
-        payment_reference=TX_HASH,
+        payment_reference=reference,
         payment_proof=None,
         reviewer_wallet=ACCOUNT.address,
-        review_signature=_signed_for(IDENTITY, reason),
+        review_signature=_sign(
+            canonical_review_payload(
+                identity=IDENTITY, rating=5, reason=reason, payment_reference=reference
+            )
+        ),
     )
     assert verification.ok, verification.reason
     assert verification.payment_verified is False
     assert verification.signature_verified is True
+    assert verification.payment_verification_level == "signature_only"
     assert verification.reviewer_id == payments_mod._reviewer_id_from_wallet(
         ACCOUNT.address
     )
     assert verification.metadata["proof"] is None
+    assert verification.canonical_reference == reference
 
 
 def test_proofless_review_still_rejects_bad_signature(monkeypatch):
@@ -463,6 +476,162 @@ def test_supplied_but_failing_proof_stays_hard_rejection(monkeypatch):
     )
     assert not verification.ok
     assert verification.reason == "could not verify x402 transaction on Base"
+
+
+# --- tx-hash-only verification (no payment_proof) -------------------------
+#
+# The proof header is unsigned client JSON: every load-bearing fact comes
+# from the chain. A settlement tx hash in payment_reference therefore earns
+# the same onchain_verified level as a proof — and a failed tx-only check
+# falls back to signature_only instead of rejecting.
+
+
+def _verify_txonly(
+    monkeypatch,
+    receipt,
+    *,
+    identity=None,
+    reference=TX_HASH,
+):
+    identity = identity or _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        receipt if callable(receipt) else (lambda rpc, h: receipt),
+    )
+    return verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=reference,
+        payment_proof=None,
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_sign(
+            canonical_review_payload(
+                identity=identity, rating=5, reason=reason, payment_reference=reference
+            )
+        ),
+    )
+
+
+def test_txonly_matching_transfer_upgrades_to_onchain_verified(monkeypatch):
+    verification = _verify_txonly(
+        monkeypatch, _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE)
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is True
+    assert verification.payment_verification_level == "onchain_verified"
+    assert verification.amount == 1000
+    assert verification.canonical_reference == TX_HASH
+    meta = verification.payment_verification_metadata
+    assert meta["proof_present"] is False
+    assert meta["source"] == "payment_reference"
+    assert meta["network"] == "base"
+    assert meta["token_pinned"] is True
+    assert meta["amount_checked"] is False  # no challenge amount without a proof
+    assert meta["verification_failure"] is None
+    assert verification.metadata["transaction"]["from"] == ACCOUNT.address.lower()
+
+
+def test_txonly_prefixed_reference_verifies_and_canonicalizes(monkeypatch):
+    verification = _verify_txonly(
+        monkeypatch,
+        _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
+        reference=f"x402:base:{TX_HASH}",
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is True
+    assert verification.canonical_reference == TX_HASH
+
+
+def test_txonly_wrong_token_falls_back_to_signature_only(monkeypatch):
+    verification = _verify_txonly(
+        monkeypatch,
+        _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE, token="0x" + "cc" * 20),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is False
+    assert verification.payment_verification_level == "signature_only"
+    assert (
+        verification.payment_verification_metadata["verification_failure"]
+        == "no_matching_transfer"
+    )
+
+
+def test_txonly_wrong_payee_falls_back_to_signature_only(monkeypatch):
+    verification = _verify_txonly(
+        monkeypatch,
+        _transfer_receipt(payer=ACCOUNT.address, payee="0x" + "77" * 20),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is False
+    assert verification.payment_verification_level == "signature_only"
+    assert (
+        verification.payment_verification_metadata["verification_failure"]
+        == "no_matching_transfer"
+    )
+
+
+def test_txonly_failed_tx_falls_back_to_signature_only(monkeypatch):
+    receipt = _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE)
+    receipt["status"] = "0x0"
+    verification = _verify_txonly(monkeypatch, receipt)
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is False
+    assert (
+        verification.payment_verification_metadata["verification_failure"]
+        == "tx_failed"
+    )
+
+
+def test_txonly_rpc_unreachable_is_recorded_as_retryable(monkeypatch):
+    # An unreachable RPC accepts at signature_only — never rejects — and
+    # records rpc_unreachable so the nightly cron can upgrade it later.
+    verification = _verify_txonly(monkeypatch, lambda rpc, h: None)
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is False
+    assert verification.payment_verification_level == "signature_only"
+    failure = verification.payment_verification_metadata["verification_failure"]
+    assert failure == "rpc_unreachable"
+    assert failure in payments_mod.RETRYABLE_FAILURES
+
+
+def test_txonly_mppx_with_pinned_token_verifies(monkeypatch):
+    monkeypatch.setenv("MPPX_TEMPO_TOKEN_ADDRESS", TEMPO_TOKEN)
+    verification = _verify_txonly(
+        monkeypatch,
+        _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE, token=TEMPO_TOKEN),
+        identity=IDENTITY,  # provider mppx
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is True
+    assert verification.payment_verification_level == "onchain_verified"
+    assert verification.payment_verification_metadata["network"] == "tempo"
+
+
+def test_txonly_mppx_without_pin_stays_signature_only_without_rpc(monkeypatch):
+    monkeypatch.setattr(settings_mod, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("MPPX_TEMPO_TOKEN_ADDRESS", raising=False)
+    verification = _verify_txonly(
+        monkeypatch, _raise_if_rpc_called, identity=IDENTITY
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is False
+    assert verification.payment_verification_level == "signature_only"
+    assert (
+        verification.payment_verification_metadata["verification_failure"]
+        == "token_not_pinned"
+    )
+
+
+def test_canonical_payment_reference_strips_provider_prefixes():
+    from crowdcode.payments import canonical_payment_reference
+
+    assert canonical_payment_reference(TX_HASH) == TX_HASH
+    assert canonical_payment_reference(f"x402:base:{TX_HASH}") == TX_HASH
+    assert canonical_payment_reference(f"mppx:tempo:{TX_HASH}") == TX_HASH
+    assert canonical_payment_reference("  receipt-ref-1 ") == "receipt-ref-1"
 
 
 def test_signing_tool_rejects_malformed_hash():

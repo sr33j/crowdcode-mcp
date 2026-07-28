@@ -3,13 +3,17 @@
 Jobs run in dependency order, each isolated so one failure does not block the
 rest; the process exits nonzero if any job failed:
 
-1. Consistency sweep — recompute all reviewer trust and service scores from
+1. Payment re-verification — reviews whose tx-hash on-chain check failed only
+   because the RPC was unreachable at submit time are re-checked and upgraded
+   to onchain_verified when the transfer now verifies (a network flake must
+   not permanently cost the verified multiplier).
+2. Consistency sweep — recompute all reviewer trust and service scores from
    scratch by replaying the review history, log drift vs the incrementally
    maintained values, and write the recomputed values (the sweep is
    authoritative). The first run after applying the schema DDL doubles as the
    data migration that backfills users and stored scores.
-2. Per-service review summaries (LLM), watermarked on last_summarized_at.
-3. Requested-services summary (LLM), written to app_cache for the website.
+3. Per-service review summaries (LLM), watermarked on last_summarized_at.
+4. Requested-services summary (LLM), written to app_cache for the website.
 """
 
 from __future__ import annotations
@@ -20,10 +24,19 @@ import traceback
 from datetime import datetime
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 from crowdcode.db import connect
-from crowdcode.payments import utc_now
+from crowdcode.payments import (
+    FAILURE_RPC_UNREACHABLE,
+    LEVEL_ONCHAIN_VERIFIED,
+    LEVEL_SIGNATURE_ONLY,
+    TX_HASH_RE,
+    check_payment_reference_onchain,
+    utc_now,
+)
 from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_enabled
-from crowdcode.reputation import ensure_user, sync_seed_wallets
+from crowdcode.reputation import ensure_user, recompute_service_score, sync_seed_wallets
 from crowdcode.scoring import (
     ReviewRow,
     TrustRow,
@@ -42,13 +55,108 @@ from crowdcode.summaries import (
 DRIFT_TOLERANCE = 0.01
 SUMMARY_MAX_REVIEWS = 50
 
+# rpc_unreachable re-verification window: retry nightly for up to 14 days /
+# 5 attempts, then give up (the review keeps its signature_only weight).
+REVERIFY_MAX_AGE_DAYS = 14
+REVERIFY_MAX_ATTEMPTS = 5
+
+
+def run_payment_reverification(now: datetime) -> None:
+    """Upgrade reviews stuck at signature_only by an unreachable RPC.
+
+    Only rows whose recorded verification_failure is rpc_unreachable are
+    candidates — every other failure means the chain was consulted and
+    definitively said no.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            select id, service_id, payment_provider, payment_target_ref,
+                   reviewer_wallet, payment_reference_canonical,
+                   payment_verification_metadata
+            from reviews
+            where payment_verification_level = %s
+              and payment_verification_metadata->>'verification_failure' = %s
+              and coalesce((payment_verification_metadata->>'reverify_attempts')::int, 0) < %s
+              and created_at > %s - make_interval(days => %s)
+              and reviewer_wallet is not null
+            order by id
+            """,
+            (
+                LEVEL_SIGNATURE_ONLY,
+                FAILURE_RPC_UNREACHABLE,
+                REVERIFY_MAX_ATTEMPTS,
+                now,
+                REVERIFY_MAX_AGE_DAYS,
+            ),
+        ).fetchall()
+
+        upgraded = 0
+        touched_services: set[str] = set()
+        for row in rows:
+            tx_hash = (row["payment_reference_canonical"] or "").strip()
+            if not TX_HASH_RE.match(tx_hash):
+                continue
+            check, chain_meta = check_payment_reference_onchain(
+                provider=row["payment_provider"],
+                payment_target_ref=row["payment_target_ref"],
+                reviewer_wallet=row["reviewer_wallet"],
+                tx_hash=tx_hash,
+            )
+            meta = dict(row["payment_verification_metadata"] or {})
+            attempts = int(meta.get("reverify_attempts") or 0) + 1
+            meta["reverify_attempts"] = attempts
+            meta["last_reverified_at"] = now.isoformat()
+
+            if check.ok and check.transfer is not None:
+                meta["verification_failure"] = None
+                meta["upgraded_by"] = "cron_reverification"
+                conn.execute(
+                    """
+                    update reviews
+                    set payment_verification_level = %s,
+                        payment_verified = true,
+                        payment_verified_at = %s,
+                        amount = coalesce(amount, %s),
+                        payment_verification_metadata = %s
+                    where id = %s
+                    """,
+                    (
+                        LEVEL_ONCHAIN_VERIFIED,
+                        now,
+                        check.transfer["value"],
+                        Jsonb(meta),
+                        row["id"],
+                    ),
+                )
+                touched_services.add(row["service_id"])
+                upgraded += 1
+            else:
+                # A definitive chain answer replaces rpc_unreachable so the
+                # row stops being a retry candidate; another unreachable
+                # attempt just burns one of the capped retries.
+                meta["verification_failure"] = chain_meta["verification_failure"]
+                conn.execute(
+                    "update reviews set payment_verification_metadata = %s where id = %s",
+                    (Jsonb(meta), row["id"]),
+                )
+
+        for service_id in sorted(touched_services):
+            recompute_service_score(conn, service_id, now)
+        conn.commit()
+    print(
+        f"reverify: {len(rows)} candidate(s), {upgraded} upgraded, "
+        f"{len(touched_services)} service score(s) refreshed"
+    )
+
 
 def run_consistency_sweep(now: datetime) -> None:
     with connect() as conn:
         rows = conn.execute(
             """
             select id, service_id, reviewer_wallet, rating, payment_verified,
-                   signature_verified, created_at, user_id
+                   signature_verified, payment_verification_level,
+                   created_at, user_id
             from reviews
             order by created_at asc, id asc
             """
@@ -105,6 +213,7 @@ def run_consistency_sweep(now: datetime) -> None:
                 payment_verified=bool(row["payment_verified"]),
                 signature_verified=bool(row["signature_verified"]),
                 created_at=row["created_at"],
+                payment_verification_level=row.get("payment_verification_level"),
             )
             if wallet in raw:
                 loo = compute_score(
@@ -165,7 +274,8 @@ def _summary_input_reviews(
     rows = conn.execute(
         """
         select rating, reason, task_context, payment_verified,
-               signature_verified, reviewer_wallet, created_at
+               signature_verified, payment_verification_level,
+               reviewer_wallet, created_at
         from reviews
         where service_id = %s
         order by created_at desc
@@ -184,6 +294,7 @@ def _summary_input_reviews(
                 payment_verified=bool(row["payment_verified"]),
                 signature_verified=bool(row["signature_verified"]),
                 created_at=row["created_at"],
+                payment_verification_level=row.get("payment_verification_level"),
             ),
             trust.get(row["reviewer_wallet"]),
             now,
@@ -342,7 +453,12 @@ def main() -> None:
     else:
         print("seeds: CROWDCODE_SEED_WALLETS not set; skipping sync")
 
-    for job in (run_consistency_sweep, run_service_summaries, run_request_summary):
+    for job in (
+        run_payment_reverification,
+        run_consistency_sweep,
+        run_service_summaries,
+        run_request_summary,
+    ):
         try:
             job(now)
         except Exception:

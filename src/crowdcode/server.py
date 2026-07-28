@@ -25,6 +25,7 @@ from crowdcode.identity import (
 from crowdcode.payments import (
     REASON_HASH_RE,
     _normalize_evm_address,
+    canonical_payment_reference,
     canonical_review_payload,
     canonical_review_payload_from_hash,
     utc_now,
@@ -266,7 +267,13 @@ def get_service_score(
               avg(rating) as avg_rating,
               count(*)::int as num_reviews,
               count(*) filter (where payment_verified)::int as num_verified_reviews,
-              avg(rating) filter (where payment_verified) as verified_avg_rating
+              avg(rating) filter (where payment_verified) as verified_avg_rating,
+              count(*) filter (where payment_verification_level
+                in ('onchain_verified', 'response_attested'))::int
+                as num_onchain_verified_reviews,
+              count(*) filter (where payment_verification_level
+                in ('unverified', 'signature_only'))::int
+                as num_signature_only_reviews
             from reviews
             where service_id = %s
             """,
@@ -278,7 +285,8 @@ def get_service_score(
         ).fetchone()
         recent_reviews = conn.execute(
             """
-            select rating, reason, task_context, payment_verified, created_at
+            select rating, reason, task_context, payment_verified,
+                   payment_verification_level as verification_level, created_at
             from reviews
             where service_id = %s
             order by created_at desc
@@ -319,6 +327,8 @@ def get_service_score(
         "avg_rating": as_float(score["avg_rating"]),
         "num_reviews": score["num_reviews"],
         "num_verified_reviews": score["num_verified_reviews"],
+        "num_onchain_verified_reviews": score["num_onchain_verified_reviews"],
+        "num_signature_only_reviews": score["num_signature_only_reviews"],
         "verified_avg_rating": as_float(score["verified_avg_rating"]),
         # Deprecated alias of the canonical score, kept so pre-0.3.0 clients
         # silently upgrade instead of reading a dead formula.
@@ -485,10 +495,14 @@ def review_service(
     For mppx/x402, take the identity and
     proofs from the ACTUAL payment, not a directory listing:
     - payment_reference: the settlement tx hash (x402) or Payment-Receipt
-      `reference` (mppx). Unique — one review per payment.
+      `reference` (mppx). Unique — one review per payment. When it is a tx
+      hash and no payment_proof is supplied, CrowdCode verifies the transfer
+      on-chain directly — a matching transfer earns the same
+      verified-purchase status as a proof.
     - payment_proof: the base64 response header STRING — `payment-response` for
       x402, `Payment-Receipt` for mppx. Not the tx hash, not decoded JSON.
-      Strongly recommended but OPTIONAL: without it the review is stored as
+      OPTIONAL: verified status comes from the on-chain transfer either way;
+      without a proof or a verifiable tx hash the review is stored as
       unverified and carries half weight in scoring.
     - payment_target_ref: the real payee (the 402 challenge recipient / on-chain
       Transfer `to`), not a bazaar/directory advertised payTo.
@@ -532,9 +546,15 @@ def review_service(
         service = resolved.row
         service_created = False
 
+        # Dedup on the canonical form: 0x<hash> and x402:base:<hash> are the
+        # same settlement and must not yield two reviews.
+        canonical_reference = canonical_payment_reference(payment_reference)
         existing = conn.execute(
-            "select id from reviews where payment_reference = %s",
-            (payment_reference,),
+            """
+            select id from reviews
+            where payment_reference_canonical = %s or payment_reference = %s
+            """,
+            (canonical_reference, payment_reference),
         ).fetchone()
         if existing is not None:
             return {"accepted": False, "reason": "payment_reference already used"}
@@ -669,9 +689,11 @@ def review_service(
                   reviewer_id, payment_provider, payment_target_ref,
                   payment_proof, payment_verified, payment_verified_at,
                   reviewer_wallet, review_signature, signature_scheme,
-                  signature_verified, redacted_at, user_id, amount
+                  signature_verified, redacted_at, user_id, amount,
+                  payment_verification_level, payment_verification_metadata,
+                  payment_reference_canonical
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
                 (
@@ -693,6 +715,9 @@ def review_service(
                     utc_now() if redaction_enabled() else None,
                     user_id,
                     verification.amount,
+                    verification.payment_verification_level,
+                    Jsonb(verification.payment_verification_metadata or {}),
+                    verification.canonical_reference or canonical_reference,
                 ),
             ).fetchone()
 
@@ -715,6 +740,7 @@ def review_service(
         "review_id": row["id"],
         "verification": verification.reason,
         "payment_verified": verification.payment_verified,
+        "payment_verification_level": verification.payment_verification_level,
         "signature_verified": verification.signature_verified,
         "verified_purchase": verification.payment_verified,
     }
@@ -724,9 +750,11 @@ def review_service(
     ):
         result["next_step"] = _next_step(
             "supply_payment_proof",
-            "Review accepted as UNVERIFIED (half weight in scoring). Next time "
-            "include payment_proof — the base64 payment-response header (x402) "
-            "or Payment-Receipt header (mppx) — for verified-purchase status.",
+            "Review accepted as UNVERIFIED (half weight in scoring). For "
+            "verified-purchase status, pass the settlement tx hash as "
+            "payment_reference (verified on-chain), or include payment_proof — "
+            "the base64 payment-response header (x402) or Payment-Receipt "
+            "header (mppx).",
         )
     return result
 
@@ -825,7 +853,13 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           (s.review_summary is not null) as has_summary,
           avg(r.rating)::float as avg_rating,
           count(r.id)::int as num_reviews,
-          count(r.id) filter (where r.payment_verified)::int as num_verified_reviews
+          count(r.id) filter (where r.payment_verified)::int as num_verified_reviews,
+          count(r.id) filter (where r.payment_verification_level
+            in ('onchain_verified', 'response_attested'))::int
+            as num_onchain_verified_reviews,
+          count(r.id) filter (where r.payment_verification_level
+            in ('unverified', 'signature_only'))::int
+            as num_signature_only_reviews
         from services s
         left join reviews r on r.service_id = s.id
         group by s.id
@@ -851,6 +885,8 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "avg_rating": as_float(row["avg_rating"]),
             "num_reviews": row["num_reviews"],
             "num_verified_reviews": row["num_verified_reviews"],
+            "num_onchain_verified_reviews": row["num_onchain_verified_reviews"],
+            "num_signature_only_reviews": row["num_signature_only_reviews"],
             # Deprecated alias of the canonical score (pre-scoring-v1 field).
             "rank_score": as_float(row["score"]),
         }
@@ -884,7 +920,13 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """
             select
               count(*)::int as num_reviews,
-              count(*) filter (where payment_verified)::int as num_verified_reviews
+              count(*) filter (where payment_verified)::int as num_verified_reviews,
+              count(*) filter (where payment_verification_level
+                in ('onchain_verified', 'response_attested'))::int
+                as num_onchain_verified_reviews,
+              count(*) filter (where payment_verification_level
+                in ('unverified', 'signature_only'))::int
+                as num_signature_only_reviews
             from reviews
             where service_id = %s
             """,
@@ -901,7 +943,8 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         ).fetchall()
         recent_reviews = conn.execute(
             """
-            select rating, reason, task_context, payment_verified, created_at
+            select rating, reason, task_context, payment_verified,
+                   payment_verification_level as verification_level, created_at
             from reviews
             where service_id = %s
             order by created_at desc
@@ -945,6 +988,8 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "score_algorithm": SCORE_ALGORITHM,
         "num_reviews": counts["num_reviews"],
         "num_verified_reviews": counts["num_verified_reviews"],
+        "num_onchain_verified_reviews": counts["num_onchain_verified_reviews"],
+        "num_signature_only_reviews": counts["num_signature_only_reviews"],
         "histogram": histogram,
         "summary": _redacted_summary(service.get("review_summary")),
         "recent_reviews": [_json_ready(row) for row in recent_reviews],

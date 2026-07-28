@@ -59,11 +59,26 @@ must display as **unproven at the prior**, never as a starred rating.
 wᵢ = weight(wallet) × proof(i) × decay(Δtᵢ)
 ```
 
-- `proof(i)` — 2 if the review is backed by a verified on-chain payment
-  (correct payee, pinned token, amount ≥ challenge price, payer == reviewer);
-  1 for a signed review with no payment proof. Placeholder-verified providers
-  (currently anything non-x402/mppx) count as no proof. *(The 2× is a starting
-  value; re-fit via backtest.)*
+- `proof(i)` — keyed on the review's `payment_verification_level`:
+
+  | level | multiplier | what it proves |
+  |---|---|---|
+  | `unverified` | 1 | nothing beyond admission (legacy/placeholder providers) |
+  | `signature_only` | 1 | wallet signature over the review; payment not verified |
+  | `onchain_verified` | 2 | on-chain ERC-20 transfer, reviewer wallet → service payee, pinned token |
+  | `response_attested` | 2 | reserved: signed receipt binding payment to a specific request/response |
+
+  "Verified purchase" means exactly `onchain_verified`: a successful receipt
+  with a Transfer of the pinned token from the reviewer's wallet to the
+  service payee. It does NOT matter whether the client supplied a
+  `payment_proof` header or only the settlement tx hash in
+  `payment_reference` — the proof header is unsigned client-supplied JSON,
+  so every load-bearing fact comes from the chain either way, and both
+  routes earn the same 2×. A proof premium would be security theater;
+  `response_attested` is reserved for the day CrowdCode verifies a
+  facilitator/server-signed receipt that binds the payment to the specific
+  request and response — only then does a stronger tier exist to price.
+  *(The 2× is a starting value; re-fit via backtest.)*
 - `decay(Δt)` — half-life 180 days. For versioned resources (npm), additionally
   decay by version distance.
 
@@ -103,11 +118,27 @@ reviews from all scores retroactively.
 1. Valid EIP-191 signature by `reviewer_wallet` over the canonical payload.
 2. Rate limit: 1 review per (wallet, resource) per day. *(This is the only
    volume cap — deliberately. Weight, not volume, is the defense.)*
-3. `payment_reference` unique (no proof replay).
-4. If a payment proof is present it must fully verify (receipt status 1,
-   Transfer `from` == reviewer, `to` == payment_target_ref, **token pinned to
-   USDC**, **amount ≥ the 402 challenge price**, tx recent) — else the review
-   is admitted as proof=1, never as a half-verified tier.
+3. `payment_reference` unique on its **canonical form** (provider prefixes
+   like `x402:base:` stripped) — the same settlement tx can never yield two
+   reviews under different spellings.
+4. A **supplied** payment proof must fully verify (receipt status 1, Transfer
+   `from` == reviewer, `to` == payment_target_ref, **token pinned** — USDC on
+   Base for x402, `MPPX_TEMPO_TOKEN_ADDRESS` on Tempo for mppx — **amount ≥
+   the 402 challenge price** when one is stated) — else the review is
+   **rejected outright**: a failing proof is worse than no proof and must
+   never silently downgrade.
+5. With **no proof**, a `payment_reference` that is a tx hash runs the same
+   on-chain check; a matching transfer upgrades to `onchain_verified`, and
+   any definitive chain "no" (failed tx, wrong token, wrong payee) admits
+   the review at `signature_only`. The one retryable outcome is an
+   unreachable RPC: the review is admitted at `signature_only` with
+   `verification_failure=rpc_unreachable`, and the nightly cron re-checks it
+   (up to 5 attempts / 14 days) so a network flake never permanently costs
+   the verified multiplier.
+6. Token pinning is symmetric across both routes: with no pinned token
+   configured for the chain, neither a proof nor a tx hash upgrades to
+   `onchain_verified` — the review is admitted at `signature_only`
+   (server misconfiguration is never the client's fault).
 
 ### 3.5 Seeds
 

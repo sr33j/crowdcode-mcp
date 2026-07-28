@@ -43,6 +43,10 @@ services:
       # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5).
       - key: CROWDCODE_SEED_WALLETS
         sync: false
+      # Token pin for mppx/Tempo payment verification (docs/SCORING.md §3.4).
+      # Without it, mppx reviews cap at signature_only.
+      - key: MPPX_TEMPO_TOKEN_ADDRESS
+        value: "0x20C000000000000000000000b9537d11c60E8b50"
 
   # Nightly batch (docs/SCORING.md §8.2): consistency sweep, per-service
   # review summaries, requested-services summary.
@@ -68,6 +72,9 @@ services:
         sync: false
       - key: REDACTOR_TOKEN
         sync: false
+      # Cron re-verifies rpc_unreachable reviews; needs the same token pin.
+      - key: MPPX_TEMPO_TOKEN_ADDRESS
+        value: "0x20C000000000000000000000b9537d11c60E8b50"
 
   # Internal-only redaction sidecar: same Rampart + secret-recognizer
   # pipeline as crowdcode-mcp, called by the backend on ingest/egress.

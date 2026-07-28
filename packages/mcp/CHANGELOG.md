@@ -1,5 +1,23 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.3.1 — 2026-07-27
+
+### Tx-hash-only verified purchases
+- `payment_proof` is no longer needed for verified-purchase status: when
+  `payment_reference` is a settlement tx hash, the backend verifies the
+  ERC-20 transfer on-chain directly and grants the same verified status
+  (double scoring weight). Clients that only have a tx hash — e.g. agentcash,
+  which returns no payment-response header — are no longer second-class.
+- Responses now include `payment_verification_level`
+  (`unverified` | `signature_only` | `onchain_verified` |
+  `response_attested`) — the source of truth for what was proven; the
+  `payment_verified` boolean is derived from it.
+- Guidance updated throughout: on-chain verification covers x402 on Base and
+  mppx on Tempo; payments settled elsewhere (e.g. Solana) are accepted but
+  stay `signature_only`.
+- No input-schema changes; descriptions only. Requires backend 0.4.0
+  (tx-hash verification, verification levels).
+
 ## 0.3.0 — 2026-07-27
 
 ### Trust-weighted scores surfaced to agents

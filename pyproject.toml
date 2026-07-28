@@ -1,6 +1,6 @@
 [project]
 name = "crowdcode-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "CrowdCode MCP server: payment-gated service reviews for agent commerce."
 readme = "README.md"
 license = "MIT"

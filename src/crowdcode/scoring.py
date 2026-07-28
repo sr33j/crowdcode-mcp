@@ -32,9 +32,20 @@ TRUST_CAP = 1.0
 TRUST_FLOOR = -5.0
 P_CLAMP = (0.05, 0.95)
 
-# Review weight multipliers.
+# Review weight multipliers, keyed by payment_verification_level. Proof-based
+# and tx-hash-only verification weigh the same on purpose: both prove exactly
+# one fact (an on-chain transfer from reviewer wallet to service payee in the
+# pinned token) — the proof header is unsigned client JSON and adds nothing.
+# response_attested is reserved for future signed receipts; it inherits the
+# verified weight until it actually proves more.
 PROOF_VERIFIED = 2.0
 PROOF_SIGNED = 1.0
+LEVEL_MULTIPLIERS = {
+    "unverified": PROOF_SIGNED,
+    "signature_only": PROOF_SIGNED,
+    "onchain_verified": PROOF_VERIFIED,
+    "response_attested": PROOF_VERIFIED,
+}
 DECAY_HALF_LIFE_DAYS = 180.0
 
 # Display threshold: below this effective evidence a resource is "unproven at
@@ -57,6 +68,9 @@ class ReviewRow:
     payment_verified: bool
     signature_verified: bool
     created_at: datetime
+    # None on rows predating the level column; proof_multiplier falls back to
+    # the payment_verified boolean for those.
+    payment_verification_level: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +107,9 @@ def decay_factor(created_at: datetime, now: datetime) -> float:
 
 
 def proof_multiplier(review: ReviewRow) -> float:
+    level = review.payment_verification_level
+    if level in LEVEL_MULTIPLIERS:
+        return LEVEL_MULTIPLIERS[level]
     return PROOF_VERIFIED if review.payment_verified else PROOF_SIGNED
 
 

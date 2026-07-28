@@ -183,3 +183,116 @@ def test_service_summaries_skip_when_nothing_is_stale(monkeypatch):
     monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
     cron.run_service_summaries(NOW)
     assert conn.executed("update services") == []
+
+
+# --- payment re-verification (rpc_unreachable retry) -----------------------
+
+from crowdcode.payments import OnchainCheck  # noqa: E402
+
+PAYEE = "0x" + "44" * 20
+CANONICAL_TX = "0x" + "cd" * 32
+
+
+def _reverify_candidate(**overrides):
+    row = {
+        "id": 42,
+        "service_id": "svc_1",
+        "payment_provider": "x402",
+        "payment_target_ref": PAYEE,
+        "reviewer_wallet": HONEST_WALLET,
+        "payment_reference_canonical": CANONICAL_TX,
+        "payment_verification_metadata": {
+            "proof_present": False,
+            "source": "payment_reference",
+            "verification_failure": "rpc_unreachable",
+        },
+    }
+    row.update(overrides)
+    return row
+
+
+def _run_reverification(monkeypatch, candidates, check, chain_failure=None):
+    conn = FakeConn({"->>'verification_failure'": candidates})
+    monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
+    monkeypatch.setattr(
+        cron,
+        "check_payment_reference_onchain",
+        lambda **kw: (
+            check,
+            {
+                "network": "base",
+                "token_pinned": True,
+                "amount_checked": False,
+                "verification_failure": chain_failure,
+            },
+        ),
+    )
+    recomputed = []
+    monkeypatch.setattr(
+        cron,
+        "recompute_service_score",
+        lambda _conn, service_id, _now: recomputed.append(service_id),
+    )
+    cron.run_payment_reverification(NOW)
+    return conn, recomputed
+
+
+def test_reverification_upgrades_when_the_transfer_now_verifies(monkeypatch):
+    check = OnchainCheck(
+        True,
+        transfer={"from": HONEST_WALLET, "to": PAYEE, "value": 1000, "token": "0xt"},
+        block_number=7,
+    )
+    conn, recomputed = _run_reverification(
+        monkeypatch, [_reverify_candidate()], check
+    )
+
+    update = conn.executed("set payment_verification_level")[0]
+    params = update[1]
+    assert params[0] == "onchain_verified"
+    assert params[2] == 1000  # coalesced into amount
+    meta = params[3].obj
+    assert meta["verification_failure"] is None
+    assert meta["reverify_attempts"] == 1
+    assert meta["upgraded_by"] == "cron_reverification"
+    assert params[4] == 42
+    assert recomputed == ["svc_1"]
+    assert conn.commits == 1
+
+
+def test_reverification_records_definitive_failures_so_they_stop_retrying(
+    monkeypatch,
+):
+    check = OnchainCheck(False, failure="no_matching_transfer")
+    conn, recomputed = _run_reverification(
+        monkeypatch,
+        [_reverify_candidate()],
+        check,
+        chain_failure="no_matching_transfer",
+    )
+
+    assert conn.executed("set payment_verification_level") == []
+    update = conn.executed("set payment_verification_metadata")[0]
+    meta = update[1][0].obj
+    # A definitive chain "no" replaces rpc_unreachable: the row is no longer
+    # a retry candidate for the nightly pass.
+    assert meta["verification_failure"] == "no_matching_transfer"
+    assert meta["reverify_attempts"] == 1
+    assert recomputed == []
+
+
+def test_reverification_skips_rows_whose_reference_is_not_a_tx_hash(monkeypatch):
+    def _explode(**kw):
+        raise AssertionError("on-chain check must not run for non-tx references")
+
+    conn = FakeConn(
+        {
+            "->>'verification_failure'": [
+                _reverify_candidate(payment_reference_canonical="receipt-ref-1")
+            ]
+        }
+    )
+    monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
+    monkeypatch.setattr(cron, "check_payment_reference_onchain", _explode)
+    cron.run_payment_reverification(NOW)
+    assert conn.executed("update reviews") == []
