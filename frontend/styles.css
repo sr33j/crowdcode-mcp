@@ -544,6 +544,12 @@ tbody tr.detail-row > td {
   opacity: 0.4;
   cursor: default;
 }
+.pager .ellipsis {
+  min-width: 24px;
+  text-align: center;
+  color: var(--muted);
+  user-select: none;
+}
 
 /* ---------- demand carousel ---------- */
 section.demand {

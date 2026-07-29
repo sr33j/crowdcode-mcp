@@ -63,6 +63,22 @@ function filteredServices() {
   );
 }
 
+function pageWindow(current, pages) {
+  if (pages <= 7) {
+    return Array.from({ length: pages }, (_, i) => i + 1);
+  }
+  const out = [1];
+  let lo = Math.max(2, current - 1);
+  let hi = Math.min(pages - 1, current + 1);
+  if (current <= 3) hi = 4;
+  if (current >= pages - 2) lo = pages - 3;
+  if (lo > 2) out.push("…");
+  for (let p = lo; p <= hi; p++) out.push(p);
+  if (hi < pages - 1) out.push("…");
+  out.push(pages);
+  return out;
+}
+
 function renderTable() {
   const rows = filteredServices();
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -105,8 +121,11 @@ function renderTable() {
   html += `<button data-goto="${page - 1}" ${
     page === 1 ? "disabled" : ""
   } aria-label="Previous page">‹</button>`;
-  for (let p = 1; p <= pages; p++) {
-    html += `<button data-goto="${p}" aria-current="${p === page}">${p}</button>`;
+  for (const p of pageWindow(page, pages)) {
+    html +=
+      p === "…"
+        ? '<span class="ellipsis">…</span>'
+        : `<button data-goto="${p}" aria-current="${p === page}">${p}</button>`;
   }
   html += `<button data-goto="${page + 1}" ${
     page === pages ? "disabled" : ""
