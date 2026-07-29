@@ -119,17 +119,6 @@ function renderTable() {
 }
 
 function renderDetail(d) {
-  const histogram = d.histogram || {};
-  const total =
-    Object.values(histogram).reduce((sum, n) => sum + (n || 0), 0) || 1;
-  const bars = [5, 4, 3, 2, 1]
-    .map((star) => {
-      const n = histogram[String(star)] || 0;
-      const width = Math.round((n / total) * 100);
-      return `<div class="hist-row"><span class="hist-star">★${star}</span><span class="hist-bar"><i style="width:${width}%"></i></span><span class="hist-n">${n}</span></div>`;
-    })
-    .join("");
-
   const summary = d.summary;
   const sections = [
     ["Strengths", summary?.strengths],
@@ -158,19 +147,6 @@ function renderDetail(d) {
     ? '<span class="chip unproven">unproven</span>'
     : `<span class="score-num">${(Number(d.score) || 0).toFixed(2)}</span>`;
 
-  const reviews = Array.isArray(d.recent_reviews) ? d.recent_reviews : [];
-  const reviewItems = reviews
-    .filter((review) => review.reason)
-    .map(
-      (review) => `
-      <div class="rev">
-        <span class="rev-stars">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</span>
-        ${review.payment_verified ? '<span class="chip verified">verified</span>' : ""}
-        <span class="rev-text">${esc(review.reason)}</span>
-      </div>`
-    )
-    .join("");
-
   return `
     <div class="detail">
       <div class="detail-head">
@@ -179,11 +155,7 @@ function renderDetail(d) {
           · ${d.num_reviews} review${d.num_reviews === 1 ? "" : "s"}
           · ${d.num_verified_reviews} verified</span>
       </div>
-      <div class="detail-grid">
-        ${summaryBlock}
-        <div class="hist">${bars}</div>
-      </div>
-      ${reviewItems ? `<div class="revs">${reviewItems}</div>` : ""}
+      ${summaryBlock}
     </div>`;
 }
 
@@ -223,7 +195,7 @@ function renderStatline(stats) {
   const totalReviews =
     stats?.total_reviews ??
     services.reduce((sum, s) => sum + (s.num_reviews || 0), 0);
-  const numServices = stats?.num_services ?? services.length;
+  const numServices = services.length;
   statline.innerHTML =
     `<b>${totalReviews}</b> payment-verified reviews ` +
     '<span class="sep">/</span> ' +
@@ -269,7 +241,9 @@ async function loadServices() {
     } catch {
       payload = await fetchJson("/api/services/top");
     }
-    services = Array.isArray(payload.services) ? payload.services : [];
+    services = (Array.isArray(payload.services) ? payload.services : []).filter(
+      (s) => (s.num_reviews || 0) >= 1
+    );
     renderStatline(payload.stats);
     renderTable();
   } catch (error) {
