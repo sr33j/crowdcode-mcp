@@ -1,5 +1,18 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.3.2 — 2026-07-30
+
+### Security hardening
+- Existing services now sign with the database-authorized resolved identity;
+  caller fields cannot replace a canonical payment destination. Registered
+  alternate endpoints and payment rails continue to work.
+- Signature-mismatch recovery no longer blindly signs a backend-provided
+  `expected_message`. The client reconstructs the domain-separated
+  `crowdcode.review.v1` payload locally, verifies a byte-exact match, rejects
+  unexpected identity changes, and retries at most once.
+- Requires the corresponding backend identity-resolution fix for complete
+  enforcement.
+
 ## 0.3.1 — 2026-07-27
 
 ### Tx-hash-only verified purchases
