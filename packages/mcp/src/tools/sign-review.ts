@@ -13,7 +13,12 @@
  * the backend hashes when rebuilding the payload.
  */
 
-import { normalizePaymentProvider } from "../canonical/identity.js";
+import {
+  buildIdentity,
+  normalizePaymentProvider,
+  type ServiceIdentity,
+} from "../canonical/identity.js";
+import { canonicalReviewPayload } from "../canonical/payload.js";
 import {
   loadWallet,
   type LoadedWallet,
@@ -61,6 +66,13 @@ export interface PreparedReview {
   next_step?: NextStep;
   /** Wallet used for signing — kept so a signature-mismatch retry can re-sign. */
   wallet?: LoadedWallet;
+  /** Locally constrained review fields used to validate any retry message. */
+  signed_payload?: {
+    identity: ServiceIdentity;
+    rating: number;
+    reason: string;
+    payment_reference: string;
+  };
   signed: boolean;
 }
 
@@ -126,17 +138,21 @@ export async function prepareSignedReview(
   const signature = await loaded.account.signMessage({
     message: payload.message,
   });
-  const identity = payload.identity as Record<string, unknown>;
+  const identity = buildIdentity(
+    payload.identity as Parameters<typeof buildIdentity>[0],
+  );
+  const signedReason = String(payload.reason);
   return {
     args: {
       ...args,
       // Pass the resolved identity verbatim so the backend rebuilds the exact
       // payload that was just signed.
-      service_id: identity.service_id ?? args.service_id,
-      api_endpoint: identity.api_endpoint ?? args.api_endpoint,
-      payment_provider: identity.payment_provider ?? args.payment_provider,
-      payment_target_ref: identity.payment_target_ref ?? args.payment_target_ref,
-      directory_slug: identity.directory_slug ?? args.directory_slug,
+      service_id: identity.service_id,
+      api_endpoint: identity.api_endpoint,
+      payment_provider: identity.payment_provider,
+      payment_target_ref: identity.payment_target_ref,
+      directory_slug: identity.directory_slug,
+      reason: signedReason,
       reviewer_wallet: loaded.address,
       review_signature: signature,
       signature_scheme: "eip191",
@@ -145,35 +161,86 @@ export async function prepareSignedReview(
     wallet_source: loaded.source,
     wallet_created: loaded.created,
     wallet: loaded,
+    signed_payload: {
+      identity,
+      rating: args.rating as number,
+      reason: signedReason,
+      payment_reference: String(args.payment_reference ?? ""),
+    },
   };
+}
+
+const SIGNED_IDENTITY_FIELDS = [
+  "service_id",
+  "api_endpoint",
+  "payment_provider",
+  "payment_target_ref",
+  "directory_slug",
+] as const;
+
+function resolvedIdentity(value: unknown): ServiceIdentity | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of SIGNED_IDENTITY_FIELDS) {
+    if (!(field in record)) return null;
+    if (record[field] !== null && typeof record[field] !== "string") return null;
+  }
+  try {
+    return buildIdentity(record as Parameters<typeof buildIdentity>[0]);
+  } catch {
+    return null;
+  }
+}
+
+function preservesSignedIdentity(
+  signed: ServiceIdentity,
+  resolved: ServiceIdentity,
+): boolean {
+  return SIGNED_IDENTITY_FIELDS.every(
+    (field) => signed[field] === null || signed[field] === resolved[field],
+  );
 }
 
 /**
  * Handle the backend's signature-mismatch recovery contract: re-sign the
- * returned expected_message with the same wallet and rebuild the args using
- * resolved_identity. Returns null when the response is not a recoverable
- * mismatch (or we did not sign locally in the first place).
+ * returned message only after reconstructing the constrained CrowdCode review
+ * payload locally. Arbitrary server-provided text is never signed.
  */
 export async function resignFromMismatch(
   prepared: PreparedReview,
   response: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
   if (!prepared.signed || !prepared.wallet?.account) return null;
+  if (!prepared.signed_payload) return null;
   if (response.accepted !== false) return null;
   if (typeof response.expected_message !== "string") return null;
 
-  const identity = (response.resolved_identity ?? {}) as Record<string, unknown>;
+  const identity = resolvedIdentity(response.resolved_identity);
+  if (identity === null) return null;
+  if (!preservesSignedIdentity(prepared.signed_payload.identity, identity)) {
+    return null;
+  }
+  const message = canonicalReviewPayload({
+    identity,
+    rating: prepared.signed_payload.rating,
+    reason: prepared.signed_payload.reason,
+    paymentReference: prepared.signed_payload.payment_reference,
+  });
+  if (message !== response.expected_message) return null;
+
   const signature = await prepared.wallet.account.signMessage({
-    message: response.expected_message,
+    message,
   });
   return {
     ...prepared.args,
-    service_id: identity.service_id ?? prepared.args.service_id,
-    api_endpoint: identity.api_endpoint ?? prepared.args.api_endpoint,
-    payment_provider: identity.payment_provider ?? prepared.args.payment_provider,
-    payment_target_ref:
-      identity.payment_target_ref ?? prepared.args.payment_target_ref,
-    directory_slug: identity.directory_slug ?? prepared.args.directory_slug,
+    service_id: identity.service_id,
+    api_endpoint: identity.api_endpoint,
+    payment_provider: identity.payment_provider,
+    payment_target_ref: identity.payment_target_ref,
+    directory_slug: identity.directory_slug,
+    reason: prepared.signed_payload.reason,
     review_signature: signature,
   };
 }

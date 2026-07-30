@@ -5,13 +5,11 @@
  * time: the reason is redacted locally, hashed locally, and the canonical
  * EIP-191 message is constructed locally (spec/CANONICAL_PAYLOAD.md).
  *
- * The identity-merge logic mirrors the backend exactly
- * (src/crowdcode/server.py review_service effective_identity): the server
- * verifies signatures by REBUILDING the payload from its own resolved
- * identity, so the message signed here must match that reconstruction
- * byte-for-byte. Canonical identity comes from get_service_score when the
- * service exists; otherwise the caller-provided identity is used verbatim,
- * exactly like the old remote signing tool.
+ * The backend verifies signatures by rebuilding the payload from its
+ * database-authorized identity. Existing services therefore use the
+ * resolved_identity returned by get_service_score (including registered
+ * aliases); caller fields never override stored payment identity. New,
+ * unresolved services continue to use the caller-provided strong identity.
  */
 
 import type { RedactionResult } from "@crowdcode/redaction";
@@ -37,6 +35,10 @@ export interface SigningDeps {
 
 function orNull(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function getReviewSigningPayload(
@@ -73,17 +75,19 @@ export async function getReviewSigningPayload(
   let effective = identity;
   if (score.found === true) {
     try {
-      // Same merge as the backend: caller-normalized fields win, canonical
-      // values fill the gaps, and the result is re-normalized.
+      const hasResolvedIdentity = isRecord(score.resolved_identity);
+      const resolved: Record<string, unknown> = hasResolvedIdentity
+        ? (score.resolved_identity as Record<string, unknown>)
+        : score;
       effective = buildIdentity({
-        service_id: orNull(score.service_id),
+        service_id: orNull(resolved.service_id),
         service_name: orNull(score.service_name),
-        api_endpoint: identity.api_endpoint ?? orNull(score.canonical_endpoint),
-        payment_provider:
-          identity.payment_provider ?? orNull(score.payment_provider),
-        payment_target_ref:
-          identity.payment_target_ref ?? orNull(score.payment_target_ref),
-        directory_slug: identity.directory_slug ?? orNull(score.directory_slug),
+        api_endpoint: hasResolvedIdentity
+          ? orNull(resolved.api_endpoint)
+          : orNull(score.canonical_endpoint),
+        payment_provider: orNull(resolved.payment_provider),
+        payment_target_ref: orNull(resolved.payment_target_ref),
+        directory_slug: orNull(resolved.directory_slug),
       });
     } catch (err) {
       return { ok: false, reason: (err as Error).message };

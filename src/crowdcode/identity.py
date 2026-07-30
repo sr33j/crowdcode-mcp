@@ -32,6 +32,7 @@ class ResolvedService:
     row: dict[str, Any] | None
     created: bool = False
     error: str | None = None
+    identity: ServiceIdentity | None = None
 
 
 def clean_optional(value: str | None) -> str | None:
@@ -180,6 +181,124 @@ def _fetch_by_directory_slug(
     ).fetchone()
 
 
+def _same_payment_target(
+    payment_provider: str | None,
+    left: str | None,
+    right: str | None,
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    if (
+        payment_provider in {"mppx", "x402"}
+        and len(left) == 42
+        and len(right) == 42
+        and left[:2].lower() == "0x"
+        and right[:2].lower() == "0x"
+    ):
+        return left.lower() == right.lower()
+    return left == right
+
+
+def _identifier_belongs_to_service(
+    conn: psycopg.Connection,
+    service_id: str,
+    identifier_type: str,
+    identifier_value: str,
+) -> bool:
+    matched = _fetch_by_identifier(conn, identifier_type, identifier_value)
+    return matched is not None and matched["id"] == service_id
+
+
+def _resolved_identity(
+    conn: psycopg.Connection,
+    supplied: ServiceIdentity,
+    service: dict[str, Any],
+) -> ServiceIdentity | None:
+    """Return a database-authorized identity for an existing service.
+
+    Canonical service fields fill omitted values. A supplied alias may replace
+    a canonical field only when that exact identifier is already registered
+    to this service. This prevents service_id + attacker payment target from
+    verifying a payment to the attacker and storing the review on the victim.
+    """
+    canonical = build_identity(
+        service_id=service["id"],
+        service_name=service["name"],
+        api_endpoint=service.get("canonical_endpoint"),
+        payment_provider=service.get("payment_provider"),
+        payment_target_ref=service.get("payment_target_ref"),
+        directory_slug=service.get("directory_slug"),
+    )
+
+    if supplied.service_id and supplied.service_id != canonical.service_id:
+        return None
+
+    endpoint = canonical.api_endpoint
+    if supplied.api_endpoint:
+        if supplied.api_endpoint == canonical.api_endpoint or _identifier_belongs_to_service(
+            conn, service["id"], "api_endpoint", supplied.api_endpoint
+        ):
+            endpoint = supplied.api_endpoint
+        else:
+            return None
+
+    directory_slug = canonical.directory_slug
+    if supplied.directory_slug:
+        if (
+            supplied.directory_slug == canonical.directory_slug
+            or _identifier_belongs_to_service(
+                conn, service["id"], "directory_slug", supplied.directory_slug
+            )
+        ):
+            directory_slug = supplied.directory_slug
+        else:
+            return None
+
+    provider = canonical.payment_provider
+    target = canonical.payment_target_ref
+    if supplied.payment_provider and supplied.payment_target_ref:
+        supplied_payment_identifier = payment_identifier(
+            supplied.payment_provider, supplied.payment_target_ref
+        )
+        canonical_pair = (
+            supplied.payment_provider == canonical.payment_provider
+            and _same_payment_target(
+                supplied.payment_provider,
+                supplied.payment_target_ref,
+                canonical.payment_target_ref,
+            )
+        )
+        if canonical_pair or _identifier_belongs_to_service(
+            conn,
+            service["id"],
+            "payment_target",
+            supplied_payment_identifier,
+        ):
+            provider = supplied.payment_provider
+            target = supplied.payment_target_ref
+        else:
+            return None
+    elif supplied.payment_provider:
+        if supplied.payment_provider != canonical.payment_provider:
+            return None
+    elif supplied.payment_target_ref:
+        if not _same_payment_target(
+            canonical.payment_provider,
+            supplied.payment_target_ref,
+            canonical.payment_target_ref,
+        ):
+            return None
+
+    return build_identity(
+        service_id=canonical.service_id,
+        service_name=canonical.service_name,
+        api_endpoint=endpoint,
+        payment_provider=provider,
+        payment_target_ref=target,
+        directory_slug=directory_slug,
+    )
+
+
 def resolve_service(
     conn: psycopg.Connection,
     identity: ServiceIdentity,
@@ -189,7 +308,7 @@ def resolve_service(
     if identity.service_id:
         service = _fetch_service(conn, identity.service_id)
         if service is not None:
-            return ResolvedService(service)
+            matches.append(service)
 
     if identity.directory_slug:
         service = _fetch_by_directory_slug(conn, identity.directory_slug)
@@ -217,7 +336,11 @@ def resolve_service(
     if len(unique) > 1:
         return ResolvedService(None, error="service identity conflict")
     if unique:
-        return ResolvedService(next(iter(unique.values())))
+        service = next(iter(unique.values()))
+        resolved_identity = _resolved_identity(conn, identity, service)
+        if resolved_identity is None:
+            return ResolvedService(None, error="service identity conflict")
+        return ResolvedService(service, identity=resolved_identity)
 
     return ResolvedService(None)
 

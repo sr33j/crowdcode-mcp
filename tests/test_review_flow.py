@@ -647,3 +647,22 @@ def test_signing_tool_rejects_malformed_hash():
         "ok": False,
         "reason": "reason_hash must look like sha256:<64 lowercase hex chars>",
     }
+
+
+def test_project_ideas_public_payload_reads_cron_cache_only(monkeypatch):
+    from crowdcode import server as server_mod
+
+    cached = {
+        "ok": True,
+        "source": "cron",
+        "cached": True,
+        "stale": False,
+        "ideas": [{"title": "Cached"}],
+    }
+    monkeypatch.setattr(
+        server_mod,
+        "_cron_project_ideas_payload",
+        lambda _ttl: cached,
+    )
+
+    assert server_mod._project_ideas_payload() is cached

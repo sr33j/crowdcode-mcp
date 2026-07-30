@@ -23,10 +23,6 @@ services:
         value: service_requests
       - key: PROJECT_IDEAS_CACHE_SECONDS
         value: "86400"
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: OPENAI_MODEL
-        value: gpt-5-mini
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
       # Wallet-keyed rate limits (rolling 24h windows; 0 disables).

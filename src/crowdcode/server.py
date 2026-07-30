@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
-import time
 from typing import Any
 
 import psycopg
@@ -54,10 +52,6 @@ from crowdcode.scoring import (
     as_float,
     is_unproven,
 )
-from crowdcode.summaries import (
-    fetch_recent_requests,
-    summarize_project_ideas,
-)
 from crowdcode.settings import (
     get_mcp_allowed_hosts,
     get_mcp_allowed_origins,
@@ -79,13 +73,6 @@ mcp = FastMCP(
         allowed_origins=list(get_mcp_allowed_origins()),
     ),
 )
-
-_PROJECT_IDEAS_CACHE: dict[str, Any] = {
-    "expires_at": 0.0,
-    "payload": None,
-}
-_PROJECT_IDEAS_REFRESH_LOCK = threading.Lock()
-
 
 def _json_ready(row: dict[str, Any]) -> dict[str, Any]:
     clean = dict(row)
@@ -260,6 +247,7 @@ def get_service_score(
         service = resolved.row
         if service is None:
             return _score_not_found(identity.service_id, "service not found")
+        assert resolved.identity is not None
 
         score = conn.execute(
             """
@@ -319,6 +307,13 @@ def get_service_score(
         "payment_provider": service.get("payment_provider"),
         "payment_target_ref": service.get("payment_target_ref"),
         "directory_slug": service.get("directory_slug"),
+        "resolved_identity": {
+            "service_id": resolved.identity.service_id,
+            "api_endpoint": resolved.identity.api_endpoint,
+            "payment_provider": resolved.identity.payment_provider,
+            "payment_target_ref": resolved.identity.payment_target_ref,
+            "directory_slug": resolved.identity.directory_slug,
+        },
         "found": True,
         "score": canonical_score,
         "n_eff": n_eff,
@@ -435,14 +430,8 @@ def get_review_signing_payload(
         service = resolved.row
 
     if service is not None:
-        identity = build_identity(
-            service_id=service["id"],
-            service_name=service["name"],
-            api_endpoint=identity.api_endpoint or service.get("canonical_endpoint"),
-            payment_provider=identity.payment_provider or service.get("payment_provider"),
-            payment_target_ref=identity.payment_target_ref or service.get("payment_target_ref"),
-            directory_slug=identity.directory_slug or service.get("directory_slug"),
-        )
+        assert resolved.identity is not None
+        identity = resolved.identity
 
     return {
         "ok": True,
@@ -561,14 +550,8 @@ def review_service(
 
         effective_identity = identity
         if service is not None:
-            effective_identity = build_identity(
-                service_id=service["id"],
-                service_name=service["name"],
-                api_endpoint=identity.api_endpoint or service.get("canonical_endpoint"),
-                payment_provider=identity.payment_provider or service.get("payment_provider"),
-                payment_target_ref=identity.payment_target_ref or service.get("payment_target_ref"),
-                directory_slug=identity.directory_slug or service.get("directory_slug"),
-            )
+            assert resolved.identity is not None
+            effective_identity = resolved.identity
 
         verification = verify_review_payment(
             identity=effective_identity,
@@ -763,33 +746,16 @@ def _json_error(message: str, status_code: int = 500) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
-def _refresh_project_ideas_cache() -> None:
-    try:
-        settings = get_settings()
-        requests = fetch_recent_requests(limit=100)
-        payload = summarize_project_ideas(requests)
-        payload["cached"] = False
-        _PROJECT_IDEAS_CACHE["payload"] = payload
-        _PROJECT_IDEAS_CACHE["expires_at"] = (
-            time.time() + settings.project_ideas_cache_seconds
-        )
-    except Exception:
-        pass
-    finally:
-        _PROJECT_IDEAS_REFRESH_LOCK.release()
-
-
 def _cron_project_ideas_payload(ttl_seconds: int) -> dict[str, Any] | None:
-    """Read the requested-services summary the cron job wrote to app_cache.
-    Unlike the in-process cache this survives free-tier cold starts."""
+    """Read the requested-services summary written by the trusted cron job."""
     try:
         with connect() as conn:
             row = conn.execute(
                 """
-                select payload, generated_at
+                select payload, generated_at,
+                       generated_at > now() - make_interval(secs => %s) as fresh
                 from app_cache
                 where key = 'project_ideas'
-                  and generated_at > now() - make_interval(secs => %s)
                 """,
                 (ttl_seconds,),
             ).fetchone()
@@ -799,41 +765,26 @@ def _cron_project_ideas_payload(ttl_seconds: int) -> dict[str, Any] | None:
         return None
     payload = dict(row["payload"])
     payload["source"] = "cron"
+    payload["cached"] = True
+    payload["stale"] = not bool(row["fresh"])
     return payload
 
 
-def _project_ideas_payload(refresh: bool = False) -> dict[str, Any]:
+def _project_ideas_payload() -> dict[str, Any]:
+    """Serve cron output only; public requests never execute an LLM."""
     settings = get_settings()
-    now = time.time()
-    cached = _PROJECT_IDEAS_CACHE["payload"]
-
-    if not refresh and cached is not None:
-        # Serve the cache immediately; if it has expired, rebuild it in the
-        # background so no visitor ever waits on summarization.
-        if _PROJECT_IDEAS_CACHE["expires_at"] <= now and _PROJECT_IDEAS_REFRESH_LOCK.acquire(
-            blocking=False
-        ):
-            threading.Thread(target=_refresh_project_ideas_cache, daemon=True).start()
-        payload = dict(cached)
-        payload["cached"] = True
+    payload = _cron_project_ideas_payload(settings.project_ideas_cache_seconds)
+    if payload is not None:
         return payload
-
-    if not refresh:
-        payload = _cron_project_ideas_payload(settings.project_ideas_cache_seconds)
-        if payload is not None:
-            payload["cached"] = False
-            _PROJECT_IDEAS_CACHE["payload"] = payload
-            _PROJECT_IDEAS_CACHE["expires_at"] = (
-                now + settings.project_ideas_cache_seconds
-            )
-            return payload
-
-    requests = fetch_recent_requests(limit=100)
-    payload = summarize_project_ideas(requests)
-    payload["cached"] = False
-    _PROJECT_IDEAS_CACHE["payload"] = payload
-    _PROJECT_IDEAS_CACHE["expires_at"] = now + settings.project_ideas_cache_seconds
-    return payload
+    return {
+        "ok": True,
+        "source": "cron",
+        "cached": True,
+        "stale": True,
+        "generated_at": None,
+        "source_request_count": 0,
+        "ideas": [],
+    }
 
 
 def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
@@ -1005,10 +956,9 @@ async def health(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "crowdcode-backend"})
 
 
-async def project_ideas(request: Request) -> JSONResponse:
-    refresh = request.query_params.get("refresh") in {"1", "true", "yes"}
+async def project_ideas(_: Request) -> JSONResponse:
     try:
-        payload = await run_in_threadpool(_project_ideas_payload, refresh)
+        payload = await run_in_threadpool(_project_ideas_payload)
     except Exception as exc:
         return _json_error(str(exc))
     return JSONResponse(payload)

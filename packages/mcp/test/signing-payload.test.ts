@@ -64,6 +64,71 @@ describe("getReviewSigningPayload", () => {
     expect(message.type).toBe("crowdcode.review.v1");
   });
 
+  it("does not let caller fields override an existing service identity", async () => {
+    const canonicalTarget = "0x" + "11".repeat(20);
+    const deps = fakeDeps({
+      score: {
+        found: true,
+        service_id: "svc_serverresolved00000",
+        service_name: "OCR",
+        canonical_endpoint: "https://api.example.com/v1",
+        payment_provider: "x402",
+        payment_target_ref: canonicalTarget,
+        directory_slug: "example-ocr",
+      },
+    });
+    const result = await getReviewSigningPayload(deps, {
+      ...BASE_ARGS,
+      service_id: "svc_serverresolved00000",
+      api_endpoint: "https://attacker.example/api",
+      payment_provider: "mppx",
+      payment_target_ref: "0x" + "99".repeat(20),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.identity).toMatchObject({
+      service_id: "svc_serverresolved00000",
+      api_endpoint: "https://api.example.com/v1",
+      payment_provider: "x402",
+      payment_target_ref: canonicalTarget,
+      directory_slug: "example-ocr",
+    });
+  });
+
+  it("uses a database-authorized registered alias when returned", async () => {
+    const aliasTarget = "0x" + "22".repeat(20);
+    const deps = fakeDeps({
+      score: {
+        found: true,
+        service_id: "svc_serverresolved00000",
+        service_name: "OCR",
+        canonical_endpoint: "https://api.example.com/v1",
+        payment_provider: "x402",
+        payment_target_ref: "0x" + "11".repeat(20),
+        directory_slug: "example-ocr",
+        resolved_identity: {
+          service_id: "svc_serverresolved00000",
+          api_endpoint: "https://api.example.com/v1",
+          payment_provider: "mppx",
+          payment_target_ref: aliasTarget,
+          directory_slug: "example-ocr",
+        },
+      },
+    });
+    const result = await getReviewSigningPayload(deps, {
+      ...BASE_ARGS,
+      service_id: "svc_serverresolved00000",
+      payment_provider: "mppx",
+      payment_target_ref: aliasTarget,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.identity).toMatchObject({
+      payment_provider: "mppx",
+      payment_target_ref: aliasTarget,
+    });
+  });
+
   it("keeps caller identity verbatim when the service is not found", async () => {
     const deps = fakeDeps({});
     const result = await getReviewSigningPayload(deps, {

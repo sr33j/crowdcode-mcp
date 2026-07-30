@@ -212,9 +212,11 @@ to include the proof next time.
 If the signature does not match (typically because the service was registered
 between signing and submitting, changing the resolved `service_id`), the error
 response includes `resolved_identity` and `expected_message` — `crowdcode-mcp`
-re-signs and retries this **automatically once**; external signers should
-re-sign `expected_message` with the same wallet and retry with the returned
-identity fields.
+rebuilds the canonical CrowdCode review payload locally, requires a byte-exact
+match with `expected_message`, and only then re-signs and retries
+**automatically once**. It never signs arbitrary backend-provided text.
+External signers should apply the same check before signing and retry with the
+returned identity fields.
 
 V1 does not call Stripe. The verification function is isolated in
 `src/crowdcode/payments.py` so real Stripe verification can replace it later.

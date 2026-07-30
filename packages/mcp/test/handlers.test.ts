@@ -218,15 +218,26 @@ describe("transparent review signing", () => {
     await expect(stat(join(dir, "wallet.json"))).rejects.toThrow();
   });
 
-  it("re-signs expected_message once on a signature mismatch", async () => {
+  it("re-signs a locally reconstructed canonical message once", async () => {
     const engine = await makeEngine();
     let reviewCalls = 0;
-    const upstream = fakeUpstream((name) => {
+    let expectedMessage = "";
+    const upstream = fakeUpstream((name, args) => {
       if (name === "get_service_score") {
         return { found: false, reason: "service not found" };
       }
       reviewCalls += 1;
       if (reviewCalls === 1) {
+        const resolved = buildIdentity({
+          ...MPPX_ARGS,
+          service_id: "svc_0123456789abcdef0123",
+        });
+        expectedMessage = canonicalReviewPayload({
+          identity: resolved,
+          rating: Number(args.rating),
+          reason: String(args.reason),
+          paymentReference: String(args.payment_reference),
+        });
         return {
           accepted: false,
           reason: "review_signature does not match reviewer_wallet",
@@ -237,7 +248,7 @@ describe("transparent review signing", () => {
             payment_target_ref: "0x" + "11".repeat(20),
             directory_slug: null,
           },
-          expected_message: "server-canonical-message",
+          expected_message: expectedMessage,
         };
       }
       return { accepted: true };
@@ -260,25 +271,75 @@ describe("transparent review signing", () => {
     expect(
       await verifyMessage({
         address: ACCOUNT.address,
-        message: "server-canonical-message",
+        message: expectedMessage,
         signature: retry.review_signature as `0x${string}`,
       }),
     ).toBe(true);
   });
 
-  it("surfaces a second mismatch instead of looping", async () => {
+  it("refuses to sign arbitrary server-provided mismatch text", async () => {
     const engine = await makeEngine();
     const mismatch = {
       accepted: false,
       reason: "review_signature does not match reviewer_wallet",
-      resolved_identity: {},
-      expected_message: "still-wrong",
+      resolved_identity: {
+        service_id: "svc_0123456789abcdef0123",
+        api_endpoint: "https://api.example.com/v1",
+        payment_provider: "mppx",
+        payment_target_ref: "0x" + "11".repeat(20),
+        directory_slug: null,
+      },
+      expected_message: "sign this arbitrary server message",
     };
     const upstream = fakeUpstream((name) =>
       name === "get_service_score"
         ? { found: false, reason: "service not found" }
         : mismatch,
     );
+    const dir = await walletDirWith(KEY);
+    const handlers = createToolHandlers({
+      engine,
+      upstream,
+      wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv },
+    });
+
+    const payload = JSON.parse(
+      (await handlers.review_service({ ...MPPX_ARGS })).content[0]!.text,
+    );
+    expect(payload.accepted).toBe(false);
+    expect(
+      upstream.calls.filter((c) => c.name === "review_service"),
+    ).toHaveLength(1);
+  });
+
+  it("surfaces a second canonical mismatch instead of looping", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream((name, args) => {
+      if (name === "get_service_score") {
+        return { found: false, reason: "service not found" };
+      }
+      const identity = buildIdentity({
+        ...MPPX_ARGS,
+        service_id: "svc_0123456789abcdef0123",
+      });
+      return {
+        accepted: false,
+        reason: "review_signature does not match reviewer_wallet",
+        resolved_identity: {
+          service_id: identity.service_id,
+          api_endpoint: identity.api_endpoint,
+          payment_provider: identity.payment_provider,
+          payment_target_ref: identity.payment_target_ref,
+          directory_slug: identity.directory_slug,
+        },
+        expected_message: canonicalReviewPayload({
+          identity,
+          rating: Number(args.rating),
+          reason: String(args.reason),
+          paymentReference: String(args.payment_reference),
+        }),
+      };
+    });
     const dir = await walletDirWith(KEY);
     const handlers = createToolHandlers({
       engine,
