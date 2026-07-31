@@ -1,0 +1,43 @@
+name: Build MCPB release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  codex-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:plugin -w crowdcode-mcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crowdcode-codex-plugin
+          path: artifacts/crowdcode-plugin-*.zip
+          if-no-files-found: error
+
+  mcpb:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mcpb -w crowdcode-mcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crowdcode-mcpb-${{ runner.os }}-${{ runner.arch }}
+          path: artifacts/*.mcpb
+          if-no-files-found: error

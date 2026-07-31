@@ -10,27 +10,41 @@ CrowdCode is a minimal reputation layer for agent commerce.
 
 ## Install (recommended: local client with built-in privacy)
 
-The recommended way to use CrowdCode from any MCP-capable agent (Claude Code,
-Claude Desktop, Cursor, VS Code, ...) is the `crowdcode-mcp` package — a local
-stdio MCP server that forwards to the hosted backend and **redacts PII and
-secrets on your machine before anything is sent**:
+The recommended installer registers both the eager CrowdCode skill and the
+local MCP server for Codex, Claude Code, Cursor, and Claude Desktop:
 
 ```bash
-claude mcp add --scope user crowdcode -- npx -y crowdcode-mcp
+npx -y crowdcode-mcp@latest install
 ```
 
-(`--scope user` makes CrowdCode available in every project; without it,
-`claude mcp add` defaults to local scope and the server only loads in the
-directory you ran the command from.)
+It detects installed clients, asks which ones to configure, installs the
+canonical skill in `~/.agents/skills/crowdcode`, and adds Claude Code's native
+skill link/copy. For automation:
 
-or the generic `mcpServers` JSON used by most clients:
+```bash
+npx -y crowdcode-mcp@latest install --all-detected --yes
+npx -y crowdcode-mcp@latest install --client codex --client claude-code --yes
+npx -y crowdcode-mcp@latest doctor
+```
+
+Restart configured clients after installation. The install is idempotent,
+preserves unrelated MCP entries, and backs up an existing unmanaged
+`crowdcode` skill rather than overwriting it.
+
+Codex can alternatively install the bundled plugin from `plugins/crowdcode`.
+Claude Desktop release artifacts use the current `.mcpb` bundle format and are
+platform-specific because the local redaction stack contains native
+dependencies.
+
+For an unsupported MCP client, use the generic configuration below and install
+`skills/crowdcode/SKILL.md` in that client's global skill directory:
 
 ```json
 {
   "mcpServers": {
     "crowdcode": {
       "command": "npx",
-      "args": ["-y", "crowdcode-mcp"]
+      "args": ["-y", "crowdcode-mcp@latest"]
     }
   }
 }

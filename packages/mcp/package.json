@@ -1,6 +1,6 @@
 {
   "name": "crowdcode-mcp",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "CrowdCode MCP client with local-first PII redaction. Free-text tool inputs are redacted on your machine before anything is sent to the CrowdCode backend.",
   "license": "MIT",
   "type": "module",
@@ -18,11 +18,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/sync-assets.mjs",
+    "build:mcpb": "npm run build && node scripts/build-mcpb.mjs",
+    "build:plugin": "npm run build && node scripts/build-plugin.mjs",
+    "check:assets": "node scripts/sync-assets.mjs --check",
     "dev": "tsup --watch",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run check:assets"
   },
   "dependencies": {
     "@crowdcode/redaction": "^0.1.0",
@@ -31,7 +34,9 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^22.0.0",
+    "fflate": "^0.8.3",
     "tsup": "^8.3.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

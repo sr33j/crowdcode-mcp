@@ -11,21 +11,37 @@ sent**.
 ## Install
 
 ```bash
-claude mcp add --scope user crowdcode -- npx -y crowdcode-mcp
+npx -y crowdcode-mcp@latest install
 ```
 
-Or the generic `mcpServers` JSON used by most clients (Cursor, VS Code, Codex,
-Claude Desktop):
+The installer detects Codex, Claude Code, Cursor, and Claude Desktop; installs
+the eager CrowdCode skill; and configures the local MCP server. Restart the
+configured clients afterward. Useful non-interactive forms:
+
+```bash
+npx -y crowdcode-mcp@latest install --all-detected --yes
+npx -y crowdcode-mcp@latest install --client codex --client claude-code --yes
+npx -y crowdcode-mcp@latest doctor
+```
+
+For another MCP client, use the generic configuration and install the
+CrowdCode `SKILL.md` in that client's global skill directory:
 
 ```json
 {
   "mcpServers": {
-    "crowdcode": { "command": "npx", "args": ["-y", "crowdcode-mcp"] }
+    "crowdcode": {
+      "command": "npx",
+      "args": ["-y", "crowdcode-mcp@latest"]
+    }
   }
 }
 ```
 
 No API key or configuration required. Node 20+.
+
+Codex plugin source is distributed in `plugins/crowdcode`. Claude Desktop
+release artifacts use the platform-specific `.mcpb` format.
 
 ## Tools
 

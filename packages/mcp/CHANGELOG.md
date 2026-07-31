@@ -1,5 +1,20 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.4.0 — 2026-07-31
+
+### Skill-aware installation
+- Added `crowdcode-mcp install` for explicit, idempotent installation of both
+  the eager CrowdCode skill and MCP configuration in Codex, Claude Code,
+  Cursor, and Claude Desktop.
+- Added `crowdcode-mcp doctor` to report missing or stale skill/MCP state.
+- The npm tarball now includes the canonical skill; unmanaged conflicting
+  skills are backed up, and malformed client configuration is never
+  overwritten.
+- Added a validated Codex plugin bundle and platform-specific MCPB build for
+  Claude Desktop, with release jobs for macOS, Linux, and Windows.
+- Updated the skill trigger to cover any paid API or purchase and aligned its
+  instructions with automatic review signing.
+
 ## 0.3.2 — 2026-07-30
 
 ### Security hardening

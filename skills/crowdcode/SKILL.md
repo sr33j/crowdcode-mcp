@@ -1,157 +1,68 @@
 ---
 name: crowdcode
-description: Reputation layer for paid agent services (x402, mppx/MPP, Stripe) — check a service's score before spending and submit a payment-verified review after paying. Use whenever paying for, provisioning, or calling a paid service, especially x402 or mppx/MPP.
+description: Mandatory reputation checks for paid agent services. Use whenever an agent may spend money, call or provision a paid API, make an x402 or MPP/mppx request, use AgentCash or Stripe for a service, or purchase any external capability. Check CrowdCode before the first payment and review the service after every paid use, including failures.
 ---
 
 # CrowdCode
 
-CrowdCode is a shared reputation layer for paid agent services. Reach for it
-whenever a task involves paying for, provisioning, or calling a paid service —
-particularly **x402** or **mppx/MPP** services: check the score before spending,
-and review after paying.
+Use CrowdCode as the reputation layer around paid agent services. Do not begin
+a command or tool call that may charge money until the pre-payment check is
+complete.
 
-## Install (once)
+## Before spending
 
-Add the local MCP client so the tools are always available (it also redacts
-PII/secrets on-device before anything is sent):
+1. Call `get_service_score` for every finalist before its first paid call.
+2. Identify the service with the strongest values available:
+   `api_endpoint + payment_provider + payment_target_ref`; otherwise use
+   `service_id` or `directory_slug`.
+3. Compare the canonical `score` and use `n_eff` as evidence strength.
+   `unproven: true` means insufficient trusted evidence, not a bad service;
+   fall back to directory metadata, price, and the active spend policy.
+4. Read `summary` when present for reported strengths, failures, and caveats.
+5. Tell the user what will be spent when the surrounding workflow does not
+   already provide a clear spending disclosure.
 
-```bash
-claude mcp add --scope user crowdcode -- npx -y crowdcode-mcp
-```
+If the score check fails because CrowdCode is temporarily unavailable, report
+that fact before spending and follow the returned `next_step`. Do not silently
+treat a missing check as approval.
 
-or the generic `mcpServers` config used by most clients (Cursor, VS Code,
-Codex, ...):
+## After paid use
 
-```json
-{
-  "mcpServers": {
-    "crowdcode": { "command": "npx", "args": ["-y", "crowdcode-mcp"] }
-  }
-}
-```
+Call `review_service` after every paid use, whether it succeeded, returned a
+poor result, timed out, or failed after payment. Judge the response against the
+original task:
 
-If a local process is not possible, point the client at the hosted
-streamable-HTTP endpoint `https://crowdcode-backend.onrender.com/mcp` instead
-(no local redaction; write carefully).
+- **5** — excellent, relevant, fast, and reusable with no concrete caveat.
+- **4** — helpful, with a specific schema, documentation, latency, or output
+  caveat.
+- **3** — mixed, thin, confusing, or technically valid but not useful.
+- **2** — paid but poor, unclear, or difficult to use.
+- **1** — paid and broken, unusable, misleading, or severely unreliable.
 
-## Before paying for, provisioning, or calling a paid service
+State the observed reason plainly. A bad paid outcome is the reason for a low
+review, not a reason to skip reviewing.
 
-- Call `get_service_score(...)` on each finalist using the strongest available identity.
-- Prefer `api_endpoint + payment_provider + payment_target_ref`; fall back to `service_id` or `directory_slug` when that is all you have.
-- Prefer higher `score` (the canonical trust-weighted rating), using `n_eff` as evidence context. `unproven: true` means not enough trusted reviews yet — treat it as insufficient evidence, not a bad score.
-- When present, `summary` digests what reviewers reported (strengths / failure modes / caveats).
-- For unproven services, fall back to directory metadata, price, and the active spend policy.
+`review_service` signs automatically with the local payer-compatible wallet.
+Do not call `get_review_signing_payload` or create a signature manually unless
+automatic signing fails or an external payer wallet must be used.
 
-## When you would have paid for a service that does not exist
+For x402 and MPP/mppx, take identity and proof from the actual payment rather
+than a directory listing:
 
-- Call `request_service(service_description, task_context?)` once for the unmet need.
-- The gate is **willingness to pay**, not sellability: you were actively trying
-  to *buy* this capability — you had the task, a wallet, and spend authority,
-  and would have paid concrete money right then if the service existed.
-  "A provider could charge for this" is not enough; a free tool that would
-  merely have been convenient is not a service request.
-- It must still be something a provider could sell as a **remote paid API**
-  (x402/mppx/Stripe) — a capability you would buy with an HTTP request to
-  someone else's endpoint.
-- Describe it as the paid API call you wanted to make: the input you would
-  have sent, the output or state change you were paying for, and roughly what
-  a call was worth to the task (e.g. "would have paid ~$0.05–0.25 per lookup").
-- Keep the service general enough to serve multiple users; describe the reusable capability, not only this user's one-off task.
-- Prefer descriptions like:
-  - "Accepts a GitHub repository URL and failing CI logs, then opens a pull request with a focused fix — worth ~$1–5 per fix."
-  - "Resolves a citation like 'Smith et al. 2019 on X' to the actual paper, or reports that it does not exist — worth ~$0.10 per lookup."
-  - "Semantic search over paywalled full-text academic PDFs, returning page-level citations — worth ~$0.25 per query."
-- Avoid descriptions like "fix my CI" or "help with this repo" (one-off task help).
-- Avoid free-tool wishes — anything you would only use if it cost nothing.
-- Avoid wishes about your own runtime or agent harness — "cleaner context",
-  "more memory", local compute or IDE capabilities. Those are not purchasable
-  network services.
-- In `task_context`, say what you were trying to accomplish, that you searched
-  for a paid service and found none, and what you were prepared to spend.
-- Do not call it for vague brainstorming, ordinary local coding tasks, generic failures, or cases where an acceptable service already exists.
-- Do not include secrets, credentials, private user data, or long source snippets. (The local client also redacts these automatically — the `_redaction` field in results confirms it ran.)
+- `payment_reference`: x402 settlement transaction hash or MPP
+  `Payment-Receipt` reference.
+- `payment_proof`: the base64 response-header value when available, not a
+  decoded object or bare transaction hash.
+- `payment_target_ref`: the actual payment recipient/on-chain transfer payee.
 
-## After any paid use: review the service
+If the payer wallet differs from the local signing wallet, supply a signature
+from the wallet that actually sent the payment. Follow a returned `next_step`
+or canonical signature-mismatch retry once; never invent payment evidence.
 
-Review after **every** paid use — success, slow response, or failure. A bad
-outcome is not a reason to skip the review; it **is** the review: the slowness
-or breakage goes in the rating and the reason. If a paid call is still hanging,
-don't wait indefinitely for a perfect result — review what you observed (e.g.
-"paid, no response after N minutes" is a 1).
+## Missing paid service
 
-Call `review_service(rating, reason, payment_reference, ...)`. Rate on this
-scale, based only on what you actually observed. Judge the output against the
-ORIGINAL task you were trying to solve (the `task_context`): was the response
-relevant, and did it actually help answer that question?
-
-- **5** — excellent: clear schema, relevant output that answered the original
-  question, fast, clean receipt/proof; you would reuse it confidently.
-- **4** — worked and helped with the task, but with a real
-  schema/docs/latency/output caveat (name the caveat in the reason).
-- **3** — mixed: paid successfully but the response was thin, confusing,
-  required guesswork, or was not actually relevant or helpful for the task —
-  a technically valid answer that did not help is a 3 at best.
-- **2** — paid but poor experience: client error, unclear failure, or hard to
-  use.
-- **1** — paid and broken: server error, unusable output, misleading challenge,
-  timeout, or severe reliability issue.
-
-A service that simply worked well AND helped with the task is a **5** — do
-not hedge to 4 without a concrete caveat you can name.
-
-For a new service, also include `service_name` so CrowdCode can register it.
-
-Edge case: an x402/mppx review needs the payment receipt header as
-`payment_proof`. If the service took your payment but never returned a
-response (so you have no receipt header), you may not be able to submit a
-verifiable review — still attempt it with the on-chain settlement tx hash as
-`payment_reference` if you can find it, and note the missing receipt in the
-reason.
-
-For `x402` and `mpp`/`mppx` (crypto-settled) reviews, the backend re-verifies
-the payment **on-chain** and checks your **signature**, so the identity and
-proofs must come from the real payment, not from a directory. Get these right or
-the review is rejected:
-
-- **`payment_reference`** — the settlement **transaction hash** (x402) or the
-  `Payment-Receipt` `reference` (mppx). It is unique: one review per payment.
-- **`payment_proof`** — the **base64 header value** the service returned, passed
-  as a plain string:
-  - x402 → the `payment-response` (aka `x-payment-response`) response header.
-  - mppx → the `Payment-Receipt` response header.
-  - Do **not** pass the bare transaction hash, and do **not** pass a decoded
-    JSON object — only the base64 string.
-- **`payment_target_ref`** — the **actual payee**: the `recipient` in the `402`
-  challenge, or the `to` of the on-chain token Transfer. Do **not** use the
-  `payTo` from a directory/bazaar listing — it can differ from where the money
-  actually went, and a mismatch is rejected.
-- **`reviewer_wallet`** — the wallet that actually **sent** the payment: the
-  `from` of the ERC-20 `Transfer` event (the payer/authorizer). For gasless
-  x402/mppx the transaction's own `from` is a facilitator/relayer, **not** you —
-  use the `Transfer` event `from`.
-
-You must sign with a wallet you control: `reviewer_wallet` has to be a
-self-custody key that can produce an EIP-191 signature **and** be the same
-wallet that paid. A custodial or login-only wallet (e.g. a hosted Tempo wallet)
-that cannot sign an arbitrary message will not work — pay and sign from an EOA
-whose key you hold.
-
-Then:
-
-1. Call `get_review_signing_payload(...)`. Through the local client this runs
-   on-device and returns `message`, plus `reason` and `identity` echoed back.
-2. Sign `message` **verbatim** (byte-for-byte) with the payer wallet using
-   EIP-191 (`personal_sign`).
-3. Call `review_service` in the same session, passing the returned `reason`
-   string and every `identity` field **verbatim**, plus `payment_proof`,
-   `reviewer_wallet`, `review_signature`, and `signature_scheme="eip191"`.
-   Include the `WWW-Authenticate` challenge as `payment_challenge` for mppx when
-   available.
-4. If the response reports a signature mismatch and includes `expected_message`
-   and `resolved_identity`, re-sign `expected_message` with the same wallet and
-   retry once using `resolved_identity`.
-
-Reviews without a valid, unused payment reference are expected to be rejected.
-
-CrowdCode v1 uses a placeholder payment gate for Stripe/manual providers. The
-hosted server owns verification; this skill holds no secrets.
+Call `request_service` once only when the agent was actively trying to buy a
+remote API capability, had spend authority, and would have paid a concrete
+amount immediately, but no suitable paid service existed. Describe reusable
+inputs, outputs, and approximate per-call value. Do not submit free-tool wishes,
+local runtime wishes, one-off task help, secrets, or private user data.

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "crowdcode": {
+      "command": "npx",
+      "args": ["-y", "crowdcode-mcp@latest"]
+    }
+  }
+}
