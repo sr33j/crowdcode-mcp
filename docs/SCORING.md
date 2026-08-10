@@ -1,6 +1,6 @@
 # CrowdCode Scoring & Reputation — Design Doc (v1)
 
-Status: **accepted design, not yet implemented**
+Status: **implemented (`crowdcode-scoring-v1`, updated for backend 0.5.0)**
 Date: 2026-07-26
 Simulation evidence: `docs/scoring/sim_scoring3.py` (deterministic, seed=42)
 
@@ -23,10 +23,10 @@ backtest — accuracy is a number we report, not a claim we make.
   the website. (Today the MCP returns `weighted_rating` with no prior while the
   site ranks on `rank_score` with a hardcoded 4.0/weight-5 prior — both are
   replaced by this spec.)
-- **Reviews are not payment-gated.** Anyone can review any resource — paid
-  x402/mppx APIs, npm packages, MCP servers, links — by signing with a wallet.
-  Payment is evidence, not admission: it collateralizes the *reviewer*, and a
-  verified payment upweights the review.
+- **New machine-payment reviews are payment-gated.** An x402/mppx review must
+  carry a valid wallet signature and a transaction that CrowdCode verifies on
+  its supported chain. Legacy `signature_only` rows remain readable but new
+  unverifiable payments are not stored.
 - **Influence must be earned; bad actors round to zero.** Free identities get
   zero weight by default. Any nonzero default weight × unlimited free wallets
   = unbounded attack (confirmed in simulation, §6.2). Trust flows only from
@@ -52,6 +52,12 @@ score(s) = ( Σᵢ wᵢ·rᵢ + κ·μ₀ ) / ( Σᵢ wᵢ + κ )
 
 Published alongside the score: `n_eff = Σᵢ wᵢ`. A resource with `n_eff ≈ 0`
 must display as **unproven at the prior**, never as a starred rating.
+
+The index `i` is a wallet/service/UTC-calendar-day bucket, not an individual
+call. All unique paid outcomes remain stored. Within a bucket, the rating is
+the proof-and-decay-weighted average of its reviews, while the bucket evidence
+is capped at the strongest single review. Repeated calls improve that day's
+estimate without multiplying one wallet's influence.
 
 ### 3.2 Review weight
 
@@ -95,9 +101,10 @@ weight(w) = raw(w)   if raw(w) ≥ θ      (θ = 0.1)
 cap: raw is clamped above at 1.0
 ```
 
-**Update rule (proper scoring rule / information content).** On each review
-ingest, compute the resource's **leave-one-out score** `LOO` — the score with
-this wallet's own reviews excluded. The current consensus implies a success
+**Update rule (proper scoring rule / information content).** During the nightly
+authoritative replay, process each wallet/service/UTC-day bucket once and
+compute the resource's **leave-one-out score** `LOO` — the score with this
+wallet's own reviews excluded. The current consensus implies a success
 probability:
 
 ```
@@ -116,8 +123,9 @@ reviews from all scores retroactively.
 ### 3.4 Admissibility (hard gates, before any math)
 
 1. Valid EIP-191 signature by `reviewer_wallet` over the canonical payload.
-2. Rate limit: 1 review per (wallet, resource) per day. *(This is the only
-   volume cap — deliberately. Weight, not volume, is the defense.)*
+2. Every unique verified payment may produce a stored review. Scoring and
+   trust aggregate all reviews for one wallet/resource/UTC day into one capped
+   bucket; there is no review-ingest throttle.
 3. `payment_reference` unique on its **canonical form** (provider prefixes
    like `x402:base:` stripped) — the same settlement tx can never yield two
    reviews under different spellings.
@@ -127,18 +135,16 @@ reviews from all scores retroactively.
    the 402 challenge price** when one is stated) — else the review is
    **rejected outright**: a failing proof is worse than no proof and must
    never silently downgrade.
-5. With **no proof**, a `payment_reference` that is a tx hash runs the same
-   on-chain check; a matching transfer upgrades to `onchain_verified`, and
-   any definitive chain "no" (failed tx, wrong token, wrong payee) admits
-   the review at `signature_only`. The one retryable outcome is an
-   unreachable RPC: the review is admitted at `signature_only` with
-   `verification_failure=rpc_unreachable`, and the nightly cron re-checks it
-   (up to 5 attempts / 14 days) so a network flake never permanently costs
-   the verified multiplier.
-6. Token pinning is symmetric across both routes: with no pinned token
-   configured for the chain, neither a proof nor a tx hash upgrades to
-   `onchain_verified` — the review is admitted at `signature_only`
-   (server misconfiguration is never the client's fault).
+5. With **no proof**, `payment_reference` must still be a transaction hash and
+   runs the same on-chain check. Failed transactions, wrong token/payee/payer,
+   malformed references, and unsupported chains reject the review and store
+   nothing. An unreachable RPC returns a retryable unavailable result, stores
+   nothing, and does not reserve the reference.
+6. Token pinning is symmetric across both routes. A missing pin is a retryable
+   verifier-configuration error and stores nothing.
+7. New machine-payment verification supports x402 USDC on Base and mppx on
+   Tempo. Solana and all other chains are explicitly unsupported; they never
+   fall back to `signature_only`.
 
 ### 3.5 Seeds
 
@@ -202,8 +208,8 @@ re-fit the constants against the production backtest (§8.4).
 
 ## 6. Simulation evidence
 
-Deterministic (seed=42), 100 rounds; each round every reviewer reviews each of
-their services once (matching the 1/day rate limit). Honest behavior: 5 stars
+Deterministic (seed=42), 100 daily rounds; each round every reviewer reviews
+each of their services once (matching the UTC-day influence cap). Honest behavior: 5 stars
 if the call worked, 1 if it failed. True quality of a service with reliability
 p is the expected honest rating `1 + 4p`. Reproduce with
 `python docs/scoring/sim_scoring3.py`.
@@ -265,7 +271,7 @@ then min MAE.
 |---|---|---|
 | Sybil flood (n fresh wallets, free reviews) | ~0 | ~0 — wallets never cross θ; resource sits at prior with n_eff ≈ 0, displayed "unproven" (§6.3) |
 | Wash-trade own resource | gas/fees | 0 weight — LOO keeps their consensus at prior; no trust ever earned (§6.3) |
-| Earn-then-pump (review honestly elsewhere, then pump own resource) | weeks of honest reviewing per wallet | bounded: one trusted wallet moves a lonely resource ≈ prior→3.7 at 1 review/day; LOO blocks trust gain from it; the first honest trusted review starts both correcting the score and (in the v2 batch re-evaluation) slashing the pumper's trust |
+| Earn-then-pump (review honestly elsewhere, then pump own resource) | weeks of honest reviewing per wallet | bounded: one trusted wallet moves a lonely resource ≈ prior→3.7 per daily bucket; LOO blocks trust gain from it; the first honest trusted review starts both correcting the score and (in the v2 batch re-evaluation) slashing the pumper's trust |
 | Nuke a competitor | trust burned per wrong review | log-penalty ≈ 3.5× the honest gain per review; a trusted wallet self-slashes below θ within a handful of contradicted reviews |
 | Consensus echo (farm trust by copying scores) | time | ~0 gain — proper scoring rule pays only for information beyond the prior |
 | Whitewash (rotate resource identity) | redeploy | restart at prior with n_eff = 0; spend policies should prefer proven resources |
@@ -280,31 +286,28 @@ co-spend, timing) caps per-cluster weight per resource.
 
 ## 8. Architecture
 
-### 8.1 Dynamic, not cron (for scoring)
+### 8.1 Review write path
 
-The v1 trust rule is *local*: a new review affects only the reviewer's trust
-and that one resource's score. Both are recomputed on the **write path** at
-review ingest, in one transaction:
+The write path validates and stores each unique paid outcome, then refreshes
+the affected resource's score using current trust in one transaction:
 
 1. Admissibility gates (§3.4); reject or admit.
-2. Compute the resource's LOO score for this wallet; apply the trust update to
-   `users.raw_trust`.
-3. Recompute and store the resource's score row (`score`, `n_eff`).
+2. Store the review and its verified payment metadata.
+3. Recompute and store the resource's score (`score`, `n_eff`), with daily
+   bucket aggregation applied by the canonical scoring function.
 
 Reads apply time decay at query time (or read the stored row; staleness from
 decay alone is bounded and corrected by the sweep). All reads — MCP
 `get_service_score`, `/api/services`, `/api/services/top` — go through **one**
-canonical scoring function (natural home: `src/crowdcode/scoring.py`, currently
-a stub).
+canonical scoring function in `src/crowdcode/scoring.py`.
 
 ### 8.2 Cron (Render Cron Job service, one entrypoint, dependency order)
 
-1. **Nightly consistency sweep** — recompute all trust and scores from scratch;
-   alert on drift vs the incremental values. This also catches the trust
-   ripple: new reviews can flip whether *old* reviews were corroborated, which
-   the write path deliberately does not chase. (This job is where the v2
-   EigenTrust fixed-point iteration will live — same job, looped to
-   convergence.)
+1. **Nightly consistency sweep** — replay one wallet/resource/UTC-day bucket
+   at a time, recompute trust and scores from scratch, and alert on drift. Trust
+   updates happen only here, so bursts of paid calls cannot multiply either
+   score or reputation influence. This job is also where a future EigenTrust
+   fixed-point iteration can live.
 2. **Per-resource review summaries** (LLM) — only for resources with reviews
    newer than `last_summarized_at`; summarizer input is trust-weighted (wallets
    below θ don't get to write the narrative); output is a constrained
@@ -324,7 +327,9 @@ a stub).
 - `wallet_users.is_seed`: operator wallets pinned at 1.0, synced from
   `CROWDCODE_SEED_WALLETS`.
 - `reviews.amount` extracted from `payment_proof` **after** the token-pinning
-  and amount-validation fixes land (the JSONB value is untrusted today).
+  and amount-validation checks pass.
+- `reviews(service_id, reviewer_wallet, created_at)` B-tree index supports the
+  daily bucket access path; existing review RLS remains default-deny.
 - `services`: `resource_type`, `score`, `n_eff`, `score_updated_at`,
   `last_summarized_at`; verify `created_at` exists on `services` and
   `service_requests`.
@@ -341,7 +346,7 @@ third parties from public signed reviews and on-chain payments.
 ## 9. v2 roadmap (deferred, deliberately)
 
 1. **Full EigenTrust fixed point** — iterate the trust update over the whole
-   graph to convergence in the nightly job; write path unchanged. Needed once
+   graph to convergence in the nightly job. Needed once
    enough non-seed wallets hold trust that *their* corroboration of third
    parties should compound, and it retroactively re-scores old reviews against
    shifted consensus (slashing earn-then-pump attackers).

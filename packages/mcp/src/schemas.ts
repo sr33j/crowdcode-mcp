@@ -65,7 +65,7 @@ export const requestServiceShape = {
     .nullish()
     .describe(
       "EVM 0x address identifying who is asking (rate-limit key). " +
-        "Auto-filled from your local agentcash/X402_PRIVATE_KEY wallet — " +
+        "Auto-filled from your local agentcash wallet — " +
         "only pass it to override.",
     ),
 };
@@ -104,9 +104,9 @@ export const reviewServiceShape = {
     .describe(
       "Optional: the base64 payment-response (x402) or Payment-Receipt " +
         "(mppx) header string. Verified-purchase status comes from on-chain " +
-        "transfer verification, which also works from a settlement tx hash " +
-        "in payment_reference alone — without either, the review is stored " +
-        "as UNVERIFIED and carries half weight in scoring.",
+      "transfer verification, which also works from a settlement tx hash " +
+        "in payment_reference alone. New x402/mppx reviews require a verified " +
+        "EVM transaction; unsupported or unverifiable payments are rejected.",
     ),
   payment_challenge: z.string().nullish(),
   reviewer_wallet: z
@@ -118,7 +118,8 @@ export const reviewServiceShape = {
     .nullish()
     .describe(
       "Optional; crowdcode-mcp signs automatically with your local " +
-        "agentcash/X402_PRIVATE_KEY wallet. A supplied signature always wins.",
+      "agentcash wallet. Environment private keys are not accepted. A supplied " +
+        "signature always wins.",
     ),
   signature_scheme: z.string().default("eip191"),
 };

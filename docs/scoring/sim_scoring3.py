@@ -6,7 +6,7 @@ pumper wallets that always rate 5 and review nothing else.
 
 Reviewers: 1 seed (honest, weight pinned 1.0, seeded services only),
 3 honest (review everything), 10 inverters, 10 randoms, 5 pumpers.
-Rate limit as in prod: 1 review per wallet per service per round (day).
+Influence cap as in prod: one bucket per wallet/service/round (UTC day).
 
 Trust rule: raw trust in [RAW_FLOOR, cap]; per review, p is implied by the
 LEAVE-ONE-OUT score (own reviews excluded -- you cannot earn trust from a

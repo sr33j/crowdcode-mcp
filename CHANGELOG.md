@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 (backend) — 2026-08-10
+
+### Integration hardening
+- Every MCP tool now returns an additive status envelope (`status`,
+  `error_code`, `retryable`). Dependency failures return `unavailable` with a
+  correlation ID and never expose raw exception details; score misses remain
+  distinguishable as `not_found`.
+- Added `/health` liveness and `/ready` dependency readiness checks. The Render
+  web service now uses the always-on Starter plan and gates traffic on
+  database plus redactor readiness.
+- New x402/mppx reviews fail closed unless the payer signature and supported
+  on-chain transfer verify. RPC outages and missing verifier configuration are
+  retryable but store nothing and reserve no payment reference. x402 Base and
+  mppx Tempo are supported; Solana and other chains are rejected explicitly.
+- Duplicate lookup now runs only after payer verification, preventing a third
+  party from probing or reserving a public transaction hash before its payer.
+  The canonical unique index remains the concurrency backstop.
+- Every unique verified payment can be reviewed. All paid outcomes remain
+  stored, while score and trust influence are capped to one proof/decay-
+  weighted wallet/service/UTC-day bucket. Trust is updated authoritatively in
+  the nightly replay, once per bucket.
+- Added the composite review index used by daily aggregation. Existing RLS
+  remains default-deny; no new table or permissive policy was introduced.
+
+Apply `supabase/schema.sql` before deploying this version.
+
 ## 0.4.0 (backend) — 2026-07-27
 
 ### Tx-hash-only payment verification & honest verification levels

@@ -32,8 +32,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ("http://127.0.0.1:5173", "http://localhost:5173")
     requests_table: str = "service_requests"
     project_ideas_cache_seconds: int = 86400
-    # Rolling-24h abuse throttles keyed on wallet identity; 0 disables.
-    review_rate_limit_per_day: int = 1
+    # Rolling-24h request throttle keyed on wallet identity; 0 disables.
     request_rate_limit_per_day: int = 5
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
@@ -96,9 +95,6 @@ def get_settings() -> Settings:
         or "service_requests",
         project_ideas_cache_seconds=int(
             os.environ.get("PROJECT_IDEAS_CACHE_SECONDS", "86400")
-        ),
-        review_rate_limit_per_day=int(
-            os.environ.get("CROWDCODE_REVIEW_LIMIT_PER_DAY", "1")
         ),
         request_rate_limit_per_day=int(
             os.environ.get("CROWDCODE_REQUEST_LIMIT_PER_DAY", "5")

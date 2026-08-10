@@ -36,27 +36,6 @@ def identity_id_from_wallet(wallet: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-def check_review_limit(
-    conn: Any,
-    reviewer_id: str,
-    service_id: str,
-    max_per_day: int,
-    now: datetime,
-) -> RateLimitResult:
-    return _check_window(
-        conn,
-        """
-        select count(*)::int as n, min(created_at) as oldest
-        from reviews
-        where reviewer_id = %s and service_id = %s and created_at > %s
-        """,
-        (reviewer_id, service_id, now - timedelta(seconds=WINDOW_SECONDS)),
-        scope="reviewer_service_daily",
-        max_per_day=max_per_day,
-        now=now,
-    )
-
-
 def check_request_limit(
     conn: Any,
     requester_id: str,

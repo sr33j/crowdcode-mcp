@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from crowdcode import cron
-from crowdcode.reputation import apply_review_trust_update
 from crowdcode.scoring import MU0, TrustRow
 from tests.test_reputation import FakeConn
 
@@ -31,10 +30,10 @@ def _fake_connect(conn):
     yield conn
 
 
-def test_sweep_replay_reproduces_the_write_path_trust(monkeypatch):
-    # One seed 5-star, then an honest 5-star on the same service: the sweep's
-    # from-scratch replay must land on the same trust the incremental write
-    # path would have produced for that second review.
+def test_sweep_applies_one_trust_event_per_wallet_service_utc_day(monkeypatch):
+    # The seed establishes a positive consensus. Two paid outcomes from the
+    # honest wallet on the same UTC day average to neutral (3), so the nightly
+    # replay must apply no trust change instead of treating them as two calls.
     reviews = [
         {
             "id": 1,
@@ -56,6 +55,16 @@ def test_sweep_replay_reproduces_the_write_path_trust(monkeypatch):
             "created_at": NOW - timedelta(hours=1),
             "user_id": 2,
         },
+        {
+            "id": 3,
+            "service_id": "svc_1",
+            "reviewer_wallet": HONEST_WALLET,
+            "rating": 1,
+            "payment_verified": True,
+            "signature_verified": True,
+            "created_at": NOW - timedelta(minutes=30),
+            "user_id": 2,
+        },
     ]
     users = [
         _user_row(SEED_WALLET, 1.0, is_seed=True, user_id=1),
@@ -74,43 +83,7 @@ def test_sweep_replay_reproduces_the_write_path_trust(monkeypatch):
     cron.run_consistency_sweep(NOW)
 
     swept = {q[1][2]: q[1][0] for q in conn.executed("update wallet_users set raw_trust")}
-    assert swept[2] > 0  # the honest wallet earned trust from the seed's consensus
-
-    # Same review through the incremental write path.
-    write_conn = FakeConn(
-        {
-            "from wallet_users\n        where wallet_address": [
-                {
-                    "user_id": 2,
-                    "raw_trust": 0.0,
-                    "is_seed": False,
-                    "slashed_at": None,
-                }
-            ],
-            "from reviews": [
-                {
-                    "reviewer_wallet": r["reviewer_wallet"],
-                    "rating": r["rating"],
-                    "payment_verified": r["payment_verified"],
-                    "signature_verified": r["signature_verified"],
-                    "created_at": r["created_at"],
-                }
-                for r in reviews[:1]
-            ],
-            "from wallet_users": [
-                {
-                    "wallet_address": SEED_WALLET,
-                    "raw_trust": 1.0,
-                    "is_seed": True,
-                    "slashed_at": None,
-                }
-            ],
-        }
-    )
-    incremental = apply_review_trust_update(
-        write_conn, HONEST_WALLET, "svc_1", 5, NOW - timedelta(hours=1)
-    )
-    assert abs(swept[2] - incremental) < 1e-12
+    assert swept[2] == 0.0
 
 
 def test_sweep_backfills_user_ids(monkeypatch):

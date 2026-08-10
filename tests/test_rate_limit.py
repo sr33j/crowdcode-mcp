@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from crowdcode.rate_limit import (
     WINDOW_SECONDS,
     check_request_limit,
-    check_review_limit,
     identity_id_from_wallet,
     rate_limit_payload,
 )
@@ -43,22 +42,22 @@ def test_under_limit_allows_with_remaining():
 
 def test_at_limit_blocks_with_retry_after():
     oldest = NOW - timedelta(hours=20)
-    conn = FakeConn({"n": 1, "oldest": oldest})
-    result = check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    conn = FakeConn({"n": 5, "oldest": oldest})
+    result = check_request_limit(conn, "req-id", 5, NOW)
     assert not result.allowed
     assert result.remaining == 0
     # The window frees up when the oldest hit ages out: 24h - 20h = 4h.
     assert result.retry_after_seconds == 4 * 3600
     assert result.limit == {
-        "scope": "reviewer_service_daily",
-        "max": 1,
+        "scope": "requester_daily",
+        "max": 5,
         "window_seconds": WINDOW_SECONDS,
     }
 
 
 def test_zero_limit_disables_without_query():
     conn = FakeConn({"n": 999, "oldest": NOW})
-    result = check_review_limit(conn, "rev-id", "svc_x", 0, NOW)
+    result = check_request_limit(conn, "req-id", 0, NOW)
     assert result.allowed
     assert result.remaining is None
     assert conn.queries == []
@@ -73,19 +72,13 @@ def test_blocked_with_missing_oldest_falls_back_to_full_window():
 
 def test_retry_after_is_at_least_one_second():
     oldest = NOW - timedelta(seconds=WINDOW_SECONDS)  # ages out right now
-    conn = FakeConn({"n": 1, "oldest": oldest})
-    result = check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    conn = FakeConn({"n": 5, "oldest": oldest})
+    result = check_request_limit(conn, "req-id", 5, NOW)
     assert not result.allowed
     assert result.retry_after_seconds == 1
 
 
 def test_query_scopes_by_identity_and_window():
-    conn = FakeConn({"n": 0, "oldest": None})
-    check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
-    sql, params = conn.queries[0]
-    assert "reviewer_id = %s and service_id = %s" in sql
-    assert params == ("rev-id", "svc_x", NOW - timedelta(seconds=WINDOW_SECONDS))
-
     conn = FakeConn({"n": 0, "oldest": None})
     check_request_limit(conn, "req-id", 5, NOW)
     sql, params = conn.queries[0]
@@ -94,21 +87,21 @@ def test_query_scopes_by_identity_and_window():
 
 
 def test_rate_limit_payload_shape():
-    conn = FakeConn({"n": 1, "oldest": NOW - timedelta(hours=23)})
-    result = check_review_limit(conn, "rev-id", "svc_x", 1, NOW)
+    conn = FakeConn({"n": 5, "oldest": NOW - timedelta(hours=23)})
+    result = check_request_limit(conn, "req-id", 5, NOW)
     payload = rate_limit_payload(
-        result, "1 review(s) per service per reviewer per 24 hours",
-        retry_tool="review_service",
+        result, "5 service requests per wallet per 24 hours",
+        retry_tool="request_service",
     )
     assert payload["accepted"] is False
     assert payload["rate_limited"] is True
     assert payload["reason"].startswith("rate limit exceeded:")
     assert payload["retry_after_seconds"] == 3600
-    assert payload["limit"]["scope"] == "reviewer_service_daily"
+    assert payload["limit"]["scope"] == "requester_daily"
     next_step = payload["next_step"]
     assert next_step["action"] == "wait_and_retry"
     assert next_step["retry"] == {
-        "tool": "review_service",
+        "tool": "request_service",
         "after_seconds": 3600,
         "with": {},
     }

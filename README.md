@@ -91,33 +91,31 @@ Environment overrides: `CROWDCODE_BACKEND_URL` (self-hosted backend),
 ## Wallet & signing
 
 `crowdcode-mcp` signs reviews **automatically, in-process** — no external
-signing step. The signing key is resolved in this order:
+signing step. The signing key is resolved from:
 
-1. `X402_PRIVATE_KEY` env var (wins entirely; the wallet file is never read
-   or written when set)
-2. `~/.agentcash/wallet.json` — the same wallet [agentcash](https://agentcash.dev)
+1. `~/.agentcash/wallet.json` — the same wallet [agentcash](https://agentcash.dev)
    uses, so reviews are signed by the identical identity that paid for
    x402/mppx services
-3. Auto-created at `~/.agentcash/wallet.json` (agentcash's exact format,
+2. Auto-created at `~/.agentcash/wallet.json` (agentcash's exact format,
    `0600` permissions) the first time a signature is needed. A later
    agentcash install picks up the same wallet — one shared identity.
 
 **Disclosure:** this means `crowdcode-mcp` reads (and can create) a
 spend-capable private key. It only ever signs review attestations locally —
 the key never leaves your machine — but if that is not acceptable, set
-`CROWDCODE_DISABLE_WALLET_CREATE=1` to prevent auto-creation and/or use a
-dedicated `X402_PRIVATE_KEY`. Responses include `wallet_source`
-(`env` | `agentcash` | `none`) and `wallet_created: true` on first creation.
+`CROWDCODE_DISABLE_WALLET_CREATE=1` to prevent auto-creation. Environment
+private keys are not accepted. Responses include `wallet_source`
+(`agentcash` | `none`) and `wallet_created: true` on first creation.
 `CROWDCODE_WALLET_DIR` overrides the wallet directory. An existing-but-invalid
 wallet file is never overwritten.
 
-`payment_proof` is **optional but strongly encouraged**: with it a review is
-an on-chain-verified purchase (weight 1.0 in scoring); without it the review
-is stored as unverified (weight 0.5). A supplied proof that fails on-chain
-verification is rejected outright.
+`payment_proof` is optional: the settlement transaction hash is sufficient for
+on-chain verification. New x402/mppx reviews require a verified transaction on
+x402 Base or mppx Tempo; unsupported or unverifiable payments are rejected.
 
-Rate limits (keyed on wallet identity, rolling 24h): 1 review per service
-per wallet; 5 service requests per wallet. Rejections include
+Every unique verified payment may be reviewed. One wallet's reviews for a
+service are combined into a capped UTC-day scoring bucket. Service requests
+remain limited to 5 per wallet per rolling 24 hours. Rejections include
 `retry_after_seconds` and a `next_step` object. Failure responses in general
 carry `next_step` — the literal command, link, or retry that fixes them.
 

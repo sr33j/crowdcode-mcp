@@ -67,9 +67,11 @@ def _run():
     max_adversary_weight = 0.0
     crossed: set[str] = set()
 
-    # Decay-neutral: every review is stamped at NOW so the assertions test the
-    # trust mechanics, not the 180-day half-life (covered in test_scoring.py).
-    for _ in range(ROUNDS):
+    # Each round is a distinct UTC day so the simulation exercises the daily
+    # influence cap. Future synthetic timestamps keep decay at 1.0; decay is
+    # covered independently in test_scoring.py.
+    for round_index in range(ROUNDS):
+        created_at = NOW + timedelta(days=round_index)
         for name, kind in REVIEWERS:
             for service in _services_for(name, kind):
                 works = rng.random() < RELIABILITY[service]
@@ -86,7 +88,7 @@ def _run():
                         rating=rating,
                         payment_verified=True,
                         signature_verified=True,
-                        created_at=NOW,
+                        created_at=created_at,
                     )
                 )
         for name, kind in REVIEWERS:

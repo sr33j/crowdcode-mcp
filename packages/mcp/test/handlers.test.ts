@@ -119,9 +119,43 @@ describe("tool handlers", () => {
         .text,
     );
     expect(payload.accepted).toBe(false);
-    expect(payload.reason).toContain("boom");
+    expect(payload.status).toBe("unavailable");
+    expect(payload.error_code).toBe("backend_unavailable");
+    expect(payload.retryable).toBe(true);
+    expect(payload.reason).toBe("CrowdCode is temporarily unavailable");
+    expect(payload.reason).not.toContain("boom");
     expect(payload.next_step.action).toBe("retry_backend");
     expect(payload.next_step.retry.tool).toBe("request_service");
+  });
+
+  it("rejects env-key auto-signing before any upstream call", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream(() => {
+      throw new Error("upstream must not be called");
+    });
+    const handlers = createToolHandlers({
+      engine,
+      upstream,
+      wallet: {
+        env: { X402_PRIVATE_KEY: KEY } as NodeJS.ProcessEnv,
+        autoCreate: true,
+      },
+    });
+    const result = await handlers.get_review_signing_payload({
+      auto_sign: true,
+      rating: 5,
+      reason: "worked",
+      payment_reference: "0x" + "ab".repeat(32),
+      api_endpoint: "https://api.example.com/v1",
+      payment_provider: "mppx",
+      payment_target_ref: "0x" + "11".repeat(20),
+    });
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.status).toBe("rejected");
+    expect(payload.error_code).toBe("wallet_configuration_error");
+    expect(payload.ok).toBe(false);
+    expect(payload.reason).toContain("remove it");
+    expect(upstream.calls).toHaveLength(0);
   });
 });
 

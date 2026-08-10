@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Mandatory reputation checks for paid agent services. Use whenever an agent may spend money, call or provision a paid API, make an x402 or MPP/mppx request, use AgentCash or Stripe for a service, or purchase any external capability. Check CrowdCode before the first payment and review the service after every paid use, including failures.
+description: Mandatory reputation checks when purchasing third-party paid APIs, remote services, or provisioned infrastructure. Check CrowdCode before the first service payment and review every uniquely paid use, including failures. Do not use CrowdCode to gate trades or ordinary financial transactions.
 ---
 
 # CrowdCode
@@ -8,6 +8,11 @@ description: Mandatory reputation checks for paid agent services. Use whenever a
 Use CrowdCode as the reputation layer around paid agent services. Do not begin
 a command or tool call that may charge money until the pre-payment check is
 complete.
+
+This applies to buying a third-party API capability, remote service, or
+provisioned infrastructure. It does **not** apply to trades, swaps, market
+orders, transfers, deposits, withdrawals, bridges, staking, lending, escrow
+settlement, or purchases of financial instruments.
 
 ## Before spending
 
@@ -28,7 +33,7 @@ treat a missing check as approval.
 
 ## After paid use
 
-Call `review_service` after every paid use, whether it succeeded, returned a
+Call `review_service` after every uniquely paid use, whether it succeeded, returned a
 poor result, timed out, or failed after payment. Judge the response against the
 original task:
 
@@ -54,6 +59,10 @@ than a directory listing:
 - `payment_proof`: the base64 response-header value when available, not a
   decoded object or bare transaction hash.
 - `payment_target_ref`: the actual payment recipient/on-chain transfer payee.
+
+Machine-payment verification currently supports x402 USDC on Base and MPP
+Tempo payments only. Solana and other chains are unsupported and must not be
+submitted as signature-only reviews.
 
 If the payer wallet differs from the local signing wallet, supply a signature
 from the wallet that actually sent the payment. Follow a returned `next_step`

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
@@ -86,6 +86,21 @@ class ScoreResult:
     n_eff: float
 
 
+@dataclass(frozen=True)
+class DailyReviewBucket:
+    """One wallet's aggregate opinion of one service on one UTC day.
+
+    Every paid outcome remains stored, but a burst of calls cannot create more
+    scoring influence than the strongest individual review in the bucket.
+    """
+
+    wallet: str
+    day: date
+    rating: float
+    evidence: float
+    created_at: datetime
+
+
 def effective_weight(trust: TrustRow | None) -> float:
     """Wallet weight: seeds pinned to 1.0; slashed, unknown, and sub-theta
     wallets contribute exactly zero (n small residual trusts must never
@@ -122,6 +137,43 @@ def review_weight(
     return weight * proof_multiplier(review) * decay_factor(review.created_at, now)
 
 
+def aggregate_daily_reviews(
+    reviews: Iterable[ReviewRow], now: datetime
+) -> list[DailyReviewBucket]:
+    """Aggregate reviews by wallet and UTC day.
+
+    Ratings are weighted by the same proof and decay factors used for scoring.
+    The bucket's evidence is capped at the strongest individual review's
+    proof-and-decay weight, so additional paid calls improve the estimate of
+    that day's outcome without multiplying the wallet's influence.
+    """
+
+    grouped: dict[tuple[str, date], list[tuple[ReviewRow, float]]] = {}
+    for review in reviews:
+        if review.wallet is None:
+            continue
+        day = review.created_at.astimezone(UTC).date()
+        evidence = proof_multiplier(review) * decay_factor(review.created_at, now)
+        grouped.setdefault((review.wallet, day), []).append((review, evidence))
+
+    buckets: list[DailyReviewBucket] = []
+    for (wallet, day), items in grouped.items():
+        total = sum(evidence for _, evidence in items)
+        if total <= 0:
+            continue
+        buckets.append(
+            DailyReviewBucket(
+                wallet=wallet,
+                day=day,
+                rating=sum(review.rating * evidence for review, evidence in items)
+                / total,
+                evidence=max(evidence for _, evidence in items),
+                created_at=max(review.created_at for review, _ in items),
+            )
+        )
+    return sorted(buckets, key=lambda bucket: (bucket.created_at, bucket.wallet))
+
+
 def compute_score(
     reviews: Iterable[ReviewRow],
     trust_map: Mapping[str, TrustRow],
@@ -138,15 +190,19 @@ def compute_score(
     num = KAPPA * MU0
     den = KAPPA
     n_eff = 0.0
-    for review in reviews:
-        if review.wallet is None:
+    eligible = [
+        review
+        for review in reviews
+        if review.wallet is not None
+        and (exclude_wallet is None or review.wallet != exclude_wallet)
+    ]
+    for bucket in aggregate_daily_reviews(eligible, now):
+        if exclude_wallet is not None and bucket.wallet == exclude_wallet:
             continue
-        if exclude_wallet is not None and review.wallet == exclude_wallet:
-            continue
-        weight = review_weight(review, trust_map.get(review.wallet), now)
+        weight = effective_weight(trust_map.get(bucket.wallet)) * bucket.evidence
         if weight == 0.0:
             continue
-        num += weight * review.rating
+        num += weight * bucket.rating
         den += weight
         n_eff += weight
     return ScoreResult(score=num / den, n_eff=n_eff)
@@ -158,17 +214,17 @@ def implied_p(loo_score: float) -> float:
     return min(hi, max(lo, (loo_score - 1.0) / 4.0))
 
 
-def trust_delta(loo_score: float, rating: int) -> float:
+def trust_delta(loo_score: float, rating: float) -> float:
     """Proper scoring rule: trust moves by the information the review carried
     beyond the current consensus. Ratings of 3 make no prediction."""
-    if rating == 3:
+    if 2 < rating < 4:
         return 0.0
     p = implied_p(loo_score)
     likelihood = p if rating >= 4 else 1.0 - p
     return ETA * math.log2(likelihood / 0.5)
 
 
-def updated_raw_trust(raw: float, loo_score: float, rating: int) -> float:
+def updated_raw_trust(raw: float, loo_score: float, rating: float) -> float:
     return min(TRUST_CAP, max(TRUST_FLOOR, raw + trust_delta(loo_score, rating)))
 
 

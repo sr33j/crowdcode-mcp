@@ -8,10 +8,9 @@ rest; the process exits nonzero if any job failed:
    to onchain_verified when the transfer now verifies (a network flake must
    not permanently cost the verified multiplier).
 2. Consistency sweep — recompute all reviewer trust and service scores from
-   scratch by replaying the review history, log drift vs the incrementally
-   maintained values, and write the recomputed values (the sweep is
-   authoritative). The first run after applying the schema DDL doubles as the
-   data migration that backfills users and stored scores.
+   scratch by replaying one wallet/service/UTC-day event at a time, log drift,
+   and write the authoritative values. The first run after applying the schema
+   DDL doubles as the data migration that backfills users and stored scores.
 3. Per-service review summaries (LLM), watermarked on last_summarized_at.
 4. Requested-services summary (LLM), written to app_cache for the website.
 """
@@ -21,7 +20,7 @@ from __future__ import annotations
 import json
 import sys
 import traceback
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -40,6 +39,7 @@ from crowdcode.reputation import ensure_user, recompute_service_score, sync_seed
 from crowdcode.scoring import (
     ReviewRow,
     TrustRow,
+    aggregate_daily_reviews,
     compute_score,
     review_weight,
     updated_raw_trust,
@@ -192,9 +192,9 @@ def run_consistency_sweep(now: datetime) -> None:
             for u in users
         }
 
-        # Replay: recompute every non-seed wallet's raw trust from scratch,
-        # applying the same leave-one-out update the write path applies, at
-        # each review's own ingest time.
+        # Replay: recompute every non-seed wallet's raw trust from scratch.
+        # Multiple paid outcomes by one wallet for one service on one UTC day
+        # form a single trust event, matching the scoring influence cap.
         raw: dict[str, float] = {}
         trust: dict[str, TrustRow] = {}
         for wallet, row in pinned.items():
@@ -204,7 +204,8 @@ def run_consistency_sweep(now: datetime) -> None:
                 raw[wallet] = 0.0
                 trust[wallet] = TrustRow(raw_trust=0.0)
 
-        per_service: dict[str, list[ReviewRow]] = {}
+        events: dict[tuple[str, str, object], list[ReviewRow]] = {}
+        event_order: dict[tuple[str, str, object], tuple[datetime, int]] = {}
         for row in rows:
             wallet = row["reviewer_wallet"]
             review = ReviewRow(
@@ -215,18 +216,39 @@ def run_consistency_sweep(now: datetime) -> None:
                 created_at=row["created_at"],
                 payment_verification_level=row.get("payment_verification_level"),
             )
+            if wallet is None:
+                continue
+            key = (
+                row["service_id"],
+                wallet,
+                row["created_at"].replace(tzinfo=UTC).date()
+                if row["created_at"].tzinfo is None
+                else row["created_at"].astimezone(UTC).date(),
+            )
+            events.setdefault(key, []).append(review)
+            event_order[key] = max(
+                event_order.get(key, (row["created_at"], int(row["id"]))),
+                (row["created_at"], int(row["id"])),
+            )
+
+        per_service: dict[str, list[ReviewRow]] = {}
+        for key in sorted(events, key=lambda item: event_order[item]):
+            service_id, wallet, _ = key
+            event_reviews = events[key]
+            event_at = event_order[key][0]
+            bucket = aggregate_daily_reviews(event_reviews, event_at)[0]
             if wallet in raw:
                 loo = compute_score(
-                    per_service.get(row["service_id"], []),
+                    per_service.get(service_id, []),
                     trust,
-                    row["created_at"],
+                    event_at,
                     exclude_wallet=wallet,
                 )
                 raw[wallet] = updated_raw_trust(
-                    raw[wallet], loo.score, review.rating
+                    raw[wallet], loo.score, bucket.rating
                 )
                 trust[wallet] = TrustRow(raw_trust=raw[wallet])
-            per_service.setdefault(row["service_id"], []).append(review)
+            per_service.setdefault(service_id, []).extend(event_reviews)
 
         for user in users:
             wallet = user["wallet_address"]

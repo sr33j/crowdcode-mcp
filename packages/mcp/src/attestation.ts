@@ -20,6 +20,12 @@ export function withRedactionAttestation(
 
 export function toToolResult(payload: Record<string, unknown>): {
   content: Array<{ type: "text"; text: string }>;
+  structuredContent: Record<string, unknown>;
+  isError?: boolean;
 } {
-  return { content: [{ type: "text", text: JSON.stringify(payload) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+    structuredContent: payload,
+    ...(payload.status === "unavailable" ? { isError: true } : {}),
+  };
 }

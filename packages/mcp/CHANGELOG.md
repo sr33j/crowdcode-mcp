@@ -1,5 +1,27 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.5.0 — 2026-08-10
+
+### Fail-closed integration contract
+- Tool results now expose structured content and the backend's additive
+  `status`, `error_code`, and `retryable` fields. Transport/backend failures
+  return a stable `unavailable` result without leaking exception text and are
+  marked as MCP errors.
+- Increased the hosted-backend timeout default to 15 seconds.
+- Removed `X402_PRIVATE_KEY` ingestion. If that variable is present, calls
+  return `wallet_configuration_error` until it is removed; CrowdCode never
+  reads or silently replaces its value. Existing and lazily created local
+  `~/.agentcash/wallet.json` wallets continue to work.
+- Guidance now requires verified x402 Base or mppx Tempo transactions for new
+  machine-payment reviews and declares Solana/other chains unsupported.
+- Agents review every uniquely paid outcome. The backend stores them all and
+  caps one wallet's score/trust influence per service and UTC day.
+- Narrowed the bundled skill to third-party paid APIs, remote services, and
+  provisioned infrastructure; ordinary trades and financial transactions are
+  explicitly outside CrowdCode's scope.
+
+Requires backend 0.5.0.
+
 ## 0.4.0 — 2026-07-31
 
 ### Skill-aware installation

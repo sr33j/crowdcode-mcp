@@ -88,9 +88,9 @@ alter table reviews
 alter table service_requests
   add column if not exists redacted_at timestamptz;
 
--- Wallet-keyed rate limiting (v0.2.0): requests carry the requester's wallet
--- identity (salted hash + normalized address); reviews are limited per
--- (reviewer_id, service_id) over a rolling 24h window.
+-- Wallet-keyed service-request rate limiting: requests carry the requester's
+-- wallet identity (salted hash + normalized address). Reviews are not
+-- throttled; scoring caps their influence by wallet/service/UTC-day below.
 alter table service_requests
   add column if not exists requester_id text,
   add column if not exists requester_wallet text;
@@ -102,7 +102,7 @@ create index if not exists reviews_reviewer_service_created_idx
 -- Scoring & reputation (docs/SCORING.md v1): one row per reviewing wallet
 -- holding its raw trust; seeds are pinned at 1.0 via CROWDCODE_SEED_WALLETS.
 -- Scores are stored on services and refreshed on the review write path plus
--- the nightly consistency sweep (crowdcode-cron).
+-- the nightly consistency sweep; trust is replayed nightly from daily buckets.
 --
 -- Named wallet_users, not users: this database already carries an unrelated
 -- public.users table (Privy auth) belonging to another app.
@@ -137,6 +137,11 @@ create table if not exists app_cache (
 
 create index if not exists reviews_wallet_created_idx
   on reviews (reviewer_wallet, created_at);
+
+-- Daily scoring buckets filter by service and wallet, then order/group by
+-- creation time. Keep this composite B-tree aligned with that access path.
+create index if not exists reviews_service_wallet_created_idx
+  on reviews (service_id, reviewer_wallet, created_at);
 
 -- Payment verification levels (docs/SCORING.md §3.4): what the payment check
 -- actually proved. payment_verified stays as the derived boolean
@@ -190,6 +195,13 @@ where ranked.id = r.id;
 
 create unique index if not exists reviews_payment_reference_canonical_idx
   on reviews (payment_reference_canonical);
+
+-- Ethereum transaction hashes are case-insensitive. Keep the exact submitted
+-- reference in the signed payload, but make concurrent deduplication
+-- case-insensitive for canonical EVM hashes.
+create unique index if not exists reviews_payment_reference_evm_hash_idx
+  on reviews (lower(payment_reference_canonical))
+  where payment_reference_canonical ~* '^0x[0-9a-f]{64}$';
 
 -- RLS is enabled with NO policies on purpose: that is default-deny for the
 -- Supabase anon/authenticated API roles. The backend connects with a

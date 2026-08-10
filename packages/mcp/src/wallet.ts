@@ -3,14 +3,12 @@
  *
  * Reads (and lazily creates) the same wallet file agentcash uses —
  * ~/.agentcash/wallet.json — so reviews are signed by the identical identity
- * that pays for x402/mppx services. Semantics deliberately mirror agentcash
- * v0.17.0 exactly:
- *   1. X402_PRIVATE_KEY env var wins entirely — the file is never read or
- *      written when it is set (a malformed value is an error, not a
- *      fallthrough).
- *   2. An existing file is zod-validated and its address cross-checked
+ * that pays for x402/mppx services. Private keys supplied through environment
+ * variables are deliberately unsupported: the agent gets addresses and
+ * canonical review signatures, never a key-ingestion API.
+ *   1. An existing file is zod-validated and its address cross-checked
  *      against the key; an unreadable or invalid file is NEVER overwritten.
- *   3. A missing file is created on demand (opt-out via
+ *   2. A missing file is created on demand (opt-out via
  *      CROWDCODE_DISABLE_WALLET_CREATE) with agentcash's exact shape and
  *      0600 permissions, so a later agentcash install picks up the same
  *      wallet.
@@ -27,13 +25,14 @@ import {
 import { getAddress } from "viem/utils";
 import { z } from "zod";
 
-export type WalletSource = "env" | "agentcash" | "none";
+export type WalletSource = "agentcash" | "none";
 
 export interface LoadedWallet {
   source: WalletSource;
   account: PrivateKeyAccount | null;
   address: string | null;
   error?: string;
+  errorCode?: string;
   created?: boolean;
 }
 
@@ -89,15 +88,12 @@ async function load(
   dir: string,
   autoCreate: boolean,
 ): Promise<LoadedWallet> {
-  const envKey = env.X402_PRIVATE_KEY?.trim();
-  if (envKey) {
-    if (!PRIVATE_KEY_RE.test(envKey)) {
-      return none(
-        "X402_PRIVATE_KEY is set but is not a 0x-prefixed 32-byte hex key",
-      );
-    }
-    const account = privateKeyToAccount(envKey as `0x${string}`);
-    return { source: "env", account, address: account.address };
+  if (Object.prototype.hasOwnProperty.call(env, "X402_PRIVATE_KEY")) {
+    return none(
+      "X402_PRIVATE_KEY is no longer supported; remove it from the CrowdCode " +
+        "process and use the local agentcash wallet file instead",
+      "wallet_configuration_error",
+    );
   }
 
   const file = join(dir, "wallet.json");
@@ -172,6 +168,6 @@ function parseStored(raw: string, file: string): LoadedWallet {
   return { source: "agentcash", account, address: getAddress(parsed.data.address) };
 }
 
-function none(error?: string): LoadedWallet {
-  return { source: "none", account: null, address: null, error };
+function none(error?: string, errorCode?: string): LoadedWallet {
+  return { source: "none", account: null, address: null, error, errorCode };
 }

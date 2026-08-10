@@ -19,8 +19,7 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env): Config {
       env.CROWDCODE_BACKEND_URL ?? "https://crowdcode-backend.onrender.com/mcp",
     cacheDir: env.CROWDCODE_CACHE_DIR ?? join(homedir(), ".cache", "crowdcode-mcp"),
     disableModel: TRUTHY.has((env.CROWDCODE_DISABLE_MODEL ?? "").toLowerCase()),
-    // Generous default: the free-tier Render backend cold-starts slowly.
-    upstreamTimeoutMs: Number(env.CROWDCODE_UPSTREAM_TIMEOUT_MS ?? 60_000),
+    upstreamTimeoutMs: Number(env.CROWDCODE_UPSTREAM_TIMEOUT_MS ?? 15_000),
     // Signing wallet shared with agentcash (~/.agentcash/wallet.json).
     walletDir: env.CROWDCODE_WALLET_DIR ?? defaultWalletDir(),
     walletAutoCreate: !TRUTHY.has(

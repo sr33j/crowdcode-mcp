@@ -3,9 +3,9 @@
  *
  * For mppx/x402 reviews where the caller did not supply review_signature,
  * this builds the canonical message (identity-merge + local redaction via
- * getReviewSigningPayload), signs it with the local agentcash wallet (or
- * X402_PRIVATE_KEY), and augments the outgoing arguments — so an agent can
- * call review_service end-to-end with no external signing step. A
+ * getReviewSigningPayload), signs it with the local agentcash wallet, and
+ * augments the outgoing arguments — so an agent can call review_service
+ * end-to-end with no external signing step. A
  * caller-supplied signature always wins.
  *
  * The signature covers the REDACTED reason; the redaction engine memoizes,
@@ -41,8 +41,8 @@ export function installWalletNextStep(retryTool: string): NextStep {
   return {
     action: "install_wallet",
     summary:
-      "No local signing wallet found. Install agentcash (or set " +
-      "X402_PRIVATE_KEY) so crowdcode-mcp can sign automatically, then retry " +
+      "No local signing wallet found. Install agentcash so crowdcode-mcp can " +
+      "sign automatically, then retry " +
       retryTool +
       ".",
     command: AGENTCASH_INSTALL_COMMAND,
@@ -63,6 +63,7 @@ export interface PreparedReview {
   wallet_source?: WalletSource;
   wallet_created?: boolean;
   wallet_error?: string;
+  wallet_error_code?: string;
   next_step?: NextStep;
   /** Wallet used for signing — kept so a signature-mismatch retry can re-sign. */
   wallet?: LoadedWallet;
@@ -107,6 +108,7 @@ export async function prepareSignedReview(
       signed: false,
       wallet_source: "none",
       wallet_error: loaded.error,
+      wallet_error_code: loaded.errorCode,
       next_step: installWalletNextStep("review_service"),
     };
   }

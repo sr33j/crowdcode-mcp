@@ -31,11 +31,11 @@ describe("skill and plugin packaging", () => {
       .filter((line) => /^[a-z][a-z0-9_-]*:/.test(line))
       .map((line) => line.split(":", 1)[0]);
     expect(keys).toEqual(["name", "description"]);
-    expect(match![1]).toMatch(/may spend money/);
-    expect(match![1]).toMatch(/x402/);
-    expect(match![1]).toMatch(/AgentCash/);
+    expect(match![1]).toMatch(/third-party paid APIs/);
+    expect(match![1]).toMatch(/uniquely paid use/);
+    expect(match![1]).toMatch(/Do not use CrowdCode to gate trades/);
     expect(skill).toMatch(/Call `get_service_score`/);
-    expect(skill).toMatch(/Call `review_service` after every paid use/);
+    expect(skill).toMatch(/Call `review_service` after every uniquely paid use/);
     expect(skill).toMatch(/signs automatically/);
   });
 

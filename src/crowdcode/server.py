@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+from functools import wraps
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
@@ -32,7 +35,6 @@ from crowdcode.payments import (
 from crowdcode.rate_limit import (
     AGENTCASH_INSTALL_COMMAND,
     check_request_limit,
-    check_review_limit,
     identity_id_from_wallet,
     rate_limit_payload,
 )
@@ -42,11 +44,12 @@ from crowdcode.redaction import (
     redaction_enabled,
 )
 from crowdcode.reputation import (
-    apply_review_trust_update,
     ensure_user,
     recompute_service_score,
     sync_seed_wallets,
 )
+
+logger = logging.getLogger(__name__)
 from crowdcode.scoring import (
     ALGORITHM as SCORE_ALGORITHM,
     as_float,
@@ -101,7 +104,70 @@ def _next_step(
     }
 
 
+def _classify_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach the additive v0.5 status envelope to every tool response."""
+    if "status" in payload:
+        payload.setdefault("error_code", None)
+        payload.setdefault("retryable", False)
+        return payload
+
+    reason = str(payload.get("reason") or "")
+    if payload.get("found") is False:
+        status = "not_found" if reason == "service not found" else "rejected"
+    elif payload.get("accepted") is False or payload.get("ok") is False:
+        status = "rejected"
+    else:
+        status = "ok"
+    payload["status"] = status
+    payload.setdefault("error_code", None if status == "ok" else "request_rejected")
+    retry = payload.get("next_step")
+    payload.setdefault(
+        "retryable",
+        isinstance(retry, dict) and retry.get("retry") is not None,
+    )
+    return payload
+
+
+def _stable_tool(func):
+    """Convert unexpected dependency failures into stable, non-leaking results."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        try:
+            return _classify_tool_payload(func(*args, **kwargs))
+        except Exception:
+            correlation_id = uuid4().hex
+            logger.exception(
+                "CrowdCode tool failed tool=%s correlation_id=%s",
+                func.__name__,
+                correlation_id,
+            )
+            payload: dict[str, Any] = {
+                "status": "unavailable",
+                "error_code": "backend_dependency_unavailable",
+                "retryable": True,
+                "reason": "CrowdCode is temporarily unavailable",
+                "correlation_id": correlation_id,
+            }
+            if func.__name__ == "get_service_score":
+                payload.update(
+                    found=False,
+                    score=None,
+                    n_eff=0,
+                    avg_rating=None,
+                    num_reviews=0,
+                    summary=None,
+                    recent_reviews=[],
+                )
+            elif func.__name__ == "get_review_signing_payload":
+                payload["ok"] = False
+            else:
+                payload["accepted"] = False
+            return payload
+    return wrapped
+
+
 @mcp.tool()
+@_stable_tool
 def request_service(
     service_description: str,
     task_context: str | None = None,
@@ -150,7 +216,7 @@ def request_service(
                 "install_wallet",
                 "Service requests need a wallet identity for rate limiting. "
                 "crowdcode-mcp >= 0.2.0 attaches your local wallet automatically — "
-                "install agentcash (or set X402_PRIVATE_KEY), then retry request_service.",
+                "install agentcash, then retry request_service.",
                 command=AGENTCASH_INSTALL_COMMAND,
             ),
         }
@@ -164,6 +230,9 @@ def request_service(
         redacted = redact_texts([service_description, task_context], fail_closed=True)
     except RedactionUnavailable:
         return {
+            "status": "unavailable",
+            "error_code": "redaction_unavailable",
+            "retryable": True,
             "accepted": False,
             "reason": "redaction service unavailable; retry shortly",
             "next_step": _next_step(
@@ -216,6 +285,7 @@ def request_service(
 
 
 @mcp.tool()
+@_stable_tool
 def get_service_score(
     service_id: str | None = None,
     api_endpoint: str | None = None,
@@ -223,11 +293,13 @@ def get_service_score(
     payment_target_ref: str | None = None,
     directory_slug: str | None = None,
 ) -> dict[str, Any]:
-    """Return the simple average rating for a service.
+    """Return the canonical trust-weighted score for a service.
 
-    Check this before paying for, provisioning, or calling any paid agent
-    service — especially x402 and mppx/MPP services. Identify the service by
-    service_id, api_endpoint, payment target, or directory_slug.
+    Check this before purchasing a third-party paid API, remote service, or
+    provisioned infrastructure. Do not use CrowdCode to gate trades, swaps,
+    transfers, deposits, withdrawals, staking, lending, escrow settlement, or
+    purchases of financial instruments. Identify the service by service_id,
+    api_endpoint, payment target, or directory_slug.
     """
     try:
         identity = build_identity(
@@ -364,7 +436,11 @@ def _redacted_summary(summary: Any) -> dict[str, Any] | None:
 
 
 def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
+    not_found = reason == "service not found"
     return {
+        "status": "not_found" if not_found else "rejected",
+        "error_code": "service_not_found" if not_found else "service_identity_invalid",
+        "retryable": False,
         "service_id": service_id,
         "found": False,
         "score": None,
@@ -383,6 +459,7 @@ def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@_stable_tool
 def get_review_signing_payload(
     rating: int,
     reason_hash: str,
@@ -409,6 +486,9 @@ def get_review_signing_payload(
     reason_hash = reason_hash.strip().lower()
     if not REASON_HASH_RE.match(reason_hash):
         return {
+            "status": "rejected",
+            "error_code": "invalid_reason_hash",
+            "retryable": False,
             "ok": False,
             "reason": "reason_hash must look like sha256:<64 lowercase hex chars>",
         }
@@ -446,6 +526,7 @@ def get_review_signing_payload(
 
 
 @mcp.tool()
+@_stable_tool
 def review_service(
     rating: int,
     reason: str,
@@ -491,8 +572,9 @@ def review_service(
     - payment_proof: the base64 response header STRING — `payment-response` for
       x402, `Payment-Receipt` for mppx. Not the tx hash, not decoded JSON.
       OPTIONAL: verified status comes from the on-chain transfer either way;
-      without a proof or a verifiable tx hash the review is stored as
-      unverified and carries half weight in scoring.
+      a verifiable EVM transaction hash is required for every new machine-
+      payment review. x402 USDC on Base and mppx on Tempo are supported;
+      Solana and other chains are rejected.
     - payment_target_ref: the real payee (the 402 challenge recipient / on-chain
       Transfer `to`), not a bazaar/directory advertised payTo.
     - reviewer_wallet: the wallet that SENT the payment (the ERC-20 Transfer
@@ -535,19 +617,6 @@ def review_service(
         service = resolved.row
         service_created = False
 
-        # Dedup on the canonical form: 0x<hash> and x402:base:<hash> are the
-        # same settlement and must not yield two reviews.
-        canonical_reference = canonical_payment_reference(payment_reference)
-        existing = conn.execute(
-            """
-            select id from reviews
-            where payment_reference_canonical = %s or payment_reference = %s
-            """,
-            (canonical_reference, payment_reference),
-        ).fetchone()
-        if existing is not None:
-            return {"accepted": False, "reason": "payment_reference already used"}
-
         effective_identity = identity
         if service is not None:
             assert resolved.identity is not None
@@ -565,7 +634,18 @@ def review_service(
             signature_scheme=signature_scheme,
         )
         if not verification.ok:
+            status = (
+                "unavailable"
+                if verification.retryable
+                else "unsupported"
+                if verification.error_code
+                in {"unsupported_payment_chain", "unsupported_payment_reference"}
+                else "rejected"
+            )
             failure: dict[str, Any] = {
+                "status": status,
+                "error_code": verification.error_code or "payment_rejected",
+                "retryable": verification.retryable,
                 "accepted": False,
                 "reason": verification.reason,
             }
@@ -573,8 +653,8 @@ def review_service(
                 failure["next_step"] = _next_step(
                     "install_wallet",
                     "mppx/x402 reviews need a signing wallet. crowdcode-mcp >= 0.2.0 "
-                    "signs automatically with your local agentcash wallet or "
-                    "X402_PRIVATE_KEY — install agentcash, then retry review_service.",
+                    "signs automatically with your local agentcash wallet — "
+                    "install agentcash, then retry review_service.",
                     command=AGENTCASH_INSTALL_COMMAND,
                 )
             if verification.signature_mismatch:
@@ -607,26 +687,31 @@ def review_service(
                 )
             return failure
 
-        settings = get_settings()
-        if (
-            service is not None
-            and verification.reviewer_id
-            and settings.review_rate_limit_per_day > 0
-        ):
-            limit_check = check_review_limit(
-                conn,
-                verification.reviewer_id,
-                service["id"],
-                settings.review_rate_limit_per_day,
-                utc_now(),
-            )
-            if not limit_check.allowed:
-                return rate_limit_payload(
-                    limit_check,
-                    f"{settings.review_rate_limit_per_day} review(s) per service "
-                    "per reviewer per 24 hours",
-                    retry_tool="review_service",
-                )
+        # Only a successfully verified payer may claim the globally unique
+        # canonical transaction reference. This check intentionally runs
+        # after signature/on-chain verification to prevent public tx-hash
+        # front-running. The unique index remains the concurrency backstop.
+        canonical_reference = canonical_payment_reference(payment_reference)
+        existing = conn.execute(
+            """
+            select id from reviews
+            where payment_reference_canonical = %s
+               or (
+                 payment_reference_canonical ~* '^0x[0-9a-f]{64}$'
+                 and lower(payment_reference_canonical) = lower(%s)
+               )
+               or payment_reference = %s
+            """,
+            (canonical_reference, canonical_reference, payment_reference),
+        ).fetchone()
+        if existing is not None:
+            return {
+                "status": "rejected",
+                "error_code": "payment_reference_used",
+                "retryable": False,
+                "accepted": False,
+                "reason": "payment_reference already used",
+            }
 
         # Ingest enforcement (fail-closed). Runs AFTER signature verification:
         # the signature covers the hash of the reason exactly as received
@@ -636,6 +721,9 @@ def review_service(
             redacted = redact_texts([reason, task_context], fail_closed=True)
         except RedactionUnavailable:
             return {
+                "status": "unavailable",
+                "error_code": "redaction_unavailable",
+                "retryable": True,
                 "accepted": False,
                 "reason": "redaction service unavailable; retry shortly",
                 "next_step": _next_step(
@@ -657,9 +745,9 @@ def review_service(
             service_created = created.created
 
         try:
-            # Write-path scoring (docs/SCORING.md §8.1): the review insert,
-            # the reviewer's trust update, and the service's stored score all
-            # land in one transaction.
+            # Store every uniquely paid outcome. Score influence is aggregated
+            # into one wallet/service/UTC-day bucket by compute_score(); trust
+            # is replayed authoritatively by the nightly consistency sweep.
             user_id = None
             if verification.reviewer_wallet:
                 user = ensure_user(conn, verification.reviewer_wallet)
@@ -704,16 +792,20 @@ def review_service(
                 ),
             ).fetchone()
 
-            now = utc_now()
-            if verification.reviewer_wallet:
-                apply_review_trust_update(
-                    conn, verification.reviewer_wallet, service["id"], rating, now
-                )
-            recompute_service_score(conn, service["id"], now)
+            # Trust is replayed once per wallet/service/UTC-day bucket by the
+            # nightly sweep. The write path still refreshes the affected score
+            # immediately using the wallet's current trust.
+            recompute_service_score(conn, service["id"], utc_now())
             conn.commit()
         except psycopg.errors.UniqueViolation:
             conn.rollback()
-            return {"accepted": False, "reason": "payment_reference already used"}
+            return {
+                "status": "rejected",
+                "error_code": "payment_reference_used",
+                "retryable": False,
+                "accepted": False,
+                "reason": "payment_reference already used",
+            }
 
     result = {
         "accepted": True,
@@ -727,23 +819,39 @@ def review_service(
         "signature_verified": verification.signature_verified,
         "verified_purchase": verification.payment_verified,
     }
-    if (
-        not verification.payment_verified
-        and effective_identity.payment_provider in {"mppx", "x402"}
-    ):
-        result["next_step"] = _next_step(
-            "supply_payment_proof",
-            "Review accepted as UNVERIFIED (half weight in scoring). For "
-            "verified-purchase status, pass the settlement tx hash as "
-            "payment_reference (verified on-chain), or include payment_proof — "
-            "the base64 payment-response header (x402) or Payment-Receipt "
-            "header (mppx).",
-        )
     return result
 
 
-def _json_error(message: str, status_code: int = 500) -> JSONResponse:
-    return JSONResponse({"ok": False, "error": message}, status_code=status_code)
+def _json_error(
+    message: str,
+    status_code: int = 500,
+    *,
+    error_code: str = "internal_error",
+    retryable: bool = False,
+) -> JSONResponse:
+    return JSONResponse(
+        {
+            "ok": False,
+            "status": "unavailable" if retryable else "rejected",
+            "error": message,
+            "error_code": error_code,
+            "retryable": retryable,
+        },
+        status_code=status_code,
+    )
+
+
+def _unexpected_json_error(scope: str) -> JSONResponse:
+    correlation_id = uuid4().hex
+    logger.exception("HTTP handler failed scope=%s correlation_id=%s", scope, correlation_id)
+    response = _json_error(
+        "CrowdCode is temporarily unavailable",
+        status_code=503,
+        error_code="backend_dependency_unavailable",
+        retryable=True,
+    )
+    response.headers["x-correlation-id"] = correlation_id
+    return response
 
 
 def _cron_project_ideas_payload(ttl_seconds: int) -> dict[str, Any] | None:
@@ -865,7 +973,13 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             (service_id,),
         ).fetchone()
         if service is None:
-            return {"ok": False, "error": "service not found"}, 404
+            return {
+                "ok": False,
+                "status": "not_found",
+                "error_code": "service_not_found",
+                "retryable": False,
+                "error": "service not found",
+            }, 404
 
         counts = conn.execute(
             """
@@ -948,35 +1062,55 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
 
 
 async def health(_: Request) -> JSONResponse:
+    return JSONResponse({"ok": True, "service": "crowdcode-backend"})
+
+
+async def ready(_: Request) -> JSONResponse:
     try:
         with connect() as conn:
             conn.execute("select 1").fetchone()
-    except Exception as exc:
-        return _json_error(f"database unavailable: {exc}", status_code=503)
-    return JSONResponse({"ok": True, "service": "crowdcode-backend"})
+    except Exception:
+        return _unexpected_json_error("ready_database")
+    if not redaction_enabled():
+        return _json_error(
+            "redaction service is not configured",
+            status_code=503,
+            error_code="redaction_unavailable",
+            retryable=True,
+        )
+    try:
+        redact_texts(["readiness"], fail_closed=True, timeout=2.0)
+    except RedactionUnavailable:
+        return _json_error(
+            "redaction service is unavailable",
+            status_code=503,
+            error_code="redaction_unavailable",
+            retryable=True,
+        )
+    return JSONResponse({"ok": True, "ready": True, "service": "crowdcode-backend"})
 
 
 async def project_ideas(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_project_ideas_payload)
-    except Exception as exc:
-        return _json_error(str(exc))
+    except Exception:
+        return _unexpected_json_error("project_ideas")
     return JSONResponse(payload)
 
 
 async def top_services(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_top_services_payload, 10)
-    except Exception as exc:
-        return _json_error(str(exc))
+    except Exception:
+        return _unexpected_json_error("top_services")
     return JSONResponse(payload)
 
 
 async def all_services(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_top_services_payload, None)
-    except Exception as exc:
-        return _json_error(str(exc))
+    except Exception:
+        return _unexpected_json_error("all_services")
     return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
 
 
@@ -986,8 +1120,8 @@ async def service_detail(request: Request) -> JSONResponse:
         payload, status_code = await run_in_threadpool(
             _service_detail_payload, service_id
         )
-    except Exception as exc:
-        return _json_error(str(exc))
+    except Exception:
+        return _unexpected_json_error("service_detail")
     headers = {"Cache-Control": "public, max-age=60"} if status_code == 200 else None
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
@@ -1014,6 +1148,7 @@ def create_app() -> Starlette:
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
+            Route("/ready", ready, methods=["GET"]),
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),

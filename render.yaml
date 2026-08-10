@@ -2,10 +2,10 @@ services:
   - type: web
     name: crowdcode-backend
     runtime: python
-    plan: free
+    plan: starter
     buildCommand: pip install -e .
     startCommand: crowdcode-mcp
-    healthCheckPath: /health
+    healthCheckPath: /ready
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -25,13 +25,11 @@ services:
         value: "86400"
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
-      # Wallet-keyed rate limits (rolling 24h windows; 0 disables).
-      - key: CROWDCODE_REVIEW_LIMIT_PER_DAY
-        value: "1"
+      # Wallet-keyed service-request limit (rolling 24h; 0 disables).
       - key: CROWDCODE_REQUEST_LIMIT_PER_DAY
         value: "5"
-      # Redaction sidecar (server-side enforcement backstop). Point at the
-      # crowdcode-redactor private service; leave unset to disable enforcement.
+      # Required redaction sidecar (server-side enforcement backstop). Point
+      # at the crowdcode-redactor private service; /ready fails if unavailable.
       - key: REDACTOR_URL
         sync: false
       - key: REDACTOR_TOKEN
@@ -40,7 +38,7 @@ services:
       - key: CROWDCODE_SEED_WALLETS
         sync: false
       # Token pin for mppx/Tempo payment verification (docs/SCORING.md §3.4).
-      # Without it, mppx reviews cap at signature_only.
+      # Without it, mppx verification fails closed and stores nothing.
       - key: MPPX_TEMPO_TOKEN_ADDRESS
         value: "0x20C000000000000000000000b9537d11c60E8b50"
 
@@ -68,7 +66,7 @@ services:
         sync: false
       - key: REDACTOR_TOKEN
         sync: false
-      # Cron re-verifies rpc_unreachable reviews; needs the same token pin.
+      # Legacy signature-only re-verification needs the same token pin.
       - key: MPPX_TEMPO_TOKEN_ADDRESS
         value: "0x20C000000000000000000000b9537d11c60E8b50"
 

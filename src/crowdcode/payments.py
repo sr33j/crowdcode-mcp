@@ -32,7 +32,7 @@ BASE_RPC_URL = "https://mainnet.base.org"
 # expected token, otherwise a self-minted worthless ERC-20 buys the verified
 # multiplier. x402 on Base is pinned to native USDC by default; the Tempo
 # token for mppx must be configured via MPPX_TEMPO_TOKEN_ADDRESS — without
-# it, no mppx review (proof or tx-hash) upgrades past signature_only.
+# it, new mppx reviews fail closed with a retryable configuration error.
 BASE_USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 
 # What the payment check actually proved (docs/SCORING.md §3.4).
@@ -44,9 +44,9 @@ LEVEL_RESPONSE_ATTESTED = "response_attested"
 # Levels that count as a verified purchase (payment_verified boolean).
 VERIFIED_LEVELS = frozenset({LEVEL_ONCHAIN_VERIFIED, LEVEL_RESPONSE_ATTESTED})
 
-# Why an on-chain check did not upgrade to onchain_verified. rpc_unreachable
-# is the only retryable one: the chain was never consulted, so the nightly
-# cron re-checks those reviews instead of leaving them permanently downgraded.
+# Why an on-chain check failed. RPC-unreachable and token-not-pinned failures
+# reject new reviews without reserving the reference; the constants also
+# support re-verification of legacy signature-only rows.
 FAILURE_RPC_UNREACHABLE = "rpc_unreachable"
 FAILURE_TX_FAILED = "tx_failed"
 FAILURE_NO_MATCHING_TRANSFER = "no_matching_transfer"
@@ -56,14 +56,15 @@ RETRYABLE_FAILURES = frozenset({FAILURE_RPC_UNREACHABLE})
 
 # Dedup/storage form of payment_reference: the same settlement tx must not
 # yield two reviews under 0x<hash> and x402:base:<hash> spellings.
-_REFERENCE_PREFIX_RE = re.compile(r"^(?:x402:base:|mppx:tempo:)")
+_REFERENCE_PREFIX_RE = re.compile(r"^(?:x402:base:|mppx:tempo:)", re.IGNORECASE)
 
 
 def canonical_payment_reference(reference: str) -> str:
     """Signatures are always verified against the reference exactly as
     submitted (the client signed that string); this canonical form exists
     only for dedup, storage, and on-chain lookup."""
-    return _REFERENCE_PREFIX_RE.sub("", reference.strip())
+    canonical = _REFERENCE_PREFIX_RE.sub("", reference.strip())
+    return canonical.lower() if TX_HASH_RE.match(canonical) else canonical
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,8 @@ class PaymentVerification:
     # payment_reference with any provider prefix stripped; persisted to
     # reviews.payment_reference_canonical for dedup.
     canonical_reference: str | None = None
+    error_code: str | None = None
+    retryable: bool = False
 
 
 def reviewer_id_from_payment(payment_reference: str) -> str:
@@ -256,67 +259,54 @@ def _verify_signed_machine_payment(
 
     canonical = canonical_payment_reference(payment_reference)
 
-    # Proof is optional. Without one, a payment_reference that is a tx hash
-    # is verified directly on-chain (same checks a proof path runs — the
-    # proof header is unsigned client JSON, so the chain is the only source
-    # of truth either way). A failed tx-only check accepts the review at
-    # signature_only rather than rejecting; a proof that is supplied but
-    # fails verification stays a hard rejection below — a failing proof is
-    # worse than no proof and must never silently downgrade.
+    # Proof is optional, but a supported-chain transaction hash is mandatory.
+    # New machine-payment reviews never downgrade a definitive chain failure
+    # to signature_only: doing so would let an attacker reserve another
+    # payer's public transaction hash before the real payer reviews it.
     if not payment_proof:
-        level = LEVEL_SIGNATURE_ONLY
-        amount: int | None = None
-        reason_text = "signature verified; payment unverified (no payment_proof supplied)"
+        if not TX_HASH_RE.match(canonical):
+            return PaymentVerification(
+                False,
+                "payment_reference must be an EVM transaction hash for x402 Base or mppx Tempo",
+                error_code="unsupported_payment_reference",
+            )
+        check, verification_meta = check_payment_reference_onchain(
+            provider=identity.payment_provider,
+            payment_target_ref=identity.payment_target_ref,
+            reviewer_wallet=wallet,
+            tx_hash=canonical,
+        )
+        verification_meta["proof_present"] = False
+        verification_meta["source"] = "payment_reference"
+        if not check.ok or check.transfer is None:
+            return _chain_failure(identity.payment_provider, check)
         metadata: dict[str, Any] = {
             "review_payload": json.loads(payload),
             "signature_recovered_wallet": recovered,
             "proof": None,
+            "transaction": {
+                "hash": canonical,
+                "from": check.transfer["from"],
+                "to": check.transfer["to"],
+                "value": str(check.transfer["value"])
+                if check.transfer["value"] is not None
+                else None,
+                "token": check.transfer["token"],
+                "block_number": check.block_number,
+            },
         }
-        verification_meta: dict[str, Any] = {
-            "proof_present": False,
-            "source": None,
-            "token_pinned": False,
-            "amount_checked": False,
-            "verification_failure": None,
-        }
-        if TX_HASH_RE.match(canonical):
-            check, chain_meta = check_payment_reference_onchain(
-                provider=identity.payment_provider,
-                payment_target_ref=identity.payment_target_ref,
-                reviewer_wallet=wallet,
-                tx_hash=canonical,
-            )
-            chain_meta["proof_present"] = False
-            chain_meta["source"] = "payment_reference"
-            verification_meta = chain_meta
-            if check.ok and check.transfer is not None:
-                level = LEVEL_ONCHAIN_VERIFIED
-                amount = check.transfer["value"]
-                reason_text = (
-                    "signature verified; payment verified on-chain from payment_reference"
-                )
-                metadata["transaction"] = {
-                    "hash": canonical,
-                    "from": check.transfer["from"],
-                    "to": check.transfer["to"],
-                    "value": str(check.transfer["value"])
-                    if check.transfer["value"] is not None
-                    else None,
-                    "token": check.transfer["token"],
-                    "block_number": check.block_number,
-                }
         return PaymentVerification(
             True,
-            reason_text,
+            "signature verified; payment verified on-chain from payment_reference",
             reviewer_id=_reviewer_id_from_wallet(wallet),
             metadata=metadata,
             reviewer_wallet=wallet,
             review_signature=review_signature.strip(),
             signature_scheme=signature_scheme,
-            payment_verified=level in VERIFIED_LEVELS,
+            payment_verified=True,
             signature_verified=True,
-            amount=amount,
-            payment_verification_level=level,
+            amount=check.transfer["value"],
+            payment_verification_level=LEVEL_ONCHAIN_VERIFIED,
             payment_verification_metadata=verification_meta,
             canonical_reference=canonical,
         )
@@ -375,9 +365,15 @@ def _verify_mppx_payment(
     if receipt is None:
         return PaymentVerification(False, "payment_proof must be a valid mppx Payment-Receipt")
     if receipt.get("status") != "success":
-        return PaymentVerification(False, "mppx receipt status is not success")
+        return PaymentVerification(
+            False, "mppx receipt status is not success", error_code="payment_failed"
+        )
     if receipt.get("method") != "tempo":
-        return PaymentVerification(False, "mppx receipt method must be tempo")
+        return PaymentVerification(
+            False,
+            "only mppx Tempo payments are supported",
+            error_code="unsupported_payment_chain",
+        )
 
     tx_hash = str(receipt.get("reference") or "").strip()
     if not TX_HASH_RE.match(tx_hash):
@@ -394,26 +390,8 @@ def _verify_mppx_payment(
     verification_meta["proof_present"] = True
     verification_meta["source"] = "payment_proof"
 
-    # Token pinning is symmetric with the tx-only path: without a configured
-    # Tempo token, no mppx review upgrades to onchain_verified — but a
-    # missing pin is server config, never the client's fault, so the review
-    # is accepted at signature_only instead of rejected.
-    if check.failure == FAILURE_TOKEN_NOT_PINNED:
-        return PaymentVerification(
-            True,
-            "mppx receipt accepted; payment unverified (MPPX_TEMPO_TOKEN_ADDRESS not configured)",
-            metadata={"provider": "mppx", "receipt": receipt, "transaction": None},
-            payment_verification_level=LEVEL_SIGNATURE_ONLY,
-            payment_verification_metadata=verification_meta,
-        )
-    if check.failure == FAILURE_RPC_UNREACHABLE:
-        return PaymentVerification(False, "could not verify mppx transaction on Tempo")
-    if check.failure == FAILURE_TX_FAILED:
-        return PaymentVerification(False, "mppx transaction did not succeed on Tempo")
-    if check.transfer is None:
-        return PaymentVerification(
-            False, "reviewer_wallet did not send the mppx payment in the expected token"
-        )
+    if not check.ok or check.transfer is None:
+        return _chain_failure("mppx", check)
 
     transfer = check.transfer
     metadata: dict[str, Any] = {
@@ -481,7 +459,11 @@ def _verify_x402_payment(
 
     network = str(proof.get("network") or proof.get("chain") or "base").lower()
     if network not in {"base", "eip155:8453", "8453"}:
-        return PaymentVerification(False, "only x402 Base EVM payments are currently supported")
+        return PaymentVerification(
+            False,
+            "only x402 Base EVM payments are supported",
+            error_code="unsupported_payment_chain",
+        )
 
     check, verification_meta = check_payment_reference_onchain(
         provider="x402",
@@ -492,25 +474,8 @@ def _verify_x402_payment(
     verification_meta["proof_present"] = True
     verification_meta["source"] = "payment_proof"
 
-    if check.failure == FAILURE_TOKEN_NOT_PINNED:
-        # Only reachable when X402_USDC_ADDRESS is set to a malformed value
-        # (the hardcoded Base USDC default always pins); same symmetric rule
-        # as mppx: server misconfig accepts at signature_only, never rejects.
-        return PaymentVerification(
-            True,
-            "x402 proof accepted; payment unverified (pinned token misconfigured)",
-            metadata={"provider": "x402", "proof": proof, "transaction": None},
-            payment_verification_level=LEVEL_SIGNATURE_ONLY,
-            payment_verification_metadata=verification_meta,
-        )
-    if check.failure == FAILURE_RPC_UNREACHABLE:
-        return PaymentVerification(False, "could not verify x402 transaction on Base")
-    if check.failure == FAILURE_TX_FAILED:
-        return PaymentVerification(False, "x402 transaction did not succeed on Base")
-    if check.transfer is None:
-        return PaymentVerification(
-            False, "reviewer_wallet did not send the x402 payment in USDC"
-        )
+    if not check.ok or check.transfer is None:
+        return _chain_failure("x402", check)
 
     transfer = check.transfer
     required = _amount_to_int(
@@ -556,6 +521,41 @@ class OnchainCheck:
     failure: str | None = None
     transfer: dict[str, Any] | None = None
     block_number: int | None = None
+
+
+def _chain_failure(provider: str, check: OnchainCheck) -> PaymentVerification:
+    network = "Base" if provider == "x402" else "Tempo"
+    if check.failure == FAILURE_RPC_UNREACHABLE:
+        return PaymentVerification(
+            False,
+            f"could not verify {provider} transaction on {network}",
+            error_code="payment_rpc_unavailable",
+            retryable=True,
+        )
+    if check.failure == FAILURE_TOKEN_NOT_PINNED:
+        return PaymentVerification(
+            False,
+            f"{provider} payment token is not configured",
+            error_code="payment_verifier_misconfigured",
+            retryable=True,
+        )
+    if check.failure == FAILURE_PAYEE_UNKNOWN:
+        return PaymentVerification(
+            False,
+            "service payment recipient is not registered",
+            error_code="payment_payee_unknown",
+        )
+    if check.failure == FAILURE_TX_FAILED:
+        return PaymentVerification(
+            False,
+            f"{provider} transaction did not succeed on {network}",
+            error_code="payment_transaction_failed",
+        )
+    return PaymentVerification(
+        False,
+        "reviewer wallet did not send the expected token to the registered service payee",
+        error_code="payment_transfer_mismatch",
+    )
 
 
 def _x402_chain_config() -> tuple[str, str | None]:

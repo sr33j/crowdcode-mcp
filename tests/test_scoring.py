@@ -14,6 +14,7 @@ from crowdcode.scoring import (
     TRUST_FLOOR,
     ReviewRow,
     TrustRow,
+    aggregate_daily_reviews,
     compute_score,
     decay_factor,
     effective_weight,
@@ -76,6 +77,38 @@ def test_single_verified_seed_review():
     assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA)
     assert result.score == 4.0
     assert not is_unproven(result.n_eff)
+
+
+def test_same_wallet_same_utc_day_is_one_weighted_average_bucket():
+    reviews = [review("0xseed", 1), review("0xseed", 5)]
+    buckets = aggregate_daily_reviews(reviews, NOW)
+    assert len(buckets) == 1
+    assert buckets[0].rating == 3.0
+    assert buckets[0].evidence == 2.0
+
+    result = compute_score(reviews, {"0xseed": SEED}, NOW)
+    assert result.n_eff == 2.0
+    assert result.score == MU0
+
+
+def test_same_day_rating_uses_proof_and_decay_weights_but_caps_evidence():
+    reviews = [
+        review("0xseed", 5, level="onchain_verified"),
+        review("0xseed", 1, verified=False, level="signature_only"),
+    ]
+    bucket = aggregate_daily_reviews(reviews, NOW)[0]
+    assert bucket.rating == 11.0 / 3.0
+    assert bucket.evidence == 2.0
+
+
+def test_utc_day_boundary_allows_a_second_daily_bucket():
+    reviews = [
+        ReviewRow("0xseed", 5, True, True, datetime(2026, 7, 24, 23, 59, tzinfo=UTC)),
+        ReviewRow("0xseed", 5, True, True, datetime(2026, 7, 25, 0, 1, tzinfo=UTC)),
+    ]
+    result = compute_score(reviews, {"0xseed": SEED}, NOW)
+    assert len(aggregate_daily_reviews(reviews, NOW)) == 2
+    assert math.isclose(result.n_eff, 3.9923057743167902)
 
 
 def test_unverified_review_carries_half_the_weight_of_a_verified_one():

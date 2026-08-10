@@ -23,7 +23,7 @@ function validStored(): string {
 describe("loadWallet", () => {
   beforeEach(() => resetWalletCache());
 
-  it("env key wins entirely; file is never touched even when invalid", async () => {
+  it("rejects a configured env key without reading or replacing the wallet file", async () => {
     const dir = await tempDir();
     await mkdir(dir, { recursive: true });
     const file = join(dir, "wallet.json");
@@ -35,8 +35,11 @@ describe("loadWallet", () => {
       walletDir: dir,
       autoCreate: true,
     });
-    expect(wallet.source).toBe("env");
-    expect(wallet.address).toBe(ACCOUNT.address);
+    expect(wallet.source).toBe("none");
+    expect(wallet.address).toBeNull();
+    expect(wallet.account).toBeNull();
+    expect(wallet.errorCode).toBe("wallet_configuration_error");
+    expect(wallet.error).toContain("X402_PRIVATE_KEY is no longer supported");
     expect(await readFile(file, "utf8")).toBe(before);
   });
 
@@ -49,6 +52,7 @@ describe("loadWallet", () => {
     });
     expect(wallet.source).toBe("none");
     expect(wallet.error).toContain("X402_PRIVATE_KEY");
+    expect(wallet.errorCode).toBe("wallet_configuration_error");
   });
 
   it("loads a valid agentcash wallet file", async () => {

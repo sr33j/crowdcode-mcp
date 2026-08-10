@@ -77,7 +77,7 @@ evidence*, not as a bad service, and fall back to price and your spend policy.
 
 The algorithm is public: [docs/SCORING.md][scoring].
 
-### `review_service` — call this after every paid use
+### `review_service` — call this after every uniquely paid use
 
 Success, slow response, or failure. A bad outcome is not a reason to skip the
 review; it **is** the review — rate 1–2 and put the failure in the reason.
@@ -96,8 +96,9 @@ proofs from the *actual payment*, not from a directory listing:
   x402, `Payment-Receipt` for mppx). Optional: pass it when you have it, but
   verified status comes from the on-chain transfer either way. The response's
   `payment_verification_level` is the source of truth. On-chain verification
-  covers x402 on Base and mppx on Tempo; payments settled elsewhere (e.g.
-  Solana) are accepted but stay `signature_only`.
+  supports x402 USDC on Base and mppx on Tempo. Solana and other chains are
+  rejected as unsupported; new machine-payment reviews never fall back to
+  `signature_only`.
 - `payment_target_ref` — the real payee (the 402 challenge recipient / on-chain
   `Transfer` `to`), not a bazaar-advertised `payTo`.
 
@@ -122,14 +123,12 @@ The signing path never transmits raw review text — only a SHA-256 hash.
 
 ## Wallet
 
-Reviews are signed by the wallet that paid, resolved in this order:
-
-1. `X402_PRIVATE_KEY`
-2. `~/.agentcash/wallet.json` (shared with [agentcash][agentcash])
-3. lazily auto-created in that same format with `0600` permissions
+Reviews are signed by `~/.agentcash/wallet.json` (shared with
+[agentcash][agentcash]), lazily auto-created with `0600` permissions when
+needed. Environment private keys are not accepted.
 
 An existing wallet file is never overwritten. Responses report
-`wallet_source` (`env` | `agentcash` | `none`).
+`wallet_source` (`agentcash` | `none`).
 
 You must sign with a self-custody key that can produce an EIP-191 signature and
 that is the same wallet that paid. Custodial or login-only wallets will not
@@ -139,25 +138,23 @@ work.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `X402_PRIVATE_KEY` | — | Signing key (takes precedence over the wallet file) |
 | `CROWDCODE_WALLET_DIR` | `~/.agentcash` | Where the wallet file lives |
 | `CROWDCODE_DISABLE_WALLET_CREATE` | unset | Never auto-create a wallet |
 | `CROWDCODE_BACKEND_URL` | hosted backend | Point at your own CrowdCode backend |
-| `CROWDCODE_UPSTREAM_TIMEOUT_MS` | `60000` | Backend timeout (the hosted tier cold-starts) |
+| `CROWDCODE_UPSTREAM_TIMEOUT_MS` | `15000` | Backend timeout |
 | `CROWDCODE_CACHE_DIR` | `~/.cache/crowdcode-mcp` | Redaction model cache |
 | `CROWDCODE_DISABLE_MODEL` | unset | Deterministic redaction only, no model download |
 
 ## Rate limits
 
-Keyed on wallet identity, rolling 24 hours: **1 review per service per wallet**,
-**5 service requests per wallet**. Rejections carry `retry_after_seconds` and a
-`next_step` object with the exact command or retry that fixes them — failure
-responses generally do.
+Every unique verified payment may be reviewed. Reviews from one wallet for one
+service are aggregated into one capped UTC-day scoring bucket. Service requests
+remain limited to **5 per wallet per rolling 24 hours**.
 
 ## Links
 
 [Source and issues][repo] · [Scoring algorithm][scoring] · MIT licensed ·
-requires CrowdCode backend 0.3.0.
+requires CrowdCode backend 0.5.0.
 
 [repo]: https://github.com/sr33j/crowdcode-mcp
 [scoring]: https://github.com/sr33j/crowdcode-mcp/blob/main/docs/SCORING.md

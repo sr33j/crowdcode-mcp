@@ -113,7 +113,9 @@ describe("cross-client installation", () => {
       true,
     );
     const skill = await readFile(join(oldSkillDir, "SKILL.md"), "utf8");
-    expect(skill).toContain("Mandatory reputation checks for paid agent services");
+    expect(skill).toContain(
+      "Mandatory reputation checks when purchasing third-party paid APIs",
+    );
 
     const cursor = JSON.parse(await readFile(cursorConfig, "utf8"));
     expect(cursor.mcpServers.existing.command).toBe("keep");
