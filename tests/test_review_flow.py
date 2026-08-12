@@ -364,6 +364,91 @@ def test_mppx_pins_the_configured_tempo_token(monkeypatch):
     assert "expected token" in wrong.reason
 
 
+# Hex tx hashes are case-insensitive: a checksummed reference must match a
+# lowercase proof hash (and vice versa), exactly as the proofless path already
+# canonicalizes. Regression tests for github issue #2.
+
+UPPER_TX_HASH = "0x" + TX_HASH[2:].upper()
+
+
+def _verify_x402_case(monkeypatch, *, reference: str, proof_tx: str):
+    identity = _x402_identity()
+    reason = "fast and correct"
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
+    )
+    return verify_review_payment(
+        identity=identity,
+        rating=5,
+        reason=reason,
+        payment_reference=reference,
+        payment_proof=json.dumps({"transaction": proof_tx, "network": "base"}),
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_sign(
+            canonical_review_payload(
+                identity=identity, rating=5, reason=reason, payment_reference=reference
+            )
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reference", "proof_tx"),
+    [
+        (UPPER_TX_HASH, TX_HASH),
+        (TX_HASH, UPPER_TX_HASH),
+        (f"x402:base:{UPPER_TX_HASH}", TX_HASH),
+    ],
+)
+def test_x402_proof_accepts_mixed_case_tx_hashes(monkeypatch, reference, proof_tx):
+    verification = _verify_x402_case(monkeypatch, reference=reference, proof_tx=proof_tx)
+    assert verification.ok, verification.reason
+    assert verification.payment_verified
+    assert verification.canonical_reference == TX_HASH
+    assert verification.metadata["transaction"]["hash"] == TX_HASH
+
+
+def test_mppx_proof_accepts_mixed_case_tx_hashes(monkeypatch):
+    monkeypatch.setenv("MPPX_TEMPO_TOKEN_ADDRESS", TEMPO_TOKEN)
+    monkeypatch.setattr(
+        payments_mod,
+        "_rpc_transaction_receipt",
+        lambda rpc, h: _transfer_receipt(
+            payer=ACCOUNT.address, payee=PAYEE, token=TEMPO_TOKEN
+        ),
+    )
+    reason = "solid data"
+    reference = f"mppx:tempo:{UPPER_TX_HASH}"
+    verification = verify_review_payment(
+        identity=IDENTITY,  # provider mppx, target PAYEE
+        rating=5,
+        reason=reason,
+        payment_reference=reference,
+        payment_proof=json.dumps(
+            {"status": "success", "method": "tempo", "reference": TX_HASH}
+        ),
+        reviewer_wallet=ACCOUNT.address,
+        review_signature=_sign(
+            canonical_review_payload(
+                identity=IDENTITY, rating=5, reason=reason, payment_reference=reference
+            )
+        ),
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified
+    assert verification.canonical_reference == TX_HASH
+    assert verification.metadata["transaction"]["hash"] == TX_HASH
+
+
+def test_proof_still_rejects_a_genuinely_different_tx_hash(monkeypatch):
+    other_tx = "0x" + "ef" * 32
+    verification = _verify_x402_case(monkeypatch, reference=other_tx, proof_tx=TX_HASH)
+    assert not verification.ok
+    assert verification.reason == "payment_reference does not match x402 transaction"
+
+
 @pytest.mark.parametrize(
     ("identity", "proof"),
     [
@@ -550,6 +635,17 @@ def test_txonly_prefixed_reference_verifies_and_canonicalizes(monkeypatch):
         monkeypatch,
         _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
         reference=f"x402:base:{TX_HASH}",
+    )
+    assert verification.ok, verification.reason
+    assert verification.payment_verified is True
+    assert verification.canonical_reference == TX_HASH
+
+
+def test_txonly_mixed_case_reference_verifies_and_canonicalizes(monkeypatch):
+    verification = _verify_txonly(
+        monkeypatch,
+        _transfer_receipt(payer=ACCOUNT.address, payee=PAYEE),
+        reference=UPPER_TX_HASH,
     )
     assert verification.ok, verification.reason
     assert verification.payment_verified is True

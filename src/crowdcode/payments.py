@@ -378,7 +378,10 @@ def _verify_mppx_payment(
     tx_hash = str(receipt.get("reference") or "").strip()
     if not TX_HASH_RE.match(tx_hash):
         return PaymentVerification(False, "mppx receipt reference must be a transaction hash")
-    if payment_reference.strip() not in {tx_hash, f"mppx:tempo:{tx_hash}"}:
+    # Hex tx hashes are case-insensitive: compare (and look up) in lowercase
+    # so a checksummed reference matches, like the proofless path does.
+    tx_hash = tx_hash.lower()
+    if payment_reference.strip().lower() not in {tx_hash, f"mppx:tempo:{tx_hash}"}:
         return PaymentVerification(False, "payment_reference does not match mppx receipt reference")
 
     check, verification_meta = check_payment_reference_onchain(
@@ -454,7 +457,10 @@ def _verify_x402_payment(
     )
     if not isinstance(tx_hash, str) or not TX_HASH_RE.match(tx_hash):
         return PaymentVerification(False, "x402 payment_proof must include a transaction hash")
-    if payment_reference.strip() not in {tx_hash, f"x402:base:{tx_hash}"}:
+    # Hex tx hashes are case-insensitive: compare (and look up) in lowercase
+    # so a checksummed reference matches, like the proofless path does.
+    tx_hash = tx_hash.lower()
+    if payment_reference.strip().lower() not in {tx_hash, f"x402:base:{tx_hash}"}:
         return PaymentVerification(False, "payment_reference does not match x402 transaction")
 
     network = str(proof.get("network") or proof.get("chain") or "base").lower()
