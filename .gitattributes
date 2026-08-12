@@ -1,0 +1,4 @@
+# Skill/plugin markdown must be byte-identical across platforms (the
+# packaging tests and check:assets compare exact contents), so never let
+# Windows checkouts rewrite them to CRLF.
+*.md text eol=lf

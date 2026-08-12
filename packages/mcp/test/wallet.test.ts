@@ -108,8 +108,11 @@ describe("loadWallet", () => {
     expect(created.address).toMatch(/^0x[a-fA-F0-9]{40}$/);
 
     const file = join(dir, "wallet.json");
-    const mode = (await stat(file)).mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (process.platform !== "win32") {
+      // Windows has no POSIX permission bits; stat always reports 0o666.
+      const mode = (await stat(file)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
     const stored = JSON.parse(await readFile(file, "utf8"));
     expect(stored.privateKey).toMatch(/^0x[a-fA-F0-9]{64}$/);
     expect(stored.address).toBe(created.address);

@@ -433,7 +433,10 @@ describe("transparent review signing", () => {
     );
     expect(payload.wallet_source).toBe("agentcash");
     expect(payload.wallet_created).toBe(true);
-    expect(((await stat(join(dir, "wallet.json"))).mode & 0o777)).toBe(0o600);
+    if (process.platform !== "win32") {
+      // Windows has no POSIX permission bits; stat always reports 0o666.
+      expect(((await stat(join(dir, "wallet.json"))).mode & 0o777)).toBe(0o600);
+    }
   });
 
   it("attaches requester_wallet to request_service from the local wallet", async () => {
