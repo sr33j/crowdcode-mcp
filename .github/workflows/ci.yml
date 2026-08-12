@@ -19,6 +19,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # crowdcode-mcp imports @crowdcode/redaction's types from its dist
+      # output, so the workspace dependency must be built before typecheck.
+      - run: npm run build -w @crowdcode/redaction
       - run: npm run typecheck -w @crowdcode/redaction -w crowdcode-mcp
       - run: npm test
       - run: npm run check:assets -w crowdcode-mcp
