@@ -6,6 +6,7 @@ import { verifyMessage } from "viem";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getConfig } from "../src/config.js";
 import { RedactionEngine } from "@crowdcode/redaction";
+import { canonicalBoardPayload } from "../src/canonical/board.js";
 import { buildIdentity } from "../src/canonical/identity.js";
 import { canonicalReviewPayload } from "../src/canonical/payload.js";
 import { createToolHandlers } from "../src/server.js";
@@ -36,30 +37,25 @@ async function makeEngine(): Promise<RedactionEngine> {
 }
 
 describe("tool handlers", () => {
-  it("redacts free text before forwarding request_service and attests", async () => {
+  it("redacts free text before forwarding search_posts and attests", async () => {
     const engine = await makeEngine();
     const upstream = fakeUpstream(() => ({
-      accepted: true,
-      request_id: 1,
-      directory_match: "missing",
+      status: "ok",
+      services: [],
+      posts: [],
     }));
     const handlers = createToolHandlers({ engine, upstream });
 
-    const result = await handlers.request_service({
-      service_description:
-        "OCR service; my email is jane@corp.com and key sk-abcdefghij0123456789",
-      task_context: "billing at jane@corp.com",
+    const result = await handlers.search_posts({
+      query: "OCR service for jane@corp.com invoices",
     });
     const payload = JSON.parse(result.content[0]!.text);
 
     const sent = upstream.calls[0]!.args;
-    expect(sent.service_description).not.toContain("jane@corp.com");
-    expect(sent.service_description).not.toContain("sk-abcdefghij0123456789");
-    expect(sent.service_description).toContain("[EMAIL_1]");
-    expect(sent.service_description).toContain("[API_KEY_1]");
-    expect(sent.task_context).toContain("[EMAIL_");
-    expect(payload.accepted).toBe(true);
-    expect(payload._redaction.entities_removed).toBeGreaterThanOrEqual(3);
+    expect(sent.query).not.toContain("jane@corp.com");
+    expect(sent.query).toContain("[EMAIL_1]");
+    expect(payload.status).toBe("ok");
+    expect(payload._redaction.entities_removed).toBeGreaterThanOrEqual(1);
     expect(payload._redaction.model_active).toBe(false);
   });
 
@@ -115,8 +111,7 @@ describe("tool handlers", () => {
     };
     const handlers = createToolHandlers({ engine, upstream });
     const payload = JSON.parse(
-      (await handlers.request_service({ service_description: "x" })).content[0]!
-        .text,
+      (await handlers.search_posts({ query: "x" })).content[0]!.text,
     );
     expect(payload.accepted).toBe(false);
     expect(payload.status).toBe("unavailable");
@@ -125,7 +120,7 @@ describe("tool handlers", () => {
     expect(payload.reason).toBe("CrowdCode is temporarily unavailable");
     expect(payload.reason).not.toContain("boom");
     expect(payload.next_step.action).toBe("retry_backend");
-    expect(payload.next_step.retry.tool).toBe("request_service");
+    expect(payload.next_step.retry.tool).toBe("search_posts");
   });
 
   it("rejects env-key auto-signing before any upstream call", async () => {
@@ -439,9 +434,9 @@ describe("transparent review signing", () => {
     }
   });
 
-  it("attaches requester_wallet to request_service from the local wallet", async () => {
+  it("signs make_post over the redacted text with the local wallet", async () => {
     const engine = await makeEngine();
-    const upstream = fakeUpstream(() => ({ accepted: true, request_id: 1 }));
+    const upstream = fakeUpstream(() => ({ accepted: true, post_id: "post_x" }));
     const dir = await walletDirWith(KEY);
     const handlers = createToolHandlers({
       engine,
@@ -449,8 +444,112 @@ describe("transparent review signing", () => {
       wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv },
     });
 
-    await handlers.request_service({ service_description: "OCR service" });
-    expect(upstream.calls[0]!.args.requester_wallet).toBe(ACCOUNT.address);
+    const result = await handlers.make_post({
+      text: "OCR for invoices from jane@corp.com — worth $0.05/page",
+      bounty_amount: "5.00",
+    });
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.wallet_source).toBe("agentcash");
+
+    const sent = upstream.calls[0]!.args;
+    expect(sent.wallet).toBe(ACCOUNT.address.toLowerCase());
+    expect(String(sent.text)).toContain("[EMAIL_1]");
+    expect(sent.bounty_amount).toBe("5");
+
+    // The signature must verify against the canonical payload the backend
+    // rebuilds from the forwarded arguments.
+    const message = canonicalBoardPayload({
+      wallet: String(sent.wallet),
+      text: String(sent.text),
+      bountyAmount: sent.bounty_amount as string,
+      timestamp: String(sent.timestamp),
+      nonce: String(sent.nonce),
+    });
+    expect(
+      await verifyMessage({
+        address: ACCOUNT.address,
+        message,
+        signature: sent.signature as `0x${string}`,
+      }),
+    ).toBe(true);
+  });
+
+  it("comment_on_post includes parent_post_id in the signed payload", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream(() => ({ accepted: true }));
+    const dir = await walletDirWith(KEY);
+    const handlers = createToolHandlers({
+      engine,
+      upstream,
+      wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv },
+    });
+
+    const postId = "post_" + "ab".repeat(10);
+    await handlers.comment_on_post({
+      post_id: postId,
+      text: "I built this: https://api.example.com/ocr",
+      bounty_amount: "0",
+    });
+    const sent = upstream.calls[0]!.args;
+    expect(sent.post_id).toBe(postId);
+    const message = canonicalBoardPayload({
+      wallet: String(sent.wallet),
+      text: String(sent.text),
+      bountyAmount: sent.bounty_amount as string,
+      timestamp: String(sent.timestamp),
+      nonce: String(sent.nonce),
+      parentPostId: postId,
+    });
+    expect(
+      await verifyMessage({
+        address: ACCOUNT.address,
+        message,
+        signature: sent.signature as `0x${string}`,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects board writes without a wallet before any upstream call", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream(() => {
+      throw new Error("upstream must not be called");
+    });
+    const dir = await walletDirWith(null);
+    const handlers = createToolHandlers({
+      engine,
+      upstream,
+      wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv },
+    });
+
+    const payload = JSON.parse(
+      (await handlers.make_post({ text: "needs a wallet" })).content[0]!.text,
+    );
+    expect(payload.accepted).toBe(false);
+    expect(payload.error_code).toBe("wallet_required");
+    expect(payload.next_step.action).toBe("install_wallet");
+    expect(upstream.calls).toHaveLength(0);
+  });
+
+  it("rejects an invalid bounty_amount locally", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream(() => {
+      throw new Error("upstream must not be called");
+    });
+    const dir = await walletDirWith(KEY);
+    const handlers = createToolHandlers({
+      engine,
+      upstream,
+      wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv },
+    });
+
+    const payload = JSON.parse(
+      (
+        await handlers.make_post({ text: "x", bounty_amount: "-5" })
+      ).content[0]!.text,
+    );
+    expect(payload.accepted).toBe(false);
+    expect(payload.error_code).toBe("board_input_invalid");
+    expect(upstream.calls).toHaveLength(0);
   });
 
   it("adds an onboarding CTA to paid-service scores when no wallet exists", async () => {

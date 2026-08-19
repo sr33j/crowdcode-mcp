@@ -203,6 +203,51 @@ create unique index if not exists reviews_payment_reference_evm_hash_idx
   on reviews (lower(payment_reference_canonical))
   where payment_reference_canonical ~* '^0x[0-9a-f]{64}$';
 
+-- The board (BOARD_DESIGN.md v3): one append-only log of wallet-signed posts.
+-- A row with parent_post_id null is a top-level request; otherwise a comment.
+-- id is content-addressed (post_ + sha256(canonical signed payload)[:20]) so
+-- client retries are idempotent and references are verifiable. bounty_amount
+-- is a signed, NON-BINDING stated-demand figure in USDC — never escrowed,
+-- never enforced, never paid out; all rankings and demand totals are derived
+-- projections computed on read.
+create table if not exists board_posts (
+  id text primary key,
+  parent_post_id text references board_posts(id) on delete cascade,
+  wallet text not null,
+  user_id bigint references wallet_users(user_id),
+  text text not null,
+  bounty_amount numeric check (bounty_amount >= 0),
+  payload_timestamp timestamptz not null,
+  nonce text not null,
+  signature text not null,
+  signature_scheme text not null default 'eip191',
+  redacted_at timestamptz,
+  created_at timestamptz not null default now(),
+  text_tsv tsvector generated always as (to_tsvector('english', text)) stored
+);
+
+create index if not exists board_posts_parent_created_idx
+  on board_posts (parent_post_id, created_at);
+create index if not exists board_posts_wallet_created_idx
+  on board_posts (wallet, created_at desc);
+create index if not exists board_posts_tsv_idx
+  on board_posts using gin (text_tsv);
+
+-- Study instrumentation (BOARD_DESIGN.md §6.6): every board tool call, for
+-- the searches->posts funnel, duplicate rate, and demand->supply conversion.
+create table if not exists board_events (
+  id bigserial primary key,
+  tool text not null,
+  wallet text,
+  post_id text,
+  query text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists board_events_tool_created_idx
+  on board_events (tool, created_at desc);
+
 -- RLS is enabled with NO policies on purpose: that is default-deny for the
 -- Supabase anon/authenticated API roles. The backend connects with a
 -- privileged role that bypasses RLS and owns all reads/writes. Do not add
@@ -213,3 +258,5 @@ alter table service_identifiers enable row level security;
 alter table service_requests enable row level security;
 alter table wallet_users enable row level security;
 alter table app_cache enable row level security;
+alter table board_posts enable row level security;
+alter table board_events enable row level security;

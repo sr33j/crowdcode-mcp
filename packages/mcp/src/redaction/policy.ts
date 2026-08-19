@@ -14,6 +14,9 @@ import type { RedactionEngine } from "@crowdcode/redaction";
 export const REDACTION_POLICY: Record<string, readonly string[]> = {
   request_service: ["service_description", "task_context"],
   review_service: ["reason", "task_context"],
+  make_post: ["text"],
+  comment_on_post: ["text"],
+  search_posts: ["query"],
 };
 
 export interface RedactedArgs {

@@ -4,13 +4,24 @@ This codebase is intentionally small. The goal is to prove the end-to-end CrowdC
 
 ## `src/crowdcode/server.py`
 
-Defines the FastMCP server and the active v1 tools:
+Defines the FastMCP server and the active tools:
 
-- `request_service`
 - `get_service_score`
 - `review_service`
+- `get_review_signing_payload`
+- `make_post` / `comment_on_post` / `search_posts` / `get_comments_on_post`
+  (the board, BOARD_DESIGN.md v3; `request_service` is retained for old
+  clients but subsumed by `make_post`)
 
-Tool logic is kept explicit instead of hidden behind abstractions because v1 has very little behavior.
+Tool logic is kept explicit instead of hidden behind abstractions.
+
+## `src/crowdcode/board.py`
+
+Canonical `crowdcode.post.v1` / `crowdcode.comment.v1` payloads, EIP-191
+verification, bounty canonicalization, trust-weighted demand aggregation,
+and board search/ranking. `bounty_amount` is a signed, NON-BINDING demand
+statement — the board has no settlement machinery; the review loop is the
+settlement layer.
 
 ## `src/crowdcode/db.py`
 

@@ -23,6 +23,11 @@ from crowdcode.identity import (  # noqa: E402
     normalize_api_endpoint,
     normalize_payment_provider,
 )
+from crowdcode.board import (  # noqa: E402
+    canonical_bounty_amount,
+    canonical_post_payload,
+    post_id_from_payload,
+)
 from crowdcode.payments import canonical_review_payload  # noqa: E402
 
 
@@ -195,6 +200,110 @@ REVIEW_PAYLOAD_INPUTS = [
 ]
 
 
+BOUNTY_INPUTS = [
+    None,
+    "",
+    "  ",
+    "0",
+    "5",
+    "05",
+    "5.0",
+    "1.50",
+    "0.25",
+    "0.250000",
+    "1000000",
+    "1000001",
+    "0.1234567",
+    "-1",
+    "1e3",
+    ".5",
+    "5.",
+]
+
+BOARD_PAYLOAD_INPUTS = [
+    {
+        "name": "post, ascii text, integer bounty",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "text": "Resolve a citation like 'Smith et al. 2019' to the paper — worth ~$0.10 per lookup.",
+        "bounty_amount": "5",
+        "timestamp": "2026-08-19T12:00:00Z",
+        "nonce": "aabbccddeeff00112233445566778899",
+        "parent_post_id": None,
+    },
+    {
+        "name": "post, no bounty, emoji and non-ascii text",
+        "wallet": "0x1111111111111111111111111111111111111111",
+        "text": "  Semantic search over paywalled PDFs — très utile 🚀  ",
+        "bounty_amount": None,
+        "timestamp": "2026-08-19T00:59:59Z",
+        "nonce": "0123456789abcdef",
+        "parent_post_id": None,
+    },
+    {
+        "name": "post, zero bounty (upvote), trailing-zero normalization",
+        "wallet": "0x2222222222222222222222222222222222222222",
+        "text": "OCR for handwritten invoices",
+        "bounty_amount": "0",
+        "timestamp": "2026-12-31T23:59:59Z",
+        "nonce": "ffffffffffffffffffffffffffffffff",
+        "parent_post_id": None,
+    },
+    {
+        "name": "comment with fractional bounty needing canonicalization",
+        "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "text": "I built this: https://api.example.com/ocr — $0.05 per page.",
+        "bounty_amount": "1.50",
+        "timestamp": "2026-08-19T12:05:00Z",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "parent_post_id": "post_0123456789abcdef0123",
+    },
+    {
+        "name": "comment, redacted placeholder text (typical real input)",
+        "wallet": "0x3333333333333333333333333333333333333333",
+        "text": "Need this for [EMAIL_1]'s workflow; would pay per call.",
+        "bounty_amount": "0.25",
+        "timestamp": "2026-08-19T12:10:00Z",
+        "nonce": "deadbeefdeadbeefdeadbeefdeadbeef",
+        "parent_post_id": "post_ffffffffffffffffffff",
+    },
+]
+
+
+def bounty_vectors() -> list[dict]:
+    vectors = []
+    for value in BOUNTY_INPUTS:
+        entry: dict = {"input": value}
+        try:
+            entry["expected"] = canonical_bounty_amount(value)
+        except ValueError as exc:
+            entry["error"] = str(exc)
+        vectors.append(entry)
+    return vectors
+
+
+def board_payload_vectors() -> list[dict]:
+    vectors = []
+    for case in BOARD_PAYLOAD_INPUTS:
+        amount = canonical_bounty_amount(case["bounty_amount"])
+        message = canonical_post_payload(
+            wallet=case["wallet"][:2] + case["wallet"][2:].lower(),
+            text=case["text"],
+            bounty_amount=amount,
+            timestamp=case["timestamp"],
+            nonce=case["nonce"],
+            parent_post_id=case["parent_post_id"],
+        )
+        vectors.append(
+            {
+                **case,
+                "expected_bounty_amount": amount,
+                "expected_message": message,
+                "expected_post_id": post_id_from_payload(message),
+            }
+        )
+    return vectors
+
+
 def endpoint_vectors() -> list[dict]:
     vectors = []
     for value in ENDPOINT_INPUTS:
@@ -273,6 +382,18 @@ def main() -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(out, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     print(f"wrote {target} ({len(out['review_payload'])} payload vectors)")
+
+    board = {
+        "version": 1,
+        "generated_by": "scripts/generate_vectors.py",
+        "bounty_normalization": bounty_vectors(),
+        "board_payload": board_payload_vectors(),
+    }
+    board_target = REPO_ROOT / "spec" / "board-payload-vectors.json"
+    board_target.write_text(
+        json.dumps(board, indent=2, ensure_ascii=True) + "\n", encoding="utf-8"
+    )
+    print(f"wrote {board_target} ({len(board['board_payload'])} payload vectors)")
 
 
 if __name__ == "__main__":

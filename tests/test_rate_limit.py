@@ -113,3 +113,28 @@ def test_identity_id_is_salted_and_case_insensitive(monkeypatch):
     wallet = "0x" + "Ab" * 20
     assert identity_id_from_wallet(wallet) == identity_id_from_wallet(wallet.lower())
     assert len(identity_id_from_wallet(wallet)) == 64
+
+
+def test_board_post_limit_uses_wallet_and_parent_null():
+    from crowdcode.rate_limit import check_board_limit
+
+    conn = FakeConn({"n": 4, "oldest": NOW - timedelta(hours=3)})
+    result = check_board_limit(conn, "0xabc", 5, NOW, comments=False)
+    assert result.allowed
+    assert result.remaining == 0
+    sql, params = conn.queries[0]
+    assert "parent_post_id is null" in sql
+    assert params[0] == "0xabc"
+    assert result.limit["scope"] == "board_post_daily"
+
+
+def test_board_comment_limit_blocks_at_cap():
+    from crowdcode.rate_limit import check_board_limit
+
+    conn = FakeConn({"n": 20, "oldest": NOW - timedelta(hours=23)})
+    result = check_board_limit(conn, "0xabc", 20, NOW, comments=True)
+    assert not result.allowed
+    assert result.retry_after_seconds == 3600
+    sql, _ = conn.queries[0]
+    assert "parent_post_id is not null" in sql
+    assert result.limit["scope"] == "board_comment_daily"

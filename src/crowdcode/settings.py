@@ -34,6 +34,9 @@ class Settings:
     project_ideas_cache_seconds: int = 86400
     # Rolling-24h request throttle keyed on wallet identity; 0 disables.
     request_rate_limit_per_day: int = 5
+    # Rolling-24h board write throttles keyed on wallet; 0 disables.
+    board_post_limit_per_day: int = 5
+    board_comment_limit_per_day: int = 20
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
     openai_base_url: str = "https://api.openai.com/v1"
@@ -98,6 +101,12 @@ def get_settings() -> Settings:
         ),
         request_rate_limit_per_day=int(
             os.environ.get("CROWDCODE_REQUEST_LIMIT_PER_DAY", "5")
+        ),
+        board_post_limit_per_day=int(
+            os.environ.get("CROWDCODE_POST_LIMIT_PER_DAY", "5")
+        ),
+        board_comment_limit_per_day=int(
+            os.environ.get("CROWDCODE_COMMENT_LIMIT_PER_DAY", "20")
         ),
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or None,
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip()

@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "generated_by": "scripts/generate_vectors.py",
+  "bounty_normalization": [
+    {
+      "input": null,
+      "expected": null
+    },
+    {
+      "input": "",
+      "expected": null
+    },
+    {
+      "input": "  ",
+      "expected": null
+    },
+    {
+      "input": "0",
+      "expected": "0"
+    },
+    {
+      "input": "5",
+      "expected": "5"
+    },
+    {
+      "input": "05",
+      "expected": "5"
+    },
+    {
+      "input": "5.0",
+      "expected": "5"
+    },
+    {
+      "input": "1.50",
+      "expected": "1.5"
+    },
+    {
+      "input": "0.25",
+      "expected": "0.25"
+    },
+    {
+      "input": "0.250000",
+      "expected": "0.25"
+    },
+    {
+      "input": "1000000",
+      "expected": "1000000"
+    },
+    {
+      "input": "1000001",
+      "error": "bounty_amount must be at most 1000000 USDC"
+    },
+    {
+      "input": "0.1234567",
+      "error": "bounty_amount must be a decimal USDC string like '5' or '0.25' (up to 6 decimal places)"
+    },
+    {
+      "input": "-1",
+      "error": "bounty_amount must be a decimal USDC string like '5' or '0.25' (up to 6 decimal places)"
+    },
+    {
+      "input": "1e3",
+      "error": "bounty_amount must be a decimal USDC string like '5' or '0.25' (up to 6 decimal places)"
+    },
+    {
+      "input": ".5",
+      "error": "bounty_amount must be a decimal USDC string like '5' or '0.25' (up to 6 decimal places)"
+    },
+    {
+      "input": "5.",
+      "error": "bounty_amount must be a decimal USDC string like '5' or '0.25' (up to 6 decimal places)"
+    }
+  ],
+  "board_payload": [
+    {
+      "name": "post, ascii text, integer bounty",
+      "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+      "text": "Resolve a citation like 'Smith et al. 2019' to the paper \u2014 worth ~$0.10 per lookup.",
+      "bounty_amount": "5",
+      "timestamp": "2026-08-19T12:00:00Z",
+      "nonce": "aabbccddeeff00112233445566778899",
+      "parent_post_id": null,
+      "expected_bounty_amount": "5",
+      "expected_message": "{\"bounty_amount\":\"5\",\"nonce\":\"aabbccddeeff00112233445566778899\",\"text_hash\":\"sha256:0089f9467806330e1e4c61368e2cf0218027f03d45c36dcad7aa09a17aaf204e\",\"timestamp\":\"2026-08-19T12:00:00Z\",\"type\":\"crowdcode.post.v1\",\"wallet\":\"0xabcdef0123456789abcdef0123456789abcdef01\"}",
+      "expected_post_id": "post_8dca19fef0759278346b"
+    },
+    {
+      "name": "post, no bounty, emoji and non-ascii text",
+      "wallet": "0x1111111111111111111111111111111111111111",
+      "text": "  Semantic search over paywalled PDFs \u2014 tr\u00e8s utile \ud83d\ude80  ",
+      "bounty_amount": null,
+      "timestamp": "2026-08-19T00:59:59Z",
+      "nonce": "0123456789abcdef",
+      "parent_post_id": null,
+      "expected_bounty_amount": null,
+      "expected_message": "{\"bounty_amount\":null,\"nonce\":\"0123456789abcdef\",\"text_hash\":\"sha256:2e474b27f333b077509fc73443811c08423da4fa057512fbde78ccc9dd42cc4b\",\"timestamp\":\"2026-08-19T00:59:59Z\",\"type\":\"crowdcode.post.v1\",\"wallet\":\"0x1111111111111111111111111111111111111111\"}",
+      "expected_post_id": "post_4893c10e27f551bf4db5"
+    },
+    {
+      "name": "post, zero bounty (upvote), trailing-zero normalization",
+      "wallet": "0x2222222222222222222222222222222222222222",
+      "text": "OCR for handwritten invoices",
+      "bounty_amount": "0",
+      "timestamp": "2026-12-31T23:59:59Z",
+      "nonce": "ffffffffffffffffffffffffffffffff",
+      "parent_post_id": null,
+      "expected_bounty_amount": "0",
+      "expected_message": "{\"bounty_amount\":\"0\",\"nonce\":\"ffffffffffffffffffffffffffffffff\",\"text_hash\":\"sha256:8e3f8f592b61411b1b5d0f6a18fdf23a31a927935159086032cb1ce7ba48148f\",\"timestamp\":\"2026-12-31T23:59:59Z\",\"type\":\"crowdcode.post.v1\",\"wallet\":\"0x2222222222222222222222222222222222222222\"}",
+      "expected_post_id": "post_a028345548064ee6ea8c"
+    },
+    {
+      "name": "comment with fractional bounty needing canonicalization",
+      "wallet": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+      "text": "I built this: https://api.example.com/ocr \u2014 $0.05 per page.",
+      "bounty_amount": "1.50",
+      "timestamp": "2026-08-19T12:05:00Z",
+      "nonce": "00112233445566778899aabbccddeeff",
+      "parent_post_id": "post_0123456789abcdef0123",
+      "expected_bounty_amount": "1.5",
+      "expected_message": "{\"bounty_amount\":\"1.5\",\"nonce\":\"00112233445566778899aabbccddeeff\",\"parent_post_id\":\"post_0123456789abcdef0123\",\"text_hash\":\"sha256:b69a513bbdfd1a245dcb50b2ecbd9fa6df5c2094f4e252c699a3a0ca3ff18101\",\"timestamp\":\"2026-08-19T12:05:00Z\",\"type\":\"crowdcode.comment.v1\",\"wallet\":\"0xabcdef0123456789abcdef0123456789abcdef01\"}",
+      "expected_post_id": "post_27f7ef0da59c96877839"
+    },
+    {
+      "name": "comment, redacted placeholder text (typical real input)",
+      "wallet": "0x3333333333333333333333333333333333333333",
+      "text": "Need this for [EMAIL_1]'s workflow; would pay per call.",
+      "bounty_amount": "0.25",
+      "timestamp": "2026-08-19T12:10:00Z",
+      "nonce": "deadbeefdeadbeefdeadbeefdeadbeef",
+      "parent_post_id": "post_ffffffffffffffffffff",
+      "expected_bounty_amount": "0.25",
+      "expected_message": "{\"bounty_amount\":\"0.25\",\"nonce\":\"deadbeefdeadbeefdeadbeefdeadbeef\",\"parent_post_id\":\"post_ffffffffffffffffffff\",\"text_hash\":\"sha256:0483daa2e4adca777877294e53060a9175d0b71f6e1a89de8c2b55df1c6ef101\",\"timestamp\":\"2026-08-19T12:10:00Z\",\"type\":\"crowdcode.comment.v1\",\"wallet\":\"0x3333333333333333333333333333333333333333\"}",
+      "expected_post_id": "post_26e586c9a3f7d99300fd"
+    }
+  ]
+}

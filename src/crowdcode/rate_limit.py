@@ -56,6 +56,35 @@ def check_request_limit(
     )
 
 
+def check_board_limit(
+    conn: Any,
+    wallet: str,
+    max_per_day: int,
+    now: datetime,
+    *,
+    comments: bool,
+) -> RateLimitResult:
+    """Rolling-24h board write limit, keyed directly on the wallet address.
+
+    Callers must hold the per-wallet advisory lock (board.acquire_wallet_lock)
+    in the same transaction so this count-then-insert cannot race with itself
+    (TODO_SECURITY P1: raceable rate limits).
+    """
+    parent_clause = "is not null" if comments else "is null"
+    return _check_window(
+        conn,
+        f"""
+        select count(*)::int as n, min(created_at) as oldest
+        from board_posts
+        where wallet = %s and parent_post_id {parent_clause} and created_at > %s
+        """,
+        (wallet, now - timedelta(seconds=WINDOW_SECONDS)),
+        scope="board_comment_daily" if comments else "board_post_daily",
+        max_per_day=max_per_day,
+        now=now,
+    )
+
+
 def rate_limit_payload(result: RateLimitResult, human_reason: str, retry_tool: str) -> dict[str, Any]:
     retry_after = result.retry_after_seconds
     return {
