@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.1 (backend) — 2026-08-27
+
+### Multi-protocol payment identity (field note 001, issue 1)
+- One endpoint/payee may now accept both machine payment rails. Identity
+  resolution anchors on the EVM payee address for mppx/x402: a supplied pair
+  whose payee matches the service's registered payee resolves even when the
+  protocol label differs from the registration (e.g. an x402/Base payment to
+  an endpoint registered as mppx/Tempo). A pair naming any other payee still
+  fails with `service identity conflict` — resolution never redirects
+  verification to an unregistered payment destination.
+- Pair-only lookups (`payment_provider` + `payment_target_ref`) fall back
+  across machine protocols and match the payee address case-insensitively.
+- After an on-chain-verified review, the observed (protocol, payee) pair is
+  registered as a `service_identifiers` row, so the service durably
+  advertises every rail its payee accepts.
+
+No schema change; deploy the backend to pick this up.
+
 ## 0.5.0 (backend) — 2026-08-10
 
 ### Integration hardening

@@ -13,7 +13,7 @@ from typing import Any
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-from crowdcode.identity import ServiceIdentity
+from crowdcode.identity import MACHINE_PAYMENT_PROVIDERS, ServiceIdentity
 from crowdcode.rate_limit import identity_id_from_wallet
 from crowdcode.settings import get_settings
 
@@ -176,7 +176,7 @@ def verify_review_payment(
     if not payment_reference or not payment_reference.strip():
         return PaymentVerification(False, "payment_reference is required")
 
-    if identity.payment_provider in {"mppx", "x402"}:
+    if identity.payment_provider in MACHINE_PAYMENT_PROVIDERS:
         return _verify_signed_machine_payment(
             identity=identity,
             rating=rating,

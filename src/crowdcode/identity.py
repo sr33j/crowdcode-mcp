@@ -16,6 +16,13 @@ PAYMENT_PROVIDER_ALIASES = {
     "mpp": "mppx",
 }
 
+# Machine payment protocols settle to an EVM payee address. The payee, not
+# the protocol label, anchors a service's payment identity: one endpoint may
+# accept both mppx/Tempo and x402/Base payments to the same wallet, and the
+# on-chain check independently proves the transfer on whichever chain the
+# supplied protocol pins.
+MACHINE_PAYMENT_PROVIDERS = frozenset({"mppx", "x402"})
+
 
 @dataclass(frozen=True)
 class ServiceIdentity:
@@ -181,6 +188,10 @@ def _fetch_by_directory_slug(
     ).fetchone()
 
 
+def _is_evm_address(value: str | None) -> bool:
+    return bool(value) and len(value) == 42 and value[:2].lower() == "0x"
+
+
 def _same_payment_target(
     payment_provider: str | None,
     left: str | None,
@@ -189,14 +200,71 @@ def _same_payment_target(
     if left is None or right is None:
         return left is right
     if (
-        payment_provider in {"mppx", "x402"}
-        and len(left) == 42
-        and len(right) == 42
-        and left[:2].lower() == "0x"
-        and right[:2].lower() == "0x"
+        payment_provider in MACHINE_PAYMENT_PROVIDERS
+        and _is_evm_address(left)
+        and _is_evm_address(right)
     ):
         return left.lower() == right.lower()
     return left == right
+
+
+def _fetch_all_by_machine_payment_target(
+    conn: psycopg.Connection,
+    payment_target_ref: str,
+) -> list[dict[str, Any]]:
+    """Services registered for an EVM payee under any machine protocol.
+
+    Matches the address case-insensitively: stored identifiers may be
+    checksummed while callers echo the lowercase on-chain form.
+    """
+    if not _is_evm_address(payment_target_ref):
+        return []
+    candidates = [
+        payment_identifier(provider, payment_target_ref).lower()
+        for provider in sorted(MACHINE_PAYMENT_PROVIDERS)
+    ]
+    return conn.execute(
+        """
+        select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
+               s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
+               s.created_from_review
+        from service_identifiers si
+        join services s on s.id = si.service_id
+        where si.identifier_type = 'payment_target'
+          and lower(si.identifier_value) = any(%s)
+        """,
+        (candidates,),
+    ).fetchall()
+
+
+def _machine_payment_alias_authorized(
+    conn: psycopg.Connection,
+    service: dict[str, Any],
+    supplied: ServiceIdentity,
+) -> bool:
+    """Whether a supplied machine-payment pair names this service's payee.
+
+    The protocol label may differ from the registration (mppx vs x402); the
+    EVM payee address may not. A pair naming any other payee is still a
+    conflict — resolution must never let a caller redirect verification to
+    an unregistered payment destination.
+    """
+    if supplied.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
+        return False
+    if not _is_evm_address(supplied.payment_target_ref):
+        return False
+    if service.get("payment_provider") in MACHINE_PAYMENT_PROVIDERS and _same_payment_target(
+        supplied.payment_provider,
+        supplied.payment_target_ref,
+        service.get("payment_target_ref"),
+    ):
+        return True
+    return any(
+        row["id"] == service["id"]
+        for row in _fetch_all_by_machine_payment_target(
+            conn, supplied.payment_target_ref
+        )
+    )
 
 
 def _identifier_belongs_to_service(
@@ -268,18 +336,30 @@ def _resolved_identity(
                 canonical.payment_target_ref,
             )
         )
-        if canonical_pair or _identifier_belongs_to_service(
-            conn,
-            service["id"],
-            "payment_target",
-            supplied_payment_identifier,
+        if (
+            canonical_pair
+            or _identifier_belongs_to_service(
+                conn,
+                service["id"],
+                "payment_target",
+                supplied_payment_identifier,
+            )
+            or _machine_payment_alias_authorized(conn, service, supplied)
         ):
             provider = supplied.payment_provider
             target = supplied.payment_target_ref
         else:
             return None
     elif supplied.payment_provider:
-        if supplied.payment_provider != canonical.payment_provider:
+        if supplied.payment_provider == canonical.payment_provider:
+            pass
+        elif (
+            supplied.payment_provider in MACHINE_PAYMENT_PROVIDERS
+            and canonical.payment_provider in MACHINE_PAYMENT_PROVIDERS
+        ):
+            # Protocol-only variant: keep the registered payee, flip the rail.
+            provider = supplied.payment_provider
+        else:
             return None
     elif supplied.payment_target_ref:
         if not _same_payment_target(
@@ -331,6 +411,12 @@ def resolve_service(
         )
         if service is not None:
             matches.append(service)
+        elif identity.payment_provider in MACHINE_PAYMENT_PROVIDERS:
+            matches.extend(
+                _fetch_all_by_machine_payment_target(
+                    conn, identity.payment_target_ref
+                )
+            )
 
     unique = {service["id"]: service for service in matches}
     if len(unique) > 1:
@@ -369,6 +455,31 @@ def _insert_identifier(
         on conflict (identifier_type, identifier_value) do nothing
         """,
         (service_id, identifier_type, identifier_value),
+    )
+
+
+def register_machine_payment_alias(
+    conn: psycopg.Connection,
+    service_id: str,
+    identity: ServiceIdentity,
+) -> None:
+    """Persist a verified machine-payment pair as a service identifier.
+
+    Called only after resolution authorized the pair for this service AND the
+    payment verified on-chain, so the service durably advertises every
+    protocol its payee actually accepts and future pair-only lookups resolve
+    directly. Idempotent; never steals a pair registered to another service.
+    """
+    if identity.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
+        return
+    if not _is_evm_address(identity.payment_target_ref):
+        return
+    assert identity.payment_target_ref is not None
+    _insert_identifier(
+        conn,
+        service_id,
+        "payment_target",
+        payment_identifier(identity.payment_provider, identity.payment_target_ref),
     )
 
 

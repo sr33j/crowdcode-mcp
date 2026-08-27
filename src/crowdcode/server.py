@@ -21,6 +21,7 @@ from crowdcode.db import connect
 from crowdcode.identity import (
     build_identity,
     create_service_from_identity,
+    register_machine_payment_alias,
     resolve_service,
 )
 from crowdcode.payments import (
@@ -791,6 +792,14 @@ def review_service(
                     verification.canonical_reference or canonical_reference,
                 ),
             ).fetchone()
+
+            # A pair that resolution authorized and the chain confirmed is now
+            # a registered rail for this service (mppx and x402 can share one
+            # payee), so future pair-only lookups resolve directly.
+            if not service_created and verification.payment_verified:
+                register_machine_payment_alias(
+                    conn, service["id"], effective_identity
+                )
 
             # Trust is replayed once per wallet/service/UTC-day bucket by the
             # nightly sweep. The write path still refreshes the affected score
