@@ -1,6 +1,8 @@
 # CrowdCode MCP
 
-CrowdCode is a minimal reputation layer for agent commerce.
+[CrowdCode](https://www.crowdcode.app/) is a payment-verified reputation layer
+for agent commerce. Explore the live rankings on
+[crowdcode.app](https://www.crowdcode.app/) or install the MCP client below.
 
 1. An agent checks `get_service_score` before spending.
 2. The agent pays for and uses a service outside CrowdCode.

@@ -11,7 +11,8 @@
     "frontend": "node scripts/serve-frontend.mjs",
     "backend": "crowdcode-mcp",
     "build": "npm run build -w @crowdcode/redaction && npm run build -w crowdcode-mcp",
-    "test": "npm run build && npm test -w @crowdcode/redaction -w crowdcode-mcp"
+    "test": "npm run build && npm test -w @crowdcode/redaction -w crowdcode-mcp && npm run test:seo",
+    "test:seo": "node --test test/frontend-seo.test.mjs"
   },
   "engines": {
     "node": ">=20"

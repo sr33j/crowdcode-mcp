@@ -12,12 +12,23 @@ const types = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".xml": "application/xml; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
 };
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || "/", `http://${host}`);
-  const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const requestedPath =
+    url.pathname === "/"
+      ? "/index.html"
+      : url.pathname === "/how-it-works" || url.pathname === "/how-it-works/"
+        ? "/how-it-works/index.html"
+        : url.pathname;
   const filePath = path.resolve(root, `.${requestedPath}`);
 
   if (!filePath.startsWith(root)) {
