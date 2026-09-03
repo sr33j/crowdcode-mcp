@@ -112,23 +112,25 @@ header.site {
   height: 56px;
 }
 .wordmark {
+  display: inline-flex;
   font-family: var(--mono);
   font-weight: 700;
   font-size: 16px;
   letter-spacing: -0.02em;
   color: var(--ink);
-  background: none;
-  border: none;
   padding: 0;
+}
+.wordmark:hover {
+  text-decoration: none;
 }
 nav.main {
   display: flex;
   gap: 4px;
   margin-left: auto;
 }
-nav.main button {
+nav.main a {
+  display: inline-flex;
   background: none;
-  border: none;
   color: var(--ink-2);
   padding: 6px 12px;
   border-radius: 6px;
@@ -136,11 +138,12 @@ nav.main button {
   font-weight: 500;
   font-family: var(--mono);
 }
-nav.main button:hover {
+nav.main a:hover {
   background: var(--surface-2);
   color: var(--ink);
+  text-decoration: none;
 }
-nav.main button[aria-current="true"] {
+nav.main a[aria-current="page"] {
   color: var(--ink);
   background: var(--surface-2);
 }
@@ -643,7 +646,7 @@ section.demand .sub {
   border-radius: 12px;
   padding: 18px 20px;
 }
-.point h3 {
+.point h2 {
   margin: 0 0 6px;
   font-size: 15.5px;
   letter-spacing: -0.01em;

@@ -335,32 +335,5 @@ document.querySelectorAll(".install-tabs button").forEach((button) => {
   });
 });
 
-document.querySelectorAll(".copy-btn").forEach((button) => {
-  button.addEventListener("click", () => {
-    const pre = button.parentElement.querySelector("pre:not(.hidden)");
-    const text = pre.textContent.replace(/^\$\s*/, "");
-    navigator.clipboard.writeText(text).then(() => {
-      button.textContent = "copied ✓";
-      setTimeout(() => (button.textContent = "copy"), 1500);
-    });
-  });
-});
-
-document.querySelectorAll("[data-page]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const which = button.dataset.page;
-    document
-      .querySelector("#page-rank")
-      .classList.toggle("hidden", which !== "rank");
-    document
-      .querySelector("#page-docs")
-      .classList.toggle("hidden", which !== "docs");
-    document
-      .querySelector("#nav-docs")
-      .setAttribute("aria-current", which === "docs");
-    window.scrollTo(0, 0);
-  });
-});
-
 loadServices();
 loadIdeas();

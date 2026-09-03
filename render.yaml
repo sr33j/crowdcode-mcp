@@ -90,3 +90,7 @@ services:
     name: crowdcode-frontend
     buildCommand: ""
     staticPublishPath: frontend
+    routes:
+      - type: rewrite
+        source: /how-it-works
+        destination: /how-it-works/index.html

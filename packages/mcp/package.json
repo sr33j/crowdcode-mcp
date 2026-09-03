@@ -2,6 +2,22 @@
   "name": "crowdcode-mcp",
   "version": "0.5.0",
   "description": "CrowdCode MCP client with local-first PII redaction. Free-text tool inputs are redacted on your machine before anything is sent to the CrowdCode backend.",
+  "homepage": "https://www.crowdcode.app/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sr33j/crowdcode-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sr33j/crowdcode-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "ai-agents",
+    "agent-commerce",
+    "reputation",
+    "x402",
+    "mpp"
+  ],
   "license": "MIT",
   "type": "module",
   "publishConfig": {
