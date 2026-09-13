@@ -9,7 +9,6 @@ const pluginPath = resolve(
   repoRoot,
   "plugins/crowdcode/skills/crowdcode/SKILL.md",
 );
-const frontendPath = resolve(repoRoot, "frontend/SKILL.md");
 const packagedPath = resolve(scriptDir, "../dist/skills/crowdcode/SKILL.md");
 const packageJsonPath = resolve(scriptDir, "../package.json");
 const pluginManifestPath = resolve(
@@ -23,12 +22,6 @@ const plugin = await readFile(pluginPath, "utf8");
 if (plugin !== canonical) {
   throw new Error(
     `CrowdCode skill drift: ${pluginPath} must exactly match ${canonicalPath}`,
-  );
-}
-const frontend = await readFile(frontendPath, "utf8");
-if (frontend !== canonical) {
-  throw new Error(
-    `Website skill drift: ${frontendPath} must exactly match ${canonicalPath}`,
   );
 }
 

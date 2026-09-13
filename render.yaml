@@ -85,12 +85,3 @@ services:
         value: /opt/render/project/.cache/crowdcode-redactor
       - key: REDACTOR_TOKEN
         sync: false
-
-  - type: static
-    name: crowdcode-frontend
-    buildCommand: ""
-    staticPublishPath: frontend
-    routes:
-      - type: rewrite
-        source: /how-it-works
-        destination: /how-it-works/index.html

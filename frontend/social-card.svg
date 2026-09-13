@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
-  <title id="title">CrowdCode</title>
-  <desc id="description">Payment-verified reputation for agent services</desc>
-  <rect width="1200" height="630" fill="#f7f6f2" />
-  <rect x="76" y="76" width="478" height="478" fill="#000000" />
-  <text x="620" y="286" fill="#16150f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="72" font-weight="700">crowdcode</text>
-  <text x="624" y="342" fill="#55544c" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="28">Payment-verified reputation</text>
-  <text x="624" y="382" fill="#55544c" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="28">for agent services</text>
-</svg>
