@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 from functools import wraps
@@ -1070,6 +1071,120 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
     }, 200
 
 
+KNOWLEDGE_EXPORT_DEFAULT_REVIEWS = 50
+KNOWLEDGE_EXPORT_MAX_REVIEWS = 500
+
+
+def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
+    """Full review evidence for every service, in one call. This is the input
+    to the OpenCrowd knowledge-tree generator (system prompt / skills folder
+    derived from CrowdCode reviews): per-service score, n_eff, the nightly
+    digest, and the raw redacted reviews with task context, rating, and the
+    verified paid amount (a real price observation)."""
+    with connect() as conn:
+        services = conn.execute(
+            """
+            select id, name, directory_slug, canonical_endpoint,
+                   payment_provider, score, n_eff, review_summary
+            from services
+            order by score desc, n_eff desc, name asc
+            """
+        ).fetchall()
+        reviews = conn.execute(
+            """
+            select service_id, rating, reason, task_context, payment_verified,
+                   payment_verification_level as verification_level, amount,
+                   created_at
+            from reviews
+            order by service_id, created_at desc
+            """
+        ).fetchall()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for review in reviews:
+        bucket = grouped.setdefault(review["service_id"], [])
+        if len(bucket) < max_reviews:
+            bucket.append(dict(review))
+
+    # Same egress backstop as the detail endpoint: re-redact free text on the
+    # way out; drop it if the redactor is configured but down.
+    kept = [review for bucket in grouped.values() for review in bucket]
+    texts: list[str | None] = []
+    for review in kept:
+        texts.append(review.get("reason"))
+        texts.append(review.get("task_context"))
+    redacted = redact_texts(texts, fail_closed=False)
+    for index, review in enumerate(kept):
+        if redacted is None:
+            review["reason"] = None
+            review["task_context"] = None
+        else:
+            review["reason"] = redacted[index * 2]
+            review["task_context"] = redacted[index * 2 + 1]
+        review["amount"] = as_float(review.get("amount"))
+        review.pop("service_id", None)
+
+    out = []
+    for service in services:
+        n_eff = as_float(service["n_eff"]) or 0.0
+        service_reviews = grouped.get(service["id"], [])
+        out.append(
+            {
+                "service_id": service["id"],
+                "name": service["name"],
+                "directory_slug": service.get("directory_slug"),
+                "canonical_endpoint": service.get("canonical_endpoint"),
+                "payment_provider": service.get("payment_provider"),
+                "score": as_float(service["score"]),
+                "n_eff": n_eff,
+                "unproven": is_unproven(n_eff),
+                "num_reviews": len(service_reviews),
+                "num_verified_reviews": sum(
+                    1 for r in service_reviews if r.get("payment_verified")
+                ),
+                "summary": _redacted_summary(service.get("review_summary")),
+                "reviews": [_json_ready(r) for r in service_reviews],
+            }
+        )
+    return {
+        "ok": True,
+        "score_algorithm": SCORE_ALGORITHM,
+        "max_reviews_per_service": max_reviews,
+        "services": out,
+        "stats": {
+            "num_services": len(out),
+            "total_reviews": sum(s["num_reviews"] for s in out),
+        },
+    }
+
+
+async def knowledge_evidence(request: Request) -> JSONResponse:
+    """Token-gated full evidence export (see _knowledge_evidence_payload).
+    Reviews are public data, but the bulk export is gated so only the
+    OpenCrowd generator (hosted or a configured local run) pulls it."""
+    token = get_settings().knowledge_export_token
+    if not token:
+        return JSONResponse(
+            {"ok": False, "error": "knowledge export is not enabled"},
+            status_code=404,
+        )
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        max_reviews = int(
+            request.query_params.get("max_reviews", KNOWLEDGE_EXPORT_DEFAULT_REVIEWS)
+        )
+    except ValueError:
+        max_reviews = KNOWLEDGE_EXPORT_DEFAULT_REVIEWS
+    max_reviews = max(1, min(KNOWLEDGE_EXPORT_MAX_REVIEWS, max_reviews))
+    try:
+        payload = await run_in_threadpool(_knowledge_evidence_payload, max_reviews)
+    except Exception:
+        return _unexpected_json_error("knowledge_evidence")
+    return JSONResponse(payload, headers={"Cache-Control": "private, max-age=300"})
+
+
 async def health(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "crowdcode-backend"})
 
@@ -1162,6 +1277,7 @@ def create_app() -> Starlette:
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
+            Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             *mcp_app.routes,
         ],
         lifespan=mcp_app.router.lifespan_context,

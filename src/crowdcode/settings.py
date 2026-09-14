@@ -40,6 +40,9 @@ class Settings:
     # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5). Synced into
     # the users table at startup and at each cron run.
     seed_wallets: tuple[str, ...] = ()
+    # Bearer token for GET /api/knowledge/evidence (full review evidence export
+    # consumed by the OpenCrowd knowledge-tree generator). Unset disables it.
+    knowledge_export_token: str | None = None
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -111,4 +114,6 @@ def get_settings() -> Settings:
             wallet.lower()
             for wallet in _csv(os.environ.get("CROWDCODE_SEED_WALLETS", ""))
         ),
+        knowledge_export_token=os.environ.get("CROWDCODE_KNOWLEDGE_EXPORT_TOKEN", "").strip()
+        or None,
     )
