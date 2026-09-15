@@ -1,5 +1,14 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.5.1 — 2026-09-15
+
+- Publish GitHub releases to npm using Trusted Publishing after build,
+  type, test, and bundled-asset checks.
+- Include homepage, repository, issue tracker, and search metadata on npm.
+- Align the MCP server and Codex plugin versions with the npm release.
+
+No tool contract changes. Requires backend 0.5.0 or later.
+
 ## 0.5.0 — 2026-08-10
 
 ### Fail-closed integration contract

@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const { version } = JSON.parse(readFileSync("packages/mcp/package.json", "utf8"));
+            if (process.env.RELEASE_TAG !== `v${version}`) throw new Error("Release tag must match package version");
+          '
+      - run: npm ci
+      - run: npm run build -w @crowdcode/redaction
+      - run: npm run typecheck -w @crowdcode/redaction -w crowdcode-mcp
+      - run: npm test
+      - run: npm run check:assets -w crowdcode-mcp
+      - run: npm publish --workspace crowdcode-mcp --provenance --access public
