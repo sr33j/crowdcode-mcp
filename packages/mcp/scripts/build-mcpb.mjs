@@ -19,7 +19,13 @@ const repoRoot = resolve(packageRoot, "../..");
 const packageJson = JSON.parse(
   await readFile(join(packageRoot, "package.json"), "utf8"),
 );
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+// execFile cannot launch npm.cmd directly on Windows. npm run exposes the
+// active CLI's JavaScript entry point, which Node can execute on every OS.
+const npmCli = process.env.npm_execpath;
+if (!npmCli) {
+  throw new Error("Run this builder with npm run build:mcpb -w crowdcode-mcp");
+}
+const runNpm = (args, options) => run(process.execPath, [npmCli, ...args], options);
 const outputArg = process.argv[2];
 const output = resolve(
   process.cwd(),
@@ -41,7 +47,7 @@ try {
   const bundleDir = join(temp, "bundle");
   await mkdir(packDir, { recursive: true });
   await mkdir(bundleDir, { recursive: true });
-  await run(npm, ["pack", packageRoot, "--pack-destination", packDir, "--silent"], {
+  await runNpm(["pack", packageRoot, "--pack-destination", packDir, "--silent"], {
     cwd: repoRoot,
   });
   const tarballName = (await readdir(packDir)).find((name) => name.endsWith(".tgz"));
@@ -52,8 +58,7 @@ try {
     join(bundleDir, "package.json"),
     `${JSON.stringify({ private: true }, null, 2)}\n`,
   );
-  await run(
-    npm,
+  await runNpm(
     [
       "install",
       "--prefix",
@@ -128,11 +133,11 @@ try {
   const manifestPath = join(bundleDir, "manifest.json");
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  await run(npm, ["exec", "--", "mcpb", "validate", manifestPath], {
+  await runNpm(["exec", "--", "mcpb", "validate", manifestPath], {
     cwd: repoRoot,
   });
   await mkdir(dirname(output), { recursive: true });
-  await run(npm, ["exec", "--", "mcpb", "pack", bundleDir, output], {
+  await runNpm(["exec", "--", "mcpb", "pack", bundleDir, output], {
     cwd: repoRoot,
     maxBuffer: 10 * 1024 * 1024,
   });
