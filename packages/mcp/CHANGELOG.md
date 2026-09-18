@@ -1,5 +1,9 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.5.2 — 2026-09-18
+
+- Align the client and plugin release with backend 0.5.2 shared-wallet identity support. Distinct endpoints keep separate reviews even when they share a payment wallet. Requires backend 0.5.2 for this behavior.
+
 ## 0.5.1 — 2026-09-15
 
 - Publish GitHub releases to npm using Trusted Publishing after build,

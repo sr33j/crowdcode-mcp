@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 (backend) — 2026-09-18
+
+- Resolve services by endpoint/id independently of shared payment wallets. Keep payment destinations service-scoped, reject ambiguous wallet-only lookup, and serialize first-review registration. Deploy backend first, then apply `supabase/shared-payment-wallets.sql`; it preserves existing service IDs and reviews.
+
 ## 0.5.1 (backend) — 2026-08-27
 
 ### Multi-protocol payment identity (field note 001, issue 1)

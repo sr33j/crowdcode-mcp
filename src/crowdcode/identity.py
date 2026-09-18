@@ -228,12 +228,33 @@ def _fetch_all_by_machine_payment_target(
         select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
                s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
                s.created_from_review
-        from service_identifiers si
-        join services s on s.id = si.service_id
-        where si.identifier_type = 'payment_target'
-          and lower(si.identifier_value) = any(%s)
+        from services s
+        left join service_identifiers si on si.service_id = s.id
+        where (si.identifier_type = 'payment_target'
+               and lower(si.identifier_value) = any(%s))
+           or (s.payment_provider = any(%s)
+               and lower(s.payment_target_ref) = lower(%s))
         """,
-        (candidates,),
+        (candidates, sorted(MACHINE_PAYMENT_PROVIDERS), payment_target_ref),
+    ).fetchall()
+
+
+def _fetch_all_by_payment_target(
+    conn: psycopg.Connection, provider: str, target: str,
+) -> list[dict[str, Any]]:
+    if provider in MACHINE_PAYMENT_PROVIDERS:
+        return _fetch_all_by_machine_payment_target(conn, target)
+    return conn.execute(
+        """
+        select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
+               s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
+               s.created_from_review
+        from services s
+        left join service_identifiers si on si.service_id = s.id
+        where (si.identifier_type = 'payment_target' and si.identifier_value = %s)
+           or (s.payment_provider = %s and s.payment_target_ref = %s)
+        """,
+        (payment_identifier(provider, target), provider, target),
     ).fetchall()
 
 
@@ -273,6 +294,12 @@ def _identifier_belongs_to_service(
     identifier_type: str,
     identifier_value: str,
 ) -> bool:
+    # Payment destinations are service-scoped; fetchone() across all services
+    # would authorize or reject a shared destination depending on row order.
+    if identifier_type == "payment_target":
+        provider, _, target = identifier_value.partition(":")
+        return any(row["id"] == service_id for row in
+                   _fetch_all_by_payment_target(conn, provider, target))
     matched = _fetch_by_identifier(conn, identifier_type, identifier_value)
     return matched is not None and matched["id"] == service_id
 
@@ -403,20 +430,16 @@ def resolve_service(
         if service is not None:
             matches.append(service)
 
-    if identity.payment_provider and identity.payment_target_ref:
-        service = _fetch_by_identifier(
-            conn,
-            "payment_target",
-            payment_identifier(identity.payment_provider, identity.payment_target_ref),
-        )
-        if service is not None:
-            matches.append(service)
-        elif identity.payment_provider in MACHINE_PAYMENT_PROVIDERS:
-            matches.extend(
-                _fetch_all_by_machine_payment_target(
-                    conn, identity.payment_target_ref
-                )
-            )
+    # Endpoint/id/slug identify the product. A payee only disambiguates a
+    # wallet-only lookup; it must never select a different product when an
+    # endpoint is supplied (including a new endpoint's first review).
+    if not (identity.service_id or identity.directory_slug or identity.api_endpoint):
+        if identity.payment_provider and identity.payment_target_ref:
+            matches.extend(_fetch_all_by_payment_target(
+                conn, identity.payment_provider, identity.payment_target_ref
+            ))
+            if len({row["id"] for row in matches}) > 1:
+                return ResolvedService(None, error="payment target is shared by multiple services; supply api_endpoint or service_id")
 
     unique = {service["id"]: service for service in matches}
     if len(unique) > 1:
@@ -452,7 +475,7 @@ def _insert_identifier(
         """
         insert into service_identifiers (service_id, identifier_type, identifier_value)
         values (%s, %s, %s)
-        on conflict (identifier_type, identifier_value) do nothing
+        on conflict do nothing
         """,
         (service_id, identifier_type, identifier_value),
     )
@@ -468,7 +491,7 @@ def register_machine_payment_alias(
     Called only after resolution authorized the pair for this service AND the
     payment verified on-chain, so the service durably advertises every
     protocol its payee actually accepts and future pair-only lookups resolve
-    directly. Idempotent; never steals a pair registered to another service.
+    directly. Idempotent; the same pair may belong to several distinct services.
     """
     if identity.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
         return
@@ -493,6 +516,13 @@ def create_service_from_identity(
     assert identity.api_endpoint is not None
     assert identity.payment_provider is not None
     assert identity.payment_target_ref is not None
+
+    # Registration is rare and must reconcile both endpoint and optional ID.
+    # Serialize only this short database-only section, after proof verification.
+    conn.execute("select pg_advisory_xact_lock(hashtextextended('crowdcode.service.registration', 0))")
+    existing = resolve_service(conn, identity)
+    if existing.row is not None or existing.error:
+        return existing
 
     service_id = identity.service_id or generate_service_id(
         identity.api_endpoint,
