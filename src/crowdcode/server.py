@@ -3,6 +3,8 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import os
+from importlib.metadata import version
 from functools import wraps
 from typing import Any
 from uuid import uuid4
@@ -1186,7 +1188,9 @@ async def knowledge_evidence(request: Request) -> JSONResponse:
 
 
 async def health(_: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, "service": "crowdcode-backend"})
+    return JSONResponse({"ok": True, "service": "crowdcode-backend",
+                         "version": version("crowdcode-mcp"),
+                         "commit": os.environ.get("RENDER_GIT_COMMIT")})
 
 
 async def ready(_: Request) -> JSONResponse:

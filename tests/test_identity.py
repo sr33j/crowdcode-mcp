@@ -295,3 +295,47 @@ def test_register_machine_payment_alias_ignores_non_machine_pairs():
         ),
     )
     assert conn.calls == []
+
+
+def test_new_endpoint_does_not_resolve_to_other_service_sharing_wallet(monkeypatch):
+    _stub_lookups(monkeypatch, {
+        ('payment_target', f"x402:{SERVICE['payment_target_ref']}"): SERVICE,
+    })
+    resolved = resolve_service(object(), build_identity(
+        api_endpoint='https://api.victim.example/video', payment_provider='x402',
+        payment_target_ref=SERVICE['payment_target_ref'],
+    ))
+    assert resolved.row is None
+    assert resolved.error is None  # first verified review can register it
+
+
+def test_endpoint_disambiguates_shared_wallet(monkeypatch):
+    other = {**SERVICE, 'id': 'svc_video', 'canonical_endpoint': 'https://api.victim.example/video'}
+    _stub_lookups(monkeypatch, {('api_endpoint', other['canonical_endpoint']): other})
+    monkeypatch.setattr(identity_mod, '_fetch_all_by_machine_payment_target', lambda *_: [SERVICE, other])
+    resolved = resolve_service(object(), build_identity(
+        api_endpoint=other['canonical_endpoint'], payment_provider='x402',
+        payment_target_ref=SERVICE['payment_target_ref'],
+    ))
+    assert resolved.error is None
+    assert resolved.row['id'] == other['id']
+
+
+def test_wallet_only_lookup_requires_endpoint_when_shared(monkeypatch):
+    _stub_lookups(monkeypatch)
+    monkeypatch.setattr(identity_mod, '_fetch_all_by_machine_payment_target',
+                        lambda *_: [SERVICE, {**SERVICE, 'id': 'svc_video'}])
+    resolved = resolve_service(object(), build_identity(
+        payment_provider='x402', payment_target_ref=SERVICE['payment_target_ref'],
+    ))
+    assert resolved.row is None
+    assert 'shared by multiple services' in resolved.error
+
+
+def test_service_id_does_not_authorize_unregistered_endpoint(monkeypatch):
+    _stub_lookups(monkeypatch)
+    resolved = resolve_service(object(), build_identity(
+        service_id=SERVICE['id'], api_endpoint='https://attacker.example/video',
+        payment_provider='x402', payment_target_ref=SERVICE['payment_target_ref'],
+    ))
+    assert resolved.error == 'service identity conflict'
