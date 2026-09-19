@@ -31,7 +31,8 @@ interface PayloadVector {
   };
   rating: number;
   reason: string;
-  payment_reference: string;
+  payment_reference: string | null;
+  review_nonce?: string;
   expected_reason_hash: string;
   expected_message: string;
 }
@@ -103,6 +104,7 @@ describe("canonicalReviewPayload", () => {
         rating: vector.rating,
         reason: vector.reason,
         paymentReference: vector.payment_reference,
+        reviewNonce: vector.review_nonce,
       });
       expect(message).toBe(vector.expected_message);
       expect(reasonHash(vector.reason)).toBe(vector.expected_reason_hash);

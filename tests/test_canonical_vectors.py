@@ -82,6 +82,7 @@ def test_review_payload(vector):
         rating=vector["rating"],
         reason=vector["reason"],
         payment_reference=vector["payment_reference"],
+        review_nonce=vector.get("review_nonce"),
     )
     assert message == vector["expected_message"]
     assert json.loads(message)["reason_hash"] == vector["expected_reason_hash"]

@@ -122,7 +122,8 @@ def canonical_review_payload_from_hash(
     identity: ServiceIdentity,
     rating: int,
     reason_hash: str,
-    payment_reference: str,
+    payment_reference: str | None = None,
+    review_nonce: str | None = None,
 ) -> str:
     payload = {
         "type": "crowdcode.review.v1",
@@ -131,10 +132,13 @@ def canonical_review_payload_from_hash(
         "payment_provider": identity.payment_provider,
         "payment_target_ref": identity.payment_target_ref,
         "directory_slug": identity.directory_slug,
-        "payment_reference": payment_reference.strip(),
+        "payment_reference": payment_reference.strip() if payment_reference is not None else None,
         "rating": rating,
         "reason_hash": reason_hash,
     }
+    if payment_reference is None:
+        payload["type"] = "crowdcode.review.v2"
+        payload["review_nonce"] = review_nonce
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
@@ -143,13 +147,15 @@ def canonical_review_payload(
     identity: ServiceIdentity,
     rating: int,
     reason: str,
-    payment_reference: str,
+    payment_reference: str | None = None,
+    review_nonce: str | None = None,
 ) -> str:
     return canonical_review_payload_from_hash(
         identity=identity,
         rating=rating,
         reason_hash=reason_hash(reason),
         payment_reference=payment_reference,
+        review_nonce=review_nonce,
     )
 
 
@@ -166,22 +172,33 @@ def verify_review_payment(
     identity: ServiceIdentity,
     rating: int,
     reason: str,
-    payment_reference: str,
+    payment_reference: str | None = None,
+    review_nonce: str | None = None,
     payment_proof: str | None = None,
     payment_challenge: str | None = None,
     reviewer_wallet: str | None = None,
     review_signature: str | None = None,
     signature_scheme: str = "eip191",
 ) -> PaymentVerification:
-    if not payment_reference or not payment_reference.strip():
-        return PaymentVerification(False, "payment_reference is required")
+    if payment_reference is not None and not payment_reference.strip():
+        return PaymentVerification(False, "omit payment_reference when no payment is claimed")
+    if payment_reference is None:
+        if payment_proof is not None or payment_challenge is not None:
+            return PaymentVerification(False, "payment evidence requires payment_reference")
+        if not review_nonce or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", review_nonce):
+            return PaymentVerification(False, "review_nonce must be an 8-128 character unique identifier for an unpaid review")
+    elif review_nonce is not None:
+        return PaymentVerification(False, "review_nonce is only used when payment_reference is omitted")
+    elif identity.payment_provider is None:
+        return PaymentVerification(False, "payment_provider is required when claiming payment")
 
-    if identity.payment_provider in MACHINE_PAYMENT_PROVIDERS:
+    if payment_reference is None or identity.payment_provider in MACHINE_PAYMENT_PROVIDERS:
         return _verify_signed_machine_payment(
             identity=identity,
             rating=rating,
             reason=reason,
             payment_reference=payment_reference,
+            review_nonce=review_nonce,
             payment_proof=payment_proof,
             payment_challenge=payment_challenge,
             reviewer_wallet=reviewer_wallet,
@@ -213,7 +230,8 @@ def _verify_signed_machine_payment(
     identity: ServiceIdentity,
     rating: int,
     reason: str,
-    payment_reference: str,
+    payment_reference: str | None,
+    review_nonce: str | None,
     payment_proof: str | None,
     payment_challenge: str | None,
     reviewer_wallet: str | None,
@@ -223,17 +241,17 @@ def _verify_signed_machine_payment(
     if not reviewer_wallet:
         return PaymentVerification(
             False,
-            "reviewer_wallet is required for mppx and x402 reviews",
+            "reviewer_wallet is required for signed reviews",
             missing_wallet=True,
         )
     if not review_signature:
         return PaymentVerification(
             False,
-            "review_signature is required for mppx and x402 reviews",
+            "review_signature is required for signed reviews",
             missing_wallet=True,
         )
     if signature_scheme != "eip191":
-        return PaymentVerification(False, "only eip191 signatures are supported for mppx and x402 reviews")
+        return PaymentVerification(False, "only eip191 signatures are supported for signed reviews")
 
     wallet = _normalize_evm_address(reviewer_wallet)
     if wallet is None:
@@ -244,6 +262,7 @@ def _verify_signed_machine_payment(
         rating=rating,
         reason=reason,
         payment_reference=payment_reference,
+        review_nonce=review_nonce,
     )
     recovered = _recover_eip191(payload, review_signature)
     if recovered is None:
@@ -255,6 +274,20 @@ def _verify_signed_machine_payment(
             False,
             "review_signature does not match reviewer_wallet",
             signature_mismatch=True,
+        )
+
+    if payment_reference is None:
+        return PaymentVerification(
+            True,
+            "reviewer signature verified; payment not verified",
+            reviewer_id=_reviewer_id_from_wallet(wallet),
+            metadata={"review_payload": json.loads(payload), "signature_recovered_wallet": recovered},
+            reviewer_wallet=wallet,
+            review_signature=review_signature.strip(),
+            signature_scheme=signature_scheme,
+            signature_verified=True,
+            payment_verification_level=LEVEL_SIGNATURE_ONLY,
+            payment_verification_metadata={"proof_present": False, "source": None, "verification_failure": None},
         )
 
     canonical = canonical_payment_reference(payment_reference)

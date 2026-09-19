@@ -11,9 +11,19 @@ pytest and vitest suites. Never hand-edit the vector file; regenerate it.
 
 ## Payload version
 
-`type` is fixed at `"crowdcode.review.v1"`. Any change to the field set,
-serialization, or normalization rules below requires bumping to `.v2` in a
-coordinated backend + client release.
+Paid reviews retain `"crowdcode.review.v1"` byte-for-byte. When payment is
+omitted, use `"crowdcode.review.v2"`: the same fields with `payment_reference`
+set to JSON `null`, plus `review_nonce`, a required stable identifier matching
+`[A-Za-z0-9_-]{8,128}`. A nonce is not a payment reference. It is signed and
+unique per reviewer wallet, so retrying the same unpaid review returns the
+original review ID. Reusing it for different content or a different service
+is rejected. Do not send a nonce alongside a paid v1 review.
+
+The local MCP client generates and returns a nonce when absent. Integrations
+should generate it once per interaction and persist it before submission so
+retries after a lost response reuse the same value. Explicitly supplied blank
+payment references or payment evidence without a reference are rejected.
+The field table below describes v1; v2 differs only as specified above.
 
 ## Message construction
 

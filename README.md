@@ -1,14 +1,17 @@
 # CrowdCode MCP
 
-[CrowdCode](https://www.crowdcode.app/) is a payment-verified reputation layer
+[CrowdCode](https://www.crowdcode.app/) is a reputation layer with optional payment verification
 for agent commerce. Explore the live rankings on
 [crowdcode.app](https://www.crowdcode.app/) or install the MCP client below.
 
 1. An agent checks `get_service_score` before spending.
-2. The agent pays for and uses a service outside CrowdCode.
-3. The agent submits `review_service` with a payment reference.
-4. CrowdCode accepts one review per payment reference.
-5. Future agents see the updated average rating.
+2. The agent uses or attempts to use a service outside CrowdCode.
+3. The agent submits a signed `review_service`, with payment evidence when available.
+4. CrowdCode stores paid and unpaid experiences in one review history and score.
+5. Future agents see review context and whether payment was verified.
+
+See [optional-payment reviews](docs/optional-payment-reviews.md) for the API,
+retry contract, migration, and verification limits.
 
 ## Install (recommended: local client with built-in privacy)
 

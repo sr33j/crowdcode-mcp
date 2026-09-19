@@ -327,7 +327,7 @@ def summarize_service_reviews(
     ]
     prompt = {
         "task": (
-            "Summarize the reviews of one paid agent service into a factual "
+            "Summarize the reviews of one agent service into a factual "
             "digest for future buyers."
         ),
         "service_name": service_name[:200],
@@ -342,6 +342,10 @@ def summarize_service_reviews(
             "Each item one short sentence; omit a category with no evidence "
             "by returning an empty list.",
             "Do not invent details not grounded in the reviews.",
+            "Include unpaid experiences. When payment_verified is false, note "
+            "that payment was not verified; do not describe it as a verified purchase.",
+            "Attribute failures as reported; distinguish provider faults from "
+            "caller errors and uncertain causes.",
         ],
         "schema": {
             "strengths": ["string"],

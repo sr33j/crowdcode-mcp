@@ -29,20 +29,22 @@ export function canonicalReviewPayload(args: {
   >;
   rating: number;
   reason: string;
-  paymentReference: string;
+  paymentReference?: string | null;
+  reviewNonce?: string | null;
 }): string {
   const { identity, rating, reason, paymentReference } = args;
   if (!Number.isInteger(rating)) {
     throw new Error("rating must be an integer");
   }
   return pythonCanonicalJson({
-    type: PAYLOAD_TYPE,
+    type: paymentReference == null ? "crowdcode.review.v2" : PAYLOAD_TYPE,
+    ...(paymentReference == null ? { review_nonce: args.reviewNonce ?? null } : {}),
     service_id: identity.service_id,
     api_endpoint: identity.api_endpoint,
     payment_provider: identity.payment_provider,
     payment_target_ref: identity.payment_target_ref,
     directory_slug: identity.directory_slug,
-    payment_reference: pyStrip(paymentReference),
+    payment_reference: paymentReference == null ? null : pyStrip(paymentReference),
     rating,
     reason_hash: reasonHash(reason),
   });

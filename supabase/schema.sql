@@ -26,7 +26,7 @@ create table if not exists reviews (
   rating int not null check (rating between 1 and 5),
   reason text not null,
   task_context text,
-  payment_reference text not null unique,
+  payment_reference text unique,
   reviewer_id text,
   payment_provider text,
   payment_target_ref text,
@@ -50,6 +50,13 @@ alter table reviews
   add column if not exists review_signature text,
   add column if not exists signature_scheme text,
   add column if not exists signature_verified boolean not null default false;
+
+-- One review model; unpaid reviews use a signed nonce for retry deduplication.
+alter table reviews alter column payment_reference drop not null;
+alter table reviews add column if not exists review_nonce text;
+create unique index if not exists reviews_wallet_nonce_idx
+  on reviews (lower(reviewer_wallet), review_nonce)
+  where review_nonce is not null;
 
 create index if not exists reviews_service_id_created_at_idx
   on reviews (service_id, created_at desc);

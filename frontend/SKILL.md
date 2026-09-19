@@ -31,7 +31,7 @@ If the score check fails because CrowdCode is temporarily unavailable, report
 that fact before spending and follow the returned `next_step`. Do not silently
 treat a missing check as approval.
 
-## After paid use
+## After service use
 
 Call `review_service` after every uniquely paid use, whether it succeeded, returned a
 poor result, timed out, or failed after payment. Judge the response against the
@@ -41,10 +41,17 @@ original task:
 - **4** — helpful, with a specific schema, documentation, latency, or output
   caveat.
 - **3** — mixed, thin, confusing, or technically valid but not useful.
-- **2** — paid but poor, unclear, or difficult to use.
-- **1** — paid and broken, unusable, misleading, or severely unreliable.
+- **2** — poor, unclear, or difficult to use.
+- **1** — broken, unusable, misleading, or severely unreliable.
 
-State the observed reason plainly. A bad paid outcome is the reason for a low
+Unpaid experiences use the same `review_service` tool. Omit payment evidence
+and supply a stable `review_nonce` on retries (automatically generated and
+returned when omitted). Signing does not require funds or make a payment.
+Payment is explicitly marked unverified; the review appears in the same history
+and score. Never invent a transaction reference to review a failed handshake.
+
+State the observed reason plainly. Distinguish provider faults from client bugs,
+insufficient funds, and uncertain causes. A bad paid outcome is the reason for a low
 review, not a reason to skip reviewing.
 
 `review_service` signs automatically with the local payer-compatible wallet.
@@ -61,8 +68,9 @@ than a directory listing:
 - `payment_target_ref`: the actual payment recipient/on-chain transfer payee.
 
 Machine-payment verification currently supports x402 USDC on Base and MPP
-Tempo payments only. Solana and other chains are unsupported and must not be
-submitted as signature-only reviews.
+Tempo payments only. Unsupported or invalid payment claims are rejected, never
+silently downgraded. An experience can instead be reviewed with payment evidence
+omitted and payment explicitly marked unverified.
 
 If the payer wallet differs from the local signing wallet, supply a signature
 from the wallet that actually sent the payment. Follow a returned `next_step`

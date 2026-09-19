@@ -23,10 +23,11 @@ backtest — accuracy is a number we report, not a claim we make.
   the website. (Today the MCP returns `weighted_rating` with no prior while the
   site ranks on `rank_score` with a hardcoded 4.0/weight-5 prior — both are
   replaced by this spec.)
-- **New machine-payment reviews are payment-gated.** An x402/mppx review must
-  carry a valid wallet signature and a transaction that CrowdCode verifies on
-  its supported chain. Legacy `signature_only` rows remain readable but new
-  unverifiable payments are not stored.
+- **Payment evidence is optional.** Unpaid reviews require an authenticated
+  wallet signature and use the existing `signature_only` multiplier. When an
+  x402/mppx payment is claimed, CrowdCode must verify the transaction on its
+  supported chain; invalid supplied claims are rejected, never downgraded.
+  All experiences share one score and wallet/service/UTC-day influence cap.
 - **Influence must be earned; bad actors round to zero.** Free identities get
   zero weight by default. Any nonzero default weight × unlimited free wallets
   = unbounded attack (confirmed in simulation, §6.2). Trust flows only from
@@ -135,7 +136,7 @@ reviews from all scores retroactively.
    the 402 challenge price** when one is stated) — else the review is
    **rejected outright**: a failing proof is worse than no proof and must
    never silently downgrade.
-5. With **no proof**, `payment_reference` must still be a transaction hash and
+5. When claiming payment with **no proof header**, `payment_reference` must be a transaction hash and
    runs the same on-chain check. Failed transactions, wrong token/payee/payer,
    malformed references, and unsupported chains reject the review and store
    nothing. An unreachable RPC returns a retryable unavailable result, stores
@@ -144,7 +145,8 @@ reviews from all scores retroactively.
    verifier-configuration error and stores nothing.
 7. New machine-payment verification supports x402 USDC on Base and mppx on
    Tempo. Solana and all other chains are explicitly unsupported; they never
-   fall back to `signature_only`.
+   fall back to `signature_only` on a failed payment claim. Omitting all payment
+   evidence instead admits an authenticated unpaid review at `signature_only`.
 
 ### 3.5 Seeds
 
@@ -310,7 +312,9 @@ canonical scoring function in `src/crowdcode/scoring.py`.
    fixed-point iteration can live.
 2. **Per-resource review summaries** (LLM) — only for resources with reviews
    newer than `last_summarized_at`; summarizer input is trust-weighted (wallets
-   below θ don't get to write the narrative); output is a constrained
+   below θ do not contribute when trusted reviews exist). Cold-start summaries
+   include authenticated unpaid reviews as well as verified payments, with the
+   payment status retained. Output is a constrained
    factual format (strengths / failure modes / caveats) treating review text
    as untrusted data; passes egress redaction; served inside
    `get_service_score` and on the site next to the raw rating histogram,

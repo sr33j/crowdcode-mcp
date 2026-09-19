@@ -364,7 +364,8 @@ def _resolved_identity(
             )
         )
         if (
-            canonical_pair
+            (canonical.payment_provider is None and canonical.payment_target_ref is None)
+            or canonical_pair
             or _identifier_belongs_to_service(
                 conn,
                 service["id"],
@@ -378,7 +379,9 @@ def _resolved_identity(
         else:
             return None
     elif supplied.payment_provider:
-        if supplied.payment_provider == canonical.payment_provider:
+        if canonical.payment_provider is None and canonical.payment_target_ref is None:
+            provider = supplied.payment_provider
+        elif supplied.payment_provider == canonical.payment_provider:
             pass
         elif (
             supplied.payment_provider in MACHINE_PAYMENT_PROVIDERS
@@ -498,6 +501,16 @@ def register_machine_payment_alias(
     if not _is_evm_address(identity.payment_target_ref):
         return
     assert identity.payment_target_ref is not None
+    # An endpoint first seen in an unpaid review has no claimed payment target.
+    # Serialize the first verified registration and reject a competing payee.
+    service = conn.execute("select * from services where id = %s for update", (service_id,)).fetchone()
+    if _resolved_identity(conn, identity, service) is None:
+        raise ValueError("service identity conflict")
+    conn.execute(
+        """update services set payment_provider = %s, payment_target_ref = %s
+           where id = %s and payment_provider is null and payment_target_ref is null""",
+        (identity.payment_provider, identity.payment_target_ref, service_id),
+    )
     _insert_identifier(
         conn,
         service_id,
@@ -509,13 +522,13 @@ def register_machine_payment_alias(
 def create_service_from_identity(
     conn: psycopg.Connection,
     identity: ServiceIdentity,
+    *,
+    payment_verified: bool = True,
 ) -> ResolvedService:
-    if not has_strong_identity(identity):
+    if not identity.api_endpoint or (payment_verified and not has_strong_identity(identity)):
         return ResolvedService(None, error="service not found")
 
     assert identity.api_endpoint is not None
-    assert identity.payment_provider is not None
-    assert identity.payment_target_ref is not None
 
     # Registration is rare and must reconcile both endpoint and optional ID.
     # Serialize only this short database-only section, after proof verification.
@@ -524,10 +537,14 @@ def create_service_from_identity(
     if existing.row is not None or existing.error:
         return existing
 
+    if not payment_verified:
+        # Unpaid reviewers identify the endpoint, not its owner or payee.
+        identity = build_identity(api_endpoint=identity.api_endpoint, service_name=identity.service_name)
+
     service_id = identity.service_id or generate_service_id(
         identity.api_endpoint,
-        identity.payment_provider,
-        identity.payment_target_ref,
+        identity.payment_provider or "",
+        identity.payment_target_ref or "",
     )
     origin = canonical_origin(identity.api_endpoint)
     service_name = _fallback_service_name(identity)
@@ -563,12 +580,13 @@ def create_service_from_identity(
         ).fetchone()
 
         _insert_identifier(conn, row["id"], "api_endpoint", identity.api_endpoint)
-        _insert_identifier(
-            conn,
-            row["id"],
-            "payment_target",
-            payment_identifier(identity.payment_provider, identity.payment_target_ref),
-        )
+        if identity.payment_provider and identity.payment_target_ref:
+            _insert_identifier(
+                conn,
+                row["id"],
+                "payment_target",
+                payment_identifier(identity.payment_provider, identity.payment_target_ref),
+            )
         _insert_identifier(conn, row["id"], "directory_slug", identity.directory_slug)
     except psycopg.errors.UniqueViolation:
         conn.rollback()

@@ -75,7 +75,8 @@ export const getServiceScoreShape = { ...identityShape };
 export const signingPayloadShape = {
   rating: z.number().int().describe(RATING_DESCRIPTION),
   reason: z.string().describe("Review text (redacted locally before hashing)"),
-  payment_reference: z.string().describe("Payment reference for this review"),
+  payment_reference: z.string().min(1).nullish().describe("Optional settlement reference; omit when no payment is claimed"),
+  review_nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).nullish().describe("Stable unique identifier for an unpaid review; reuse on retry"),
   ...identityShape,
   auto_sign: z
     .boolean()
@@ -90,7 +91,8 @@ export const signingPayloadShape = {
 export const reviewServiceShape = {
   rating: z.number().int().describe(RATING_DESCRIPTION),
   reason: z.string().describe("Review text (redacted locally before sending)"),
-  payment_reference: z.string().describe("Unique payment reference"),
+  payment_reference: z.string().min(1).nullish().describe("Optional unique settlement reference; omit when no payment is claimed"),
+  review_nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).nullish().describe("Unpaid review retry identifier; generated automatically when omitted"),
   service_id: identityShape.service_id,
   task_context: z.string().nullish(),
   service_name: z.string().nullish(),
@@ -105,8 +107,8 @@ export const reviewServiceShape = {
       "Optional: the base64 payment-response (x402) or Payment-Receipt " +
         "(mppx) header string. Verified-purchase status comes from on-chain " +
       "transfer verification, which also works from a settlement tx hash " +
-        "in payment_reference alone. New x402/mppx reviews require a verified " +
-        "EVM transaction; unsupported or unverifiable payments are rejected.",
+        "in payment_reference alone. If supplied, a payment claim must verify; " +
+        "omit payment evidence to submit a signed review without verified payment.",
     ),
   payment_challenge: z.string().nullish(),
   reviewer_wallet: z

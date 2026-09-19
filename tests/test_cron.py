@@ -136,17 +136,17 @@ def test_summary_input_prefers_trusted_reviews():
     assert selected == [trusted]
 
 
-def test_summary_input_falls_back_to_verified_reviews_at_cold_start():
+def test_summary_input_includes_authenticated_unpaid_reviews_at_cold_start():
     verified = _summary_row(SYBIL_WALLET, verified=True)
-    conn = FakeConn(
-        {"from reviews": [verified, _summary_row(SYBIL_WALLET, verified=False)]}
-    )
+    unpaid = _summary_row(SYBIL_WALLET, verified=False)
+    conn = FakeConn({"from reviews": [verified, unpaid]})
     trust = {SYBIL_WALLET: TrustRow(raw_trust=0.0)}
-    assert cron._summary_input_reviews(conn, "svc_1", trust, NOW) == [verified]
+    assert cron._summary_input_reviews(conn, "svc_1", trust, NOW) == [verified, unpaid]
 
 
 def test_summary_input_is_empty_when_nothing_qualifies():
-    conn = FakeConn({"from reviews": [_summary_row(SYBIL_WALLET, verified=False)]})
+    unsigned = {**_summary_row(SYBIL_WALLET, verified=False), "signature_verified": False}
+    conn = FakeConn({"from reviews": [unsigned]})
     trust = {SYBIL_WALLET: TrustRow(raw_trust=0.0)}
     assert cron._summary_input_reviews(conn, "svc_1", trust, NOW) == []
 
