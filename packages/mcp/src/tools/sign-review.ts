@@ -13,6 +13,7 @@
  * the backend hashes when rebuilding the payload.
  */
 
+import { randomUUID } from "node:crypto";
 import {
   buildIdentity,
   normalizePaymentProvider,
@@ -72,7 +73,8 @@ export interface PreparedReview {
     identity: ServiceIdentity;
     rating: number;
     reason: string;
-    payment_reference: string;
+    payment_reference?: string | null;
+    review_nonce?: string | null;
   };
   signed: boolean;
 }
@@ -93,8 +95,12 @@ export async function prepareSignedReview(
   args: Record<string, unknown>,
   wallet: WalletOptions,
 ): Promise<PreparedReview> {
-  if (!isMachineProvider(args.payment_provider) || args.review_signature) {
+  if (args.review_signature || (args.payment_reference != null && args.payment_provider && !isMachineProvider(args.payment_provider))) {
     return { args, signed: false };
+  }
+
+  if (args.payment_reference == null) {
+    args = { ...args, review_nonce: args.review_nonce ?? randomUUID() };
   }
 
   const loaded = await loadWallet({
@@ -116,7 +122,8 @@ export async function prepareSignedReview(
   const payload = await getReviewSigningPayload(deps, {
     rating: args.rating as number,
     reason: String(args.reason ?? ""),
-    payment_reference: String(args.payment_reference ?? ""),
+    payment_reference: args.payment_reference as string | null | undefined,
+    review_nonce: args.review_nonce as string | null | undefined,
     service_id: args.service_id as string | null | undefined,
     api_endpoint: args.api_endpoint as string | null | undefined,
     payment_provider: args.payment_provider as string | null | undefined,
@@ -167,7 +174,8 @@ export async function prepareSignedReview(
       identity,
       rating: args.rating as number,
       reason: signedReason,
-      payment_reference: String(args.payment_reference ?? ""),
+      payment_reference: args.payment_reference as string | null | undefined,
+    review_nonce: args.review_nonce as string | null | undefined,
     },
   };
 }
@@ -229,6 +237,7 @@ export async function resignFromMismatch(
     rating: prepared.signed_payload.rating,
     reason: prepared.signed_payload.reason,
     paymentReference: prepared.signed_payload.payment_reference,
+    reviewNonce: prepared.signed_payload.review_nonce,
   });
   if (message !== response.expected_message) return null;
 

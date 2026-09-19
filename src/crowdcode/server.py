@@ -29,6 +29,7 @@ from crowdcode.identity import (
 )
 from crowdcode.payments import (
     REASON_HASH_RE,
+    PaymentVerification,
     _normalize_evm_address,
     canonical_payment_reference,
     canonical_review_payload,
@@ -467,7 +468,8 @@ def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
 def get_review_signing_payload(
     rating: int,
     reason_hash: str,
-    payment_reference: str,
+    payment_reference: str | None = None,
+    review_nonce: str | None = None,
     service_id: str | None = None,
     api_endpoint: str | None = None,
     payment_provider: str | None = None,
@@ -488,6 +490,8 @@ def get_review_signing_payload(
     not work.
     """
     reason_hash = reason_hash.strip().lower()
+    if payment_reference is None and review_nonce is None:
+        review_nonce = str(uuid4())
     if not REASON_HASH_RE.match(reason_hash):
         return {
             "status": "rejected",
@@ -520,11 +524,13 @@ def get_review_signing_payload(
     return {
         "ok": True,
         "signature_scheme": "eip191",
+        **({"review_nonce": review_nonce} if payment_reference is None else {}),
         "message": canonical_review_payload_from_hash(
             identity=identity,
             rating=rating,
             reason_hash=reason_hash,
             payment_reference=payment_reference,
+            review_nonce=review_nonce,
         ),
     }
 
@@ -534,7 +540,8 @@ def get_review_signing_payload(
 def review_service(
     rating: int,
     reason: str,
-    payment_reference: str,
+    payment_reference: str | None = None,
+    review_nonce: str | None = None,
     service_id: str | None = None,
     task_context: str | None = None,
     service_name: str | None = None,
@@ -548,45 +555,27 @@ def review_service(
     review_signature: str | None = None,
     signature_scheme: str = "eip191",
 ) -> dict[str, Any]:
-    """Create a review after paying for a service (x402/mppx/Stripe/manual).
+    """Review a service experience, whether or not payment occurred.
 
-    Call this after EVERY paid x402/mppx use — success, slow response, or
-    failure. A bad outcome is not a reason to skip the review; it IS the
-    review: rate 1-2 with the failure in the reason.
+    Use one review flow for paid, free, and failed interactions. Omit
+    payment_reference and payment_proof when no payment is claimed; supply a
+    stable review_nonce (8-128 letters, digits, underscores or hyphens) for
+    retry-safe submission. Reviewer wallet signatures remain required for
+    unpaid reviews. Payment is explicitly marked unverified in those reviews.
 
-    Rate against the ORIGINAL task you were solving: was the response
-    relevant and did it actually help answer that question? Rating scale:
-    5 = excellent (clear schema, relevant output that answered the original
-    question, fast, clean receipt — would reuse confidently); 4 = helped but
-    a real schema/docs/latency/output caveat; 3 = paid but
-    thin/confusing/needed guesswork, or not actually relevant/helpful for
-    the task — a technically valid answer that did not help is a 3 at best;
-    2 = paid but poor (client error, unclear failure, hard to use);
-    1 = paid and broken (server error, unusable output, misleading challenge,
-    timeout). A service that simply worked well AND helped is a 5 — do not
-    hedge to 4 without a concrete caveat.
+    Rate usefulness for the original task from 1 (unusable) to 5 (excellent).
+    Describe the observed outcome and distinguish provider faults from caller
+    errors, insufficient funds, and uncertain failures. Do not invent a payment
+    reference or blame the provider for a client-side failure.
 
-    For mppx/x402, take the identity and
-    proofs from the ACTUAL payment, not a directory listing:
-    - payment_reference: the settlement tx hash (x402) or Payment-Receipt
-      `reference` (mppx). Unique — one review per payment. When it is a tx
-      hash and no payment_proof is supplied, CrowdCode verifies the transfer
-      on-chain directly — a matching transfer earns the same
-      verified-purchase status as a proof.
-    - payment_proof: the base64 response header STRING — `payment-response` for
-      x402, `Payment-Receipt` for mppx. Not the tx hash, not decoded JSON.
-      OPTIONAL: verified status comes from the on-chain transfer either way;
-      a verifiable EVM transaction hash is required for every new machine-
-      payment review. x402 USDC on Base and mppx on Tempo are supported;
-      Solana and other chains are rejected.
-    - payment_target_ref: the real payee (the 402 challenge recipient / on-chain
-      Transfer `to`), not a bazaar/directory advertised payTo.
-    - reviewer_wallet: the wallet that SENT the payment (the ERC-20 Transfer
-      `from`). For gasless x402/mppx the tx sender is a facilitator, not the
-      payer.
+    When claiming payment, use the actual settlement reference and payee.
+    x402 Base USDC and mppx Tempo claims require a verified on-chain transfer
+    from reviewer_wallet to the service payee. Optional payment_proof is the
+    original base64 response header, not decoded JSON. Invalid supplied payment
+    evidence is rejected; it is never downgraded into an unpaid review.
     """
     reason = reason.strip()
-    payment_reference = payment_reference.strip()
+    payment_reference = payment_reference.strip() if payment_reference is not None else None
     task_context = task_context.strip() if task_context else None
 
     # payment_proof / payment_challenge are opaque strings end to end, but some
@@ -631,6 +620,7 @@ def review_service(
             rating=rating,
             reason=reason,
             payment_reference=payment_reference,
+            review_nonce=review_nonce,
             payment_proof=payment_proof,
             payment_challenge=payment_challenge,
             reviewer_wallet=reviewer_wallet,
@@ -678,6 +668,7 @@ def review_service(
                     rating=rating,
                     reason=reason,
                     payment_reference=payment_reference,
+                    review_nonce=review_nonce,
                 )
                 failure["next_step"] = _next_step(
                     "resign_expected_message",
@@ -695,7 +686,11 @@ def review_service(
         # canonical transaction reference. This check intentionally runs
         # after signature/on-chain verification to prevent public tx-hash
         # front-running. The unique index remains the concurrency backstop.
-        canonical_reference = canonical_payment_reference(payment_reference)
+        canonical_reference = canonical_payment_reference(payment_reference) if payment_reference is not None else None
+        if review_nonce and service is not None:
+            replay = _unpaid_review_replay(conn, verification, review_nonce, service["id"], rating)
+            if replay is not None:
+                return replay
         existing = conn.execute(
             """
             select id from reviews
@@ -742,14 +737,14 @@ def review_service(
             task_context = redacted[1]
 
         if service is None:
-            created = create_service_from_identity(conn, identity)
+            created = create_service_from_identity(conn, identity, payment_verified=payment_reference is not None)
             if created.error:
                 return {"accepted": False, "reason": created.error}
             service = created.row
             service_created = created.created
 
         try:
-            # Store every uniquely paid outcome. Score influence is aggregated
+            # Store each authenticated experience in the same review history. Score influence is aggregated
             # into one wallet/service/UTC-day bucket by compute_score(); trust
             # is replayed authoritatively by the nightly consistency sweep.
             user_id = None
@@ -766,9 +761,9 @@ def review_service(
                   reviewer_wallet, review_signature, signature_scheme,
                   signature_verified, redacted_at, user_id, amount,
                   payment_verification_level, payment_verification_metadata,
-                  payment_reference_canonical
+                  payment_reference_canonical, review_nonce
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
                 (
@@ -793,6 +788,7 @@ def review_service(
                     verification.payment_verification_level,
                     Jsonb(verification.payment_verification_metadata or {}),
                     verification.canonical_reference or canonical_reference,
+                    review_nonce,
                 ),
             ).fetchone()
 
@@ -809,8 +805,15 @@ def review_service(
             # immediately using the wallet's current trust.
             recompute_service_score(conn, service["id"], utc_now())
             conn.commit()
+        except ValueError as exc:
+            conn.rollback()
+            return {"accepted": False, "reason": str(exc)}
         except psycopg.errors.UniqueViolation:
             conn.rollback()
+            if review_nonce:
+                replay = _unpaid_review_replay(conn, verification, review_nonce, service["id"], rating)
+                if replay is not None:
+                    return replay
             return {
                 "status": "rejected",
                 "error_code": "payment_reference_used",
@@ -819,19 +822,41 @@ def review_service(
                 "reason": "payment_reference already used",
             }
 
-    result = {
+    return _review_accepted(service["id"], row["id"], verification, service_created)
+
+
+def _review_accepted(service_id: str, review_id: int, verification: PaymentVerification,
+                     service_created: bool = False) -> dict[str, Any]:
+    return {
         "accepted": True,
         "reason": "review accepted",
-        "service_id": service["id"],
+        "service_id": service_id,
         "service_created": service_created,
-        "review_id": row["id"],
+        "review_id": review_id,
         "verification": verification.reason,
         "payment_verified": verification.payment_verified,
         "payment_verification_level": verification.payment_verification_level,
         "signature_verified": verification.signature_verified,
         "verified_purchase": verification.payment_verified,
     }
-    return result
+
+
+def _unpaid_review_replay(conn: Any, verification: PaymentVerification,
+                         nonce: str, service_id: str, rating: int) -> dict[str, Any] | None:
+    existing = conn.execute(
+        """select id, service_id, rating, payment_proof from reviews
+           where lower(reviewer_wallet) = lower(%s) and review_nonce = %s""",
+        (verification.reviewer_wallet, nonce),
+    ).fetchone()
+    if existing is None:
+        return None
+    original = existing["payment_proof"].get("review_payload", {})
+    incoming = (verification.metadata or {}).get("review_payload", {})
+    if (existing["service_id"] == service_id and existing["rating"] == rating
+            and original.get("reason_hash") == incoming.get("reason_hash")):
+        return _review_accepted(service_id, existing["id"], verification)
+    return {"accepted": False, "status": "rejected", "retryable": False,
+            "error_code": "review_nonce_used", "reason": "review_nonce already used for a different review"}
 
 
 def _json_error(

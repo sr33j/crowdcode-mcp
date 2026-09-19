@@ -44,6 +44,23 @@ def _sign(message: str) -> str:
     return ACCOUNT.sign_message(encode_defunct(text=message)).signature.hex()
 
 
+def test_unpaid_review_authenticates_without_payment_or_rpc(monkeypatch):
+    monkeypatch.setattr(payments_mod, "_rpc_transaction_receipt", lambda *_: pytest.fail("unpaid review called RPC"))
+    message = canonical_review_payload(identity=IDENTITY, rating=2, reason="HTTP 500", review_nonce="attempt_123")
+    args = dict(identity=IDENTITY, rating=2, reason="HTTP 500", review_nonce="attempt_123",
+                reviewer_wallet=ACCOUNT.address, review_signature=_sign(message))
+    verified = verify_review_payment(**args)
+    assert verified.ok and verified.signature_verified and not verified.payment_verified
+    assert verified.payment_verification_level == "signature_only"
+    assert verified.canonical_reference is None
+    assert verify_review_payment(**{**args, "review_nonce": "attempt_456"}).signature_mismatch
+    assert not verify_review_payment(**{**args, "review_signature": None}).ok
+    assert not verify_review_payment(**{**args, "review_nonce": None}).ok
+    assert not verify_review_payment(**{**args, "payment_proof": "bogus"}).ok
+    assert not verify_review_payment(**{**args, "payment_reference": ""}).ok
+    assert not verify_review_payment(**{**args, "payment_reference": "bad-reference"}).ok
+
+
 def test_payload_from_hash_matches_reason_payload():
     reason = "  Great service — très rapide 🚀  "
     assert canonical_review_payload_from_hash(

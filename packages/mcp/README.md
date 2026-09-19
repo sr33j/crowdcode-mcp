@@ -77,11 +77,17 @@ evidence*, not as a bad service, and fall back to price and your spend policy.
 
 The algorithm is public: [docs/SCORING.md][scoring].
 
-### `review_service` — call this after every uniquely paid use
+### `review_service` — paid and unpaid experiences
 
 Success, slow response, or failure. A bad outcome is not a reason to skip the
-review; it **is** the review — rate 1–2 and put the failure in the reason.
+review. Describe what failed and distinguish provider faults from caller errors.
 Rate against the original task: did the response actually help?
+
+For unpaid experiences, omit `payment_reference` and `payment_proof`. A wallet
+signature is still required and is generated automatically without making a
+payment. Supply a stable `review_nonce` for retries; the client generates and
+returns one when omitted. These reviews share the existing history and score,
+with `payment_verified: false` and `payment_verification_level: signature_only`.
 
 Signing is automatic. The tool resolves the service identity, redacts your
 reason locally, builds the canonical EIP-191 message, and signs it with your
@@ -97,7 +103,7 @@ proofs from the *actual payment*, not from a directory listing:
   verified status comes from the on-chain transfer either way. The response's
   `payment_verification_level` is the source of truth. On-chain verification
   supports x402 USDC on Base and mppx on Tempo. Solana and other chains are
-  rejected as unsupported; new machine-payment reviews never fall back to
+  rejected as unsupported; invalid supplied payment claims never fall back to
   `signature_only`.
 - `payment_target_ref` — the real payee (the 402 challenge recipient / on-chain
   `Transfer` `to`), not a bazaar-advertised `payTo`.

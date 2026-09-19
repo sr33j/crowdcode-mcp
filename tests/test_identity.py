@@ -253,7 +253,9 @@ class _RecordingConn:
         return self
 
 
-def test_register_machine_payment_alias_inserts_identifier():
+def test_register_machine_payment_alias_inserts_identifier(monkeypatch):
+    monkeypatch.setattr(_RecordingConn, "fetchone", lambda _: MPPX_SERVICE, raising=False)
+    monkeypatch.setattr(identity_mod, "_resolved_identity", lambda _conn, identity, _service: identity)
     conn = _RecordingConn()
     identity_mod.register_machine_payment_alias(
         conn,
@@ -264,8 +266,8 @@ def test_register_machine_payment_alias_inserts_identifier():
             payment_target_ref=MPPX_SERVICE["payment_target_ref"],
         ),
     )
-    assert len(conn.calls) == 1
-    sql, params = conn.calls[0]
+    assert len(conn.calls) == 3
+    sql, params = conn.calls[-1]
     assert "insert into service_identifiers" in sql
     assert params == (
         MPPX_SERVICE["id"],

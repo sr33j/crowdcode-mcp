@@ -86,6 +86,7 @@ function withWalletInfo(
   prepared: PreparedReview,
 ): Record<string, unknown> {
   const out = { ...payload };
+  if (prepared.args.review_nonce != null) out.review_nonce = prepared.args.review_nonce;
   if (prepared.wallet_source !== undefined) {
     out.wallet_source = prepared.wallet_source;
   }
@@ -285,47 +286,20 @@ const SERVER_INSTRUCTIONS = [
   "`summary` digests what reviewers reported (strengths / failure modes /",
   "caveats).",
   "",
-  "After ANY uniquely paid service use — success, slow response, or failure:",
-  "submit a review. Every unique payment is stored; scoring combines one",
-  "wallet's reviews per service and UTC day into a capped daily opinion.",
-  "A slow or broken paid call is not a reason to skip the review; it IS the",
-  "review (slowness or breakage goes in the rating and reason). Rate against",
-  "the ORIGINAL task you were solving: was the response relevant and did it",
-  "actually help answer that question? Fixed scale: 5 = excellent (clear",
-  "schema, relevant output that answered the original question, fast, clean",
-  "receipt — would reuse confidently); 4 = helped but a real",
-  "schema/docs/latency/output caveat; 3 = paid but response thin, confusing,",
-  "needed guesswork, or not actually relevant/helpful for the task (a",
-  "technically valid answer that did not help is a 3 at best); 2 = paid but",
-  "poor (client error, unclear failure, hard to use); 1 = paid and broken",
-  "(server error, unusable output, misleading challenge, timeout/severe",
-  "reliability). A service that simply worked well AND helped is a 5 — do",
-  "not hedge to 4 without a concrete caveat.",
-  "",
-  "Signing is AUTOMATIC: review_service signs with the local agentcash wallet",
-  "at ~/.agentcash/wallet.json (auto-created if missing). Environment private",
-  "keys are not accepted. Responses include wallet_source (agentcash | none).",
-  "For x402/mppx, take identity and proofs from the ACTUAL payment,",
-  "not a directory listing: payment_reference = the settlement tx hash (x402)",
-  "or Payment-Receipt reference (mppx); payment_proof = the base64 response",
-  "header string (payment-response for x402, Payment-Receipt for mppx), not",
-  "the tx hash or decoded JSON. payment_proof is OPTIONAL: verified-purchase",
-  "status (double scoring weight) comes from CrowdCode verifying the ERC-20",
-  "transfer on-chain, which works from the settlement tx hash in",
-  "payment_reference alone — so clients that only have a tx hash (e.g.",
-  "agentcash) get the same verified status as clients that pass the proof",
-  "header. payment_verification_level in the response is the source of",
-  "truth. Verification supports x402 USDC on Base and mppx on Tempo only.",
-  "Solana and other chains are rejected; new machine-payment reviews never",
-  "fall back to signature_only. payment_target_ref = the real on-chain payee (the 402",
-  "challenge recipient / Transfer `to`), not a directory payTo.",
-  "",
-  "Workflow: 1) get_service_score on each candidate; 2) pay and use the",
-  "service; 3) review_service with the settlement tx hash as",
-  "payment_reference (plus the payment_proof header if you have it). Reviews",
-  "with unique payment references are all stored; failed calls return a",
-  "next_step object with the exact command or retry that fixes them —",
-  "follow it.",
+  "Review each paid service outcome with review_service. Unpaid experiences use",
+  "the same tool: omit payment_reference and payment_proof, and reuse a stable",
+  "review_nonce on retry (automatically generated when omitted). Payment is",
+  "explicitly marked unverified. The reviewer still signs with the local",
+  "AgentCash wallet; signing is automatic and does not make a payment.",
+  "Rate usefulness for the original task from 1 (unusable) to 5 (excellent).",
+  "Describe observed outcomes; distinguish provider faults from client bugs,",
+  "insufficient funds, and uncertain causes. Do not invent payment evidence.",
+  "When claiming payment, use the actual settlement reference and payee.",
+  "An optional payment_proof is the original base64 response header. Payment",
+  "claims must verify on x402 Base USDC or mppx Tempo. Invalid supplied claims",
+  "are rejected, never silently downgraded. Payment verification gives the",
+  "existing verified scoring weight; unpaid signed reviews share the same",
+  "history, score, and per-wallet/service/day influence cap.",
   "",
   "When you were actively trying to BUY a capability and no fitting paid",
   "service exists, call request_service once (requires a wallet identity,",
@@ -344,7 +318,7 @@ const SERVER_INSTRUCTIONS = [
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.5.2" },
+    { name: "crowdcode", version: "0.5.3" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -418,41 +392,17 @@ export function buildServer(deps: ServerDeps): McpServer {
     "review_service",
     {
       description:
-        "Submit a review after paying for a service — call this after EVERY " +
-        "uniquely paid x402/mppx use, including slow responses and failures. A bad " +
-        "outcome is not a reason to skip the review; it IS the review: rate " +
-        "1-2 with the failure in the reason. Rate against the ORIGINAL task " +
-        "you were solving: was the response relevant and did it actually " +
-        "help answer that question? Rating scale: 5 = excellent (clear " +
-        "schema, relevant output that answered the original question, fast, " +
-        "clean receipt — would reuse confidently); 4 = helped but a real " +
-        "schema/docs/latency/output caveat; 3 = paid but " +
-        "thin/confusing/needed guesswork or not actually relevant/helpful " +
-        "for the task (a technically valid answer that did not help is a 3 " +
-        "at best); 2 = paid but poor (client error, unclear failure, hard " +
-        "to use); 1 = paid and broken (server error, unusable output, " +
-        "misleading challenge, timeout). A service that simply worked well " +
-        "AND helped is a 5 — do not hedge to 4 without a concrete caveat. " +
-        "SIGNING IS AUTOMATIC: this tool signs with your local agentcash " +
-        "wallet (auto-created if missing); environment private keys are not accepted — do not " +
-        "call get_review_signing_payload or sign externally. Get identity and " +
-        "proofs from the ACTUAL payment, not a directory listing: " +
-        "payment_reference = the settlement tx hash (x402) or Payment-Receipt " +
-        "`reference` (mppx); " +
-        "payment_proof = the base64 response header STRING — `payment-response` " +
-        "for x402, `Payment-Receipt` for mppx — NOT the tx hash and NOT decoded " +
-        "JSON. payment_proof is OPTIONAL: verified-purchase status (double " +
-        "scoring weight) comes from on-chain transfer verification, which works " +
-        "from the settlement tx hash in payment_reference alone — pass the " +
-        "proof header too when you have it. Only x402 USDC on Base and mppx " +
-        "on Tempo are supported; Solana and other chains are rejected. " +
-        "payment_verification_level in the response is the source of truth; " +
-        "payment_target_ref = the real payee (the 402 challenge recipient / " +
-        "on-chain Transfer `to`), not a bazaar/directory payTo. If you paid " +
-        "from a different wallet than the local one, pass reviewer_wallet and " +
-        "review_signature yourself (the wallet that SENT the payment — the " +
-        "ERC-20 Transfer `from`, not the gasless facilitator). Every unique " +
-        "payment may be reviewed; daily scoring influence is capped. Free-text is redacted locally.",
+        "Review a service experience, paid or unpaid, with a rating from 1 to 5 " +
+        "and concrete observations about usefulness for the original task. " +
+        "Review every paid outcome; unpaid successes and failures can use the same tool. " +
+        "Distinguish provider faults from client errors, insufficient funds, and uncertain causes. " +
+        "Signing with the local AgentCash wallet is automatic. Omit payment_reference " +
+        "and payment_proof when no payment is claimed; payment is then marked unverified. " +
+        "Use a stable review_nonce for unpaid retries (generated automatically if omitted). " +
+        "For paid reviews, supply the actual settlement reference and payee; optional " +
+        "payment_proof is the original base64 response header. Claims must verify on " +
+        "x402 Base USDC or mppx Tempo; invalid payment evidence is rejected, never downgraded. " +
+        "Daily scoring influence is capped. Review text is redacted locally.",
       inputSchema: reviewServiceShape,
     },
     (args) => handlers.review_service(args),

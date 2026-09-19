@@ -1,5 +1,11 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.5.3 — 2026-09-19
+
+- Allow authenticated reviews without payment evidence in the existing review tool, history, score, and summaries. Keep supplied payment claims strictly verified.
+- Sign unpaid reviews with a versioned nonce for idempotent retries; preserve paid v1 signatures. Unpaid first reviews cannot register a payment destination.
+- Requires the optional-payment database migration and backend 0.5.3 before enabling unpaid submissions.
+
 ## 0.5.2 — 2026-09-18
 
 - Align the client and plugin release with backend 0.5.2 shared-wallet identity support. Distinct endpoints keep separate reviews even when they share a payment wallet. Requires backend 0.5.2 for this behavior.

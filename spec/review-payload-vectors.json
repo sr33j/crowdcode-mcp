@@ -256,6 +256,22 @@
       "payment_reference": "0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
       "expected_reason_hash": "sha256:fbdcff585b6c7139e5dae6d7fc79ecfef56fedbaaf252e06857df04dbcb37e3a",
       "expected_message": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":\"example-ocr\",\"payment_provider\":\"x402\",\"payment_reference\":\"0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":5,\"reason_hash\":\"sha256:fbdcff585b6c7139e5dae6d7fc79ecfef56fedbaaf252e06857df04dbcb37e3a\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}"
+    },
+    {
+      "name": "unpaid-v2-with-nonce",
+      "identity": {
+        "service_id": null,
+        "api_endpoint": "https://api.example.com/free",
+        "payment_provider": null,
+        "payment_target_ref": null,
+        "directory_slug": null
+      },
+      "rating": 2,
+      "reason": "Endpoint returned HTTP 500",
+      "payment_reference": null,
+      "review_nonce": "attempt_123",
+      "expected_reason_hash": "sha256:c7bb9546b91321bd1650206447ab329c29c3f5da14e597f77570786334525f30",
+      "expected_message": "{\"api_endpoint\":\"https://api.example.com/free\",\"directory_slug\":null,\"payment_provider\":null,\"payment_reference\":null,\"payment_target_ref\":null,\"rating\":2,\"reason_hash\":\"sha256:c7bb9546b91321bd1650206447ab329c29c3f5da14e597f77570786334525f30\",\"review_nonce\":\"attempt_123\",\"service_id\":null,\"type\":\"crowdcode.review.v2\"}"
     }
   ]
 }

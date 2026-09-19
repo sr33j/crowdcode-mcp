@@ -235,6 +235,17 @@ def service_id_vectors() -> list[dict]:
     return vectors
 
 
+REVIEW_PAYLOAD_INPUTS.append({
+    "name": "unpaid-v2-with-nonce",
+    "identity": {"service_id": None, "api_endpoint": "https://api.example.com/free",
+                 "payment_provider": None, "payment_target_ref": None, "directory_slug": None},
+    "rating": 2,
+    "reason": "Endpoint returned HTTP 500",
+    "payment_reference": None,
+    "review_nonce": "attempt_123",
+})
+
+
 def review_payload_vectors() -> list[dict]:
     vectors = []
     for case in REVIEW_PAYLOAD_INPUTS:
@@ -244,6 +255,7 @@ def review_payload_vectors() -> list[dict]:
             rating=case["rating"],
             reason=case["reason"],
             payment_reference=case["payment_reference"],
+            review_nonce=case.get("review_nonce"),
         )
         reason_hash = json.loads(message)["reason_hash"]
         vectors.append(
@@ -253,6 +265,7 @@ def review_payload_vectors() -> list[dict]:
                 "rating": case["rating"],
                 "reason": case["reason"],
                 "payment_reference": case["payment_reference"],
+                **({"review_nonce": case["review_nonce"]} if "review_nonce" in case else {}),
                 "expected_reason_hash": reason_hash,
                 "expected_message": message,
             }

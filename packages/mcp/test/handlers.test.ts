@@ -189,6 +189,30 @@ async function walletDirWith(key: `0x${string}` | null): Promise<string> {
 describe("transparent review signing", () => {
   beforeEach(() => resetWalletCache());
 
+  it("signs unpaid endpoint reviews and returns the nonce for retries", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream((name) => name === "get_service_score"
+      ? { found: false, reason: "service not found" }
+      : { accepted: true, payment_verified: false });
+    const handlers = createToolHandlers({ engine, upstream,
+      wallet: { walletDir: await walletDirWith(KEY), autoCreate: false, env: {} } });
+    const args = { api_endpoint: "https://api.example.com/free", rating: 2, reason: "HTTP 500" };
+    const first = JSON.parse((await handlers.review_service(args)).content[0]!.text);
+    expect(first.review_nonce).toEqual(expect.any(String));
+    await handlers.review_service({ ...args, review_nonce: first.review_nonce });
+    const submitted = upstream.calls.filter(call => call.name === "review_service");
+    expect(submitted).toHaveLength(2);
+    for (const { args: sent } of submitted) {
+      expect(sent.payment_reference).toBeUndefined();
+      expect(sent.review_nonce).toBe(first.review_nonce);
+      const message = canonicalReviewPayload({ identity: buildIdentity(sent), rating: 2,
+        reason: String(sent.reason), reviewNonce: String(sent.review_nonce) });
+      expect(JSON.parse(message).type).toBe("crowdcode.review.v2");
+      expect(await verifyMessage({ address: ACCOUNT.address, message,
+        signature: sent.review_signature as `0x${string}` })).toBe(true);
+    }
+  });
+
   it("auto-signs mppx reviews over the redacted reason", async () => {
     const engine = await makeEngine();
     const upstream = fakeUpstream((name) =>

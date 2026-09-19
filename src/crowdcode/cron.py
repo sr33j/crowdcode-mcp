@@ -292,7 +292,8 @@ def _summary_input_reviews(
 ) -> list[dict[str, Any]]:
     """Trust-weighted summarizer input (docs/SCORING.md §8.2): wallets below
     theta don't get to write the narrative. Cold-start fallback: with no
-    weighted reviews yet, fall back to payment-verified ones; else skip."""
+    weighted reviews yet, fall back to authenticated reviews, including unpaid
+    experiences. Payment status is preserved in the summarizer input."""
     rows = conn.execute(
         """
         select rating, reason, task_context, payment_verified,
@@ -323,7 +324,7 @@ def _summary_input_reviews(
         )
         > 0
     ]
-    return weighted or [row for row in rows if row["payment_verified"]]
+    return weighted or [row for row in rows if row["payment_verified"] or row["signature_verified"]]
 
 
 def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str, Any]]]]:

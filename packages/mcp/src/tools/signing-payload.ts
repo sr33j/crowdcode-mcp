@@ -12,6 +12,7 @@
  * unresolved services continue to use the caller-provided strong identity.
  */
 
+import { randomUUID } from "node:crypto";
 import type { RedactionResult } from "@crowdcode/redaction";
 import { buildIdentity, type ServiceIdentity } from "../canonical/identity.js";
 import { canonicalReviewPayload } from "../canonical/payload.js";
@@ -20,7 +21,8 @@ import type { Upstream } from "../upstream.js";
 export interface SigningPayloadArgs {
   rating: number;
   reason: string;
-  payment_reference: string;
+  payment_reference?: string | null;
+  review_nonce?: string | null;
   service_id?: string | null;
   api_endpoint?: string | null;
   payment_provider?: string | null;
@@ -45,6 +47,7 @@ export async function getReviewSigningPayload(
   deps: SigningDeps,
   args: SigningPayloadArgs,
 ): Promise<Record<string, unknown>> {
+  if (args.payment_reference == null) args = { ...args, review_nonce: args.review_nonce ?? randomUUID() };
   let identity: ServiceIdentity;
   try {
     identity = buildIdentity(args);
@@ -105,11 +108,13 @@ export async function getReviewSigningPayload(
     rating: args.rating,
     reason: redacted.text,
     paymentReference: args.payment_reference,
+    reviewNonce: args.review_nonce,
   });
 
   return {
     ok: true,
     signature_scheme: "eip191",
+    ...(args.payment_reference == null ? { review_nonce: args.review_nonce } : {}),
     message,
     reason: redacted.text,
     identity: {
@@ -123,7 +128,7 @@ export async function getReviewSigningPayload(
       "Sign `message` with the reviewer wallet (EIP-191 personal_sign). Then " +
       "call review_service in this same session, passing this exact `reason` " +
       "string and every field of `identity` verbatim, plus the same rating " +
-      "and payment_reference.",
+      "and payment_reference (or review_nonce when payment is omitted).",
     _redaction: {
       entities_removed: redacted.entitiesRemoved,
       model_active: redacted.modelActive,
