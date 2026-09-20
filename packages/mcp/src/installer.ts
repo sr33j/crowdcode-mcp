@@ -1,3 +1,4 @@
+import { COMPLETION_HOOK } from "./completion-hook.js";
 import { createHash } from "node:crypto";
 import {
   copyFile,
@@ -52,6 +53,7 @@ export interface DoctorResult {
   mcpConfigured: boolean;
   skillPath: string;
   skillCurrent: boolean;
+  completionHookCurrent?: boolean;
   detail?: string;
 }
 
@@ -363,6 +365,25 @@ export function mergeJsonMcpConfig(content: string, path = "config.json"): strin
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
+async function installCompletionHook(env: ReturnType<typeof resolvedEnvironment>): Promise<void> {
+  const settingsPath = join(env.homeDir, ".claude", "settings.json");
+  const settings = parseJsonConfig((await readOptional(settingsPath)) ?? "{}", settingsPath);
+  const hooks = settings.hooks ?? {};
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) throw new Error("Invalid Claude hooks settings");
+  const hookMap = hooks as Record<string, unknown>;
+  const stop = hookMap.Stop ?? [];
+  if (!Array.isArray(stop)) throw new Error("Invalid Claude Stop hooks settings");
+  const hookPath = join(env.homeDir, ".crowdcode", "hooks", "completion.cjs");
+  const installed = stop.some((entry: any) => Array.isArray(entry?.hooks) &&
+    entry.hooks.some((hook: any) => hook.type === "command" && hook.command === "node" &&
+      Array.isArray(hook.args) && hook.args.length === 1 && hook.args[0] === hookPath));
+  if (!installed) hookMap.Stop = [...stop, { hooks: [{ type: "command", command: "node", args: [hookPath], timeout: 5 }] }];
+  settings.hooks = hookMap;
+  await atomicWrite(hookPath, COMPLETION_HOOK);
+  const next = JSON.stringify(settings, null, 2) + "\n";
+  if (next !== await readOptional(settingsPath)) await atomicWrite(settingsPath, next);
+}
+
 async function configureClient(
   client: ClientId,
   env: ReturnType<typeof resolvedEnvironment>,
@@ -401,6 +422,7 @@ export async function installForClients(
   let claudeMode: "symlink" | "copy" | null = null;
   if (clients.includes("claude-code")) {
     claudeMode = await installClaudeCodeSkill(env, canonical.path, canonical.skill);
+    await installCompletionHook(env);
   }
 
   const results: ClientInstallResult[] = [];
@@ -472,7 +494,18 @@ export async function doctorClients(
       const skillPath = claudeCodeSkillDir(env.homeDir);
       const skillCurrent =
         (await readOptional(join(skillPath, "SKILL.md"))) === expectedSkill;
-      results.push({ client, configPath, mcpConfigured, skillPath, skillCurrent });
+      let completionHookCurrent = false;
+      try {
+        const settings = JSON.parse((await readOptional(join(env.homeDir, ".claude", "settings.json"))) ?? "{}");
+        const hookPath = join(env.homeDir, ".crowdcode", "hooks", "completion.cjs");
+        completionHookCurrent = (await readOptional(hookPath)) === COMPLETION_HOOK &&
+          Array.isArray(settings.hooks?.Stop) && settings.hooks.Stop.some((entry: any) =>
+            Array.isArray(entry?.hooks) && entry.hooks.some((hook: any) =>
+              hook.type === "command" && hook.command === "node" &&
+              Array.isArray(hook.args) && hook.args.length === 1 && hook.args[0] === hookPath));
+      } catch { /* Doctor reports malformed or missing hook configuration. */ }
+      results.push({ client, configPath, mcpConfigured, skillPath, skillCurrent, completionHookCurrent,
+        ...(!completionHookCurrent ? { detail: "Re-run install --client claude-code to refresh the completion reminder." } : {}) });
     } else if (client === "claude-desktop") {
       results.push({
         client,

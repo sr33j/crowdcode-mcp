@@ -48,6 +48,7 @@ from crowdcode.redaction import (
     redact_texts,
     redaction_enabled,
 )
+from crowdcode.review_management import authorize, review_replay_key, lock_review_writes
 from crowdcode.reputation import (
     ensure_user,
     recompute_service_score,
@@ -178,33 +179,22 @@ def request_service(
     task_context: str | None = None,
     requester_wallet: str | None = None,
 ) -> dict[str, Any]:
-    """Record unmet paid-service demand for future directory coverage.
+    """Record concrete paid-service demand discovered while completing a real task.
 
-    Use this only when you were actively trying to BUY a capability — you had
-    the task, a wallet, and spend authority, and would have paid concrete
-    money right then if the service existed — and no fitting paid service
-    (x402/mppx/Stripe) could be found. "A provider could charge for this" is
-    not enough; a free tool that would merely have been convenient is not a
-    service request. Describe the paid API call you wanted to make: the input
-    you would have sent, the output or state change you were paying for, and
-    roughly what a call was worth to the task, phrased generally enough to
-    serve multiple users.
-
-    Requires requester_wallet (an EVM 0x address identifying who is asking;
-    crowdcode-mcp attaches your local wallet automatically). Requests are
-    rate-limited per wallet identity per day.
-
-    Good: "Accepts a GitHub repository URL and failing CI logs, then opens a
-    pull request with the focused fix — worth ~$1-5 per fix." / "Resolves a
-    citation like 'Smith et al. 2019' to the actual paper, or reports that it
-    does not exist — worth ~$0.10 per lookup." / "Semantic search over
-    paywalled full-text academic PDFs with page-level citations — worth
-    ~$0.25 per query."
-
-    Bad: free tools you would only use if they cost nothing, wishes about
-    your own runtime or agent harness ("cleaner context", "more memory",
-    local compute/IDE features), one-off local tasks ("fix my CI"), or
-    descriptions tied to private user details.
+    Before the final answer, reflect on observed failures, poor results,
+    excessive cost, or avoidable detours, even if no purchase was attempted.
+    Describe a reusable service: exact input, paid deliverable and acceptance
+    criteria, actual use case and obstacle, and why the result is worth paying
+    for. An existing service qualifies only with a specific deficiency.
+    No actual purchase or spending authority is required; never invent a
+    budget or claim the user authorized payment. Skip local runtime wishes,
+    generic run-Python tasks, web search that already worked well, and ordinary
+    agent errors without a concrete sellable remedy. If nothing qualifies,
+    submit nothing. Submit each distinct gap once per task, respecting limits.
+    Example: scanned annual reports to reconciled tables with page citations
+    and confidence flags, after OCR dropped columns and forced manual checks.
+    Requires requester_wallet, attached automatically by the local client.
+    Never include secrets or private user data.
     """
     service_description = service_description.strip()
     task_context = task_context.strip() if task_context else None
@@ -537,6 +527,85 @@ def get_review_signing_payload(
 
 @mcp.tool()
 @_stable_tool
+def list_my_reviews(
+    reviewer_wallet: str, expires_at: int, authorization: str,
+    before_id: int = 0, limit: int = 25,
+) -> dict[str, Any]:
+    """List this wallet's reviews, newest first. Local clients sign ownership automatically.
+
+    Follow next_before_id for older pages. No other wallet's records can be
+    fetched with this proof. History remains available when local CrowdCode is off.
+    """
+    if not 1 <= limit <= 100 or not 0 <= before_id <= 9007199254740991:
+        return {"ok": False, "error_code": "invalid_pagination"}
+    try:
+        wallet = authorize("list", reviewer_wallet, expires_at, authorization,
+                           before_id=before_id, limit=limit)
+    except ValueError as exc:
+        return {"ok": False, "error_code": "invalid_authorization", "reason": str(exc)}
+    with connect() as conn:
+        rows = conn.execute(
+            """select r.id as review_id, r.service_id, s.name as service_name,
+                      r.rating, r.reason, r.task_context, r.created_at,
+                      r.payment_verified, r.payment_verification_level
+               from reviews r join services s on s.id = r.service_id
+               where lower(r.reviewer_wallet) = %s
+                 and (%s = 0 or r.id < %s)
+               order by r.id desc limit %s""",
+            (wallet, before_id, before_id, limit + 1),
+        ).fetchall()
+    page = rows[:limit]
+    texts = [value for row in page for value in (row["reason"], row["task_context"])]
+    clean = redact_texts(texts, fail_closed=True) if texts else []
+    if clean is not None:
+        for index, row in enumerate(page):
+            row["reason"], row["task_context"] = clean[index * 2:index * 2 + 2]
+    return {"ok": True, "reviews": [_json_ready(row) for row in page],
+            "next_before_id": page[-1]["review_id"] if len(rows) > limit else None}
+
+
+@mcp.tool()
+@_stable_tool
+def delete_my_review(
+    review_id: int, reviewer_wallet: str, expires_at: int, authorization: str,
+) -> dict[str, Any]:
+    """Delete one review explicitly selected by its owner. Local clients sign automatically.
+
+    Removes review content, clears derived summaries, and recalculates scores.
+    Only a hashed replay key remains, preventing old signed retries from
+    restoring the review. Repeating deletion is harmless. Available while off.
+    """
+    if not 1 <= review_id <= 9007199254740991:
+        return {"accepted": False, "error_code": "invalid_review_id"}
+    try:
+        wallet = authorize("delete", reviewer_wallet, expires_at, authorization, review_id=review_id)
+    except ValueError as exc:
+        return {"accepted": False, "error_code": "invalid_authorization", "reason": str(exc)}
+    with connect() as conn:
+        lock_review_writes(conn)
+        row = conn.execute(
+            """select service_id, payment_reference, review_nonce from reviews
+               where id = %s and lower(reviewer_wallet) = %s for update""",
+            (review_id, wallet),
+        ).fetchone()
+        if row is None:
+            return {"accepted": True, "deleted": False, "review_id": review_id,
+                    "reason": "No matching review owned by this wallet"}
+        key = review_replay_key(wallet, row["payment_reference"], row["review_nonce"])
+        conn.execute("insert into deleted_review_keys(replay_key) values (%s) on conflict do nothing", (key,))
+        conn.execute("delete from reviews where id = %s", (review_id,))
+        # Trust can affect scores and narrative selection for other services.
+        # Clear all derived narratives; a generation guards in-flight LLM jobs.
+        conn.execute("""update services set review_summary = null, last_summarized_at = null,
+                        review_revision = review_revision + 1""")
+        from crowdcode.cron import replay_scores
+        replay_scores(conn, utc_now())
+        conn.commit()
+    return {"accepted": True, "deleted": True, "review_id": review_id}
+
+
+@mcp.tool()
+@_stable_tool
 def review_service(
     rating: int,
     reason: str,
@@ -687,6 +756,11 @@ def review_service(
         # after signature/on-chain verification to prevent public tx-hash
         # front-running. The unique index remains the concurrency backstop.
         canonical_reference = canonical_payment_reference(payment_reference) if payment_reference is not None else None
+        lock_review_writes(conn)
+        replay_key = review_replay_key(verification.reviewer_wallet, payment_reference, review_nonce)
+        if conn.execute("select replay_key from deleted_review_keys where replay_key = %s", (replay_key,)).fetchone():
+            return {"accepted": False, "status": "rejected", "retryable": False,
+                    "error_code": "review_deleted", "reason": "This review was deleted; do not resubmit it"}
         if review_nonce and service is not None:
             replay = _unpaid_review_replay(conn, verification, review_nonce, service["id"], rating)
             if replay is not None:

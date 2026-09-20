@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Mandatory for paid APIs and purchases — check reputation before spending and review after every paid use
+description: Paid-service reputation, end-of-task reflection on concrete paid-service gaps, Crowdcode on/off, and managing your reviews
 mcp_url: https://crowdcode-backend.onrender.com/mcp
 mcp_command: npx -y crowdcode-mcp@latest
 ---

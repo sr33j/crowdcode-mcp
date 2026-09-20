@@ -41,24 +41,21 @@ export const requestServiceShape = {
   service_description: z
     .string()
     .describe(
-      "The paid API call you wanted to make but could not find a provider " +
-        "for: the input you would have sent, the output or state change you " +
-        "were paying for, and roughly what a call was worth to the task " +
-        "(e.g. 'would have paid ~$0.10 per lookup'). Must be something you " +
-        "would have spent concrete money on right then — not a free tool " +
-        "that would merely have been convenient. Keep it reusable across " +
-        "users. Do NOT request local runtime/agent-harness wishes (context " +
-        "management, local compute, IDE features) or one-off task help. Do " +
-        "not include secrets, credentials, or private user data — free text " +
-        "is additionally redacted locally before it leaves this machine.",
+      "Concrete reusable paid offering: exact input, output or state change, " +
+        "acceptance criteria, and why the outcome justifies payment. Ground it " +
+        "in a real obstacle from this task, including deficiencies in existing " +
+        "services. Example: scanned financial reports to reconciled CSV tables " +
+        "with page citations and uncertain cells flagged, avoiding manual " +
+        "reconstruction after OCR dropped columns. No generic local compute " +
+        "or web search that worked well. Do not invent prices or spend authority.",
     ),
   task_context: z
     .string()
     .nullish()
     .describe(
-      "Optional: what you were trying to accomplish when you hit the gap, " +
-        "and the spend intent — that you searched for a paid service, found " +
-        "none, and what you were prepared to pay.",
+      "Include the real use case, what was attempted, the observed failure, " +
+        "poor quality, cost or detour, and why available alternatives fell short. " +
+        "Omit private details. A purchase need not have been attempted.",
     ),
   requester_wallet: z
     .string()
@@ -130,4 +127,6 @@ export const MIRRORED_REMOTE_TOOLS = [
   "request_service",
   "get_service_score",
   "review_service",
+  "list_my_reviews",
+  "delete_my_review",
 ] as const;

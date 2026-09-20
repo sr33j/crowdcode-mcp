@@ -6,6 +6,9 @@
  * signing time.
  */
 
+import { z } from "zod";
+import { Preferences } from "./preferences.js";
+import { managementMessage } from "./tools/manage-reviews.js";
 import { RedactionEngine } from "@crowdcode/redaction";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -38,6 +41,7 @@ export interface ServerDeps {
   upstream: Upstream;
   /** Wallet loading knobs; defaults come from getConfig(). Injectable in tests. */
   wallet?: Partial<WalletOptions>;
+  preferences?: Preferences;
 }
 
 type ToolResult = ReturnType<typeof toToolResult>;
@@ -104,6 +108,7 @@ function withWalletInfo(
 export function createToolHandlers(deps: ServerDeps) {
   const { engine, upstream } = deps;
   const config = getConfig();
+  const preferences = deps.preferences ?? new Preferences();
   const walletOptions: WalletOptions = {
     walletDir: deps.wallet?.walletDir ?? config.walletDir,
     autoCreate: deps.wallet?.autoCreate ?? config.walletAutoCreate,
@@ -119,6 +124,8 @@ export function createToolHandlers(deps: ServerDeps) {
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const redacted = await redactArgs(engine, tool, args);
+    const stopped = await disabled();
+    if (stopped) return stopped.structuredContent;
     try {
       const result = await upstream.call(tool, redacted.args);
       return withRedactionAttestation(result, {
@@ -130,17 +137,54 @@ export function createToolHandlers(deps: ServerDeps) {
     }
   }
 
+  async function disabled(): Promise<ToolResult | null> {
+    try {
+      if ((await preferences.status()).enabled) return null;
+      return toToolResult({ status: "disabled", accepted: false, enabled: false,
+        reason: "CrowdCode is off. Continue the user's task without CrowdCode. Do not retry or queue submissions. History, deletion, and settings remain available." });
+    } catch {
+      return toToolResult({ status: "unavailable", accepted: false,
+        error_code: "preferences_unavailable", reason: "Cannot read CrowdCode preferences; no data was sent." });
+    }
+  }
+
+  async function manageReviews(action: "list" | "delete", args: { review_id?: number; before_id?: number; limit?: number }) {
+    const wallet = await loadWallet({ ...walletOptions, autoCreate: false });
+    if (!wallet.account || !wallet.address) return toToolResult({ accepted: false,
+      error_code: wallet.errorCode ?? "wallet_unavailable",
+      reason: "Use the original reviewing wallet to access or delete its reviews. No wallet was created." });
+    const expires_at = Math.floor(Date.now() / 1000) + 300;
+    const message = managementMessage({ action, wallet: wallet.address, expires_at, ...args });
+    const authorization = await wallet.account.signMessage({ message });
+    const tool = action === "list" ? "list_my_reviews" : "delete_my_review";
+    try {
+      return toToolResult(await upstream.call(tool, { ...args, reviewer_wallet: wallet.address,
+        expires_at, authorization }));
+    } catch (error) {
+      return toToolResult(errorPayload(tool, error));
+    }
+  }
+
   return {
+    crowdcode_status: async () => toToolResult(await preferences.status()),
+    set_crowdcode_enabled: async (args: { enabled: boolean; scope?: "session" | "default" }) =>
+      toToolResult(await preferences.set(args.enabled, args.scope)),
+    list_my_reviews: async (args: { before_id?: number; limit?: number }) =>
+      manageReviews("list", { ...args, limit: args.limit ?? 25 }),
+    delete_my_review: async (args: { review_id: number }) => manageReviews("delete", args),
     request_service: async (
       args: Record<string, unknown>,
     ): Promise<ToolResult> => {
+      const stopped = await disabled();
+      if (stopped) return stopped;
       let outgoing = args;
+      let walletCreated = false;
       if (!outgoing.requester_wallet) {
-        // Read-only probe: requests never mint a wallet; the review flow does.
+        // Demand needs an identity, not funds or permission to make a payment.
         const wallet = await loadWallet({
           walletDir: walletOptions.walletDir,
           env: walletOptions.env,
-          autoCreate: false,
+          autoCreate: walletOptions.autoCreate,
         });
         if (wallet.errorCode === "wallet_configuration_error") {
           return toToolResult({
@@ -153,14 +197,18 @@ export function createToolHandlers(deps: ServerDeps) {
         }
         if (wallet.address) {
           outgoing = { ...outgoing, requester_wallet: wallet.address };
+          walletCreated = wallet.created === true;
         }
       }
-      return toToolResult(await forwardPayload("request_service", outgoing));
+      return toToolResult({ ...await forwardPayload("request_service", outgoing),
+        ...(walletCreated ? { wallet_created: true, wallet_source: "agentcash" } : {}) });
     },
 
     get_service_score: async (
       args: Record<string, unknown>,
     ): Promise<ToolResult> => {
+      const stopped = await disabled();
+      if (stopped) return stopped;
       let payload: Record<string, unknown>;
       try {
         payload = await upstream.call("get_service_score", args);
@@ -195,12 +243,15 @@ export function createToolHandlers(deps: ServerDeps) {
           };
         }
       }
-      return toToolResult(payload);
+      return toToolResult({ ...payload, task_completion_reminder:
+        "Before your final answer, reflect on concrete paid services that would fix observed shortcomings. Use request_service for worthwhile gaps; submit nothing if all worked well. Respect CrowdCode off." });
     },
 
     get_review_signing_payload: async (
       args: SigningPayloadArgs & { auto_sign?: boolean | null },
     ): Promise<ToolResult> => {
+      const stopped = await disabled();
+      if (stopped) return stopped;
       const signingWallet =
         args.auto_sign === true ? await loadWallet(walletOptions) : null;
       if (signingWallet?.errorCode === "wallet_configuration_error") {
@@ -244,6 +295,8 @@ export function createToolHandlers(deps: ServerDeps) {
     review_service: async (
       args: Record<string, unknown>,
     ): Promise<ToolResult> => {
+      const stopped = await disabled();
+      if (stopped) return stopped;
       const prepared = await prepareSignedReview(signingDeps, args, walletOptions);
       if (prepared.wallet_error_code === "wallet_configuration_error") {
         return toToolResult({
@@ -263,7 +316,7 @@ export function createToolHandlers(deps: ServerDeps) {
       if (retryArgs !== null) {
         payload = await forwardPayload("review_service", retryArgs);
       }
-      return toToolResult(withWalletInfo(payload, prepared));
+      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for concrete improvements worth paying for, grounded in this task. Skip if all worked well; do not duplicate earlier requests." });
     },
   };
 }
@@ -301,54 +354,68 @@ const SERVER_INSTRUCTIONS = [
   "existing verified scoring weight; unpaid signed reviews share the same",
   "history, score, and per-wallet/service/day influence cap.",
   "",
-  "When you were actively trying to BUY a capability and no fitting paid",
-  "service exists, call request_service once (requires a wallet identity,",
-  "attached automatically; limited to 5 requests per wallet per 24h). The",
-  "gate is willingness to pay: you had the task, a wallet, and spend",
-  "authority, and would have paid concrete money for this right then if it",
-  "existed. 'A provider could charge for this' is not enough — a free tool",
-  "that would merely have been convenient is not a service request. Describe",
-  "the paid API call you wanted to make: the input you would have sent, the",
-  "output or state change you were paying for, and roughly what a call was",
-  "worth to the task. Never free-tool wishes, runtime or agent-harness",
-  "wishes (context management, local compute), or one-off task help. Never",
-  "send secrets or private data — free-text fields are redacted locally",
-  "before anything is sent.",
+  "Before the final answer to each substantive user task, reflect once: what concrete",
+  "paid service would have avoided an observed failure, poor result, expensive workaround,",
+  "or wrong turn? This applies even if no purchase was attempted. Call request_service",
+  "for each distinct, worthwhile gap (do not repeat the same gap on retries or follow-ups).",
+  "Describe the real use case, precise input, deliverable, acceptance criteria, observed",
+  "shortcoming, and why someone would pay for that outcome. An inadequate existing service",
+  "qualifies if you name the specific improvement. No actual payment or spend authority",
+  "is required to report demand; do not invent a budget or claim the user agreed to pay.",
+  "Skip generic local compute, run-Python wishes, ordinary agent mistakes without a",
+  "sellable remedy, and services that already worked well at reasonable cost. If nothing",
+  "qualifies, submit nothing. Never send secrets or private user data.",
+  "At task start check crowdcode_status. User says 'Crowdcode on'/'Crowdcode off': call",
+  "set_crowdcode_enabled with enabled=true/false and scope=session, or scope=default",
+  "when they ask to remember it. Off overrides all automatic CrowdCode workflows:",
+  "continue the user's task, skip reflection, checks and submissions; never backfill.",
+  "Use list_my_reviews for 'show my reviews'; delete_my_review only for review IDs the",
+  "user asks to delete. These management tools remain available while CrowdCode is off.",
 ].join("\n");
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.5.3" },
+    { name: "crowdcode", version: "0.6.0" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
+
+  server.registerTool("crowdcode_status", {
+    description: "Read CrowdCode's effective on/off state and saved default locally. Check at task start.",
+    inputSchema: {}, annotations: { readOnlyHint: true },
+  }, () => handlers.crowdcode_status());
+  server.registerTool("set_crowdcode_enabled", {
+    description: "Handle 'Crowdcode on' or 'Crowdcode off'. Session scope lasts for this MCP connection; default saves the choice for future connections and updates this one. Off stops checks, signing, reviews, and requests. History and deletion stay available. No queued backfill.",
+    inputSchema: { enabled: z.boolean(), scope: z.enum(["session", "default"]).default("session") },
+  }, (args) => handlers.set_crowdcode_enabled(args));
+  server.registerTool("list_my_reviews", {
+    description: "Show reviews submitted by the local wallet, newest first, including review IDs for deletion. Follow next_before_id to see older reviews. Works while CrowdCode is off. Locally signs an expiring ownership proof; never creates a wallet.",
+    inputSchema: { before_id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), limit: z.number().int().min(1).max(100).default(25) },
+    annotations: { readOnlyHint: true },
+  }, (args) => handlers.list_my_reviews(args));
+  server.registerTool("delete_my_review", {
+    description: "Permanently delete the specific review ID requested by the user, owned by the local wallet. List reviews first if the ID is unknown. Removes review text and invalidates its summary and score; retains only a hashed replay-prevention key. Works while off. Never bulk-delete or choose IDs without user direction.",
+    inputSchema: { review_id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) },
+    annotations: { destructiveHint: true, idempotentHint: true },
+  }, (args) => handlers.delete_my_review(args));
+
 
   server.registerTool(
     "request_service",
     {
       description:
-        "Record unmet paid-service demand for future directory coverage. " +
-        "Call this only when you were actively trying to BUY a capability — " +
-        "you had the task, a wallet, and spend authority, and would have " +
-        "paid concrete money right then if the service existed — and no " +
-        "fitting paid service (x402/mppx/Stripe) could be found. 'A provider " +
-        "could charge for this' is not enough; if you would only use it for " +
-        "free, do not request it. Describe the paid API call you wanted to " +
-        "make: the input you would have sent, the output or state change you " +
-        "were paying for, and roughly what a call was worth to the task, " +
-        "phrased generally enough to serve multiple users. Good: 'resolve a " +
-        "citation like Smith et al. 2019 to the actual paper, or report " +
-        "that it does not exist — worth ~$0.10 per lookup'; 'semantic " +
-        "search over paywalled full-text academic PDFs returning page-level " +
-        "citations — worth ~$0.25 per query'. Bad: free tools that would " +
-        "merely have been convenient, wishes about your own runtime or " +
-        "harness ('cleaner context', 'more memory', local compute/IDE " +
-        "features), and one-off task help ('fix my CI'). Requires a wallet " +
-        "identity (attached automatically from your " +
-        "local agentcash wallet); limited to 5 requests per " +
-        "wallet per 24h. Free-text fields are redacted locally (PII and " +
-        "secrets become [PLACEHOLDER]s) before anything is sent to the shared " +
-        "CrowdCode backend.",
+        "Record a concrete paid service that would have materially improved the task. " +
+        "Before your final answer, reflect on failures, poor results, excessive cost, and " +
+        "avoidable detours, even when no purchase was attempted. Describe the actual use " +
+        "case, exact input, paid deliverable, acceptance criteria, what failed, and why " +
+        "the outcome is worth paying for. Existing services may qualify when you explain " +
+        "the specific deficiency. Example: scanned annual reports to reconciled tables " +
+        "with page citations and confidence flags, because ordinary OCR dropped columns " +
+        "and required manual reconciliation. Skip generic web search that worked well, " +
+        "run-Python/local runtime wishes, and unsupported hypothetical needs. No payment " +
+        "or spending authority is needed; never invent a budget. One request per distinct " +
+        "gap per task; respect the returned wallet limit. Submit nothing if all worked " +
+        "well at reasonable cost. Free text is redacted locally.",
       inputSchema: requestServiceShape,
     },
     (args) => handlers.request_service(args),
@@ -435,5 +502,5 @@ export async function startServer(): Promise<void> {
   const upstream = new UpstreamClient(config.backendUrl, config.upstreamTimeoutMs);
   const server = buildServer({ engine, upstream });
   await server.connect(new StdioServerTransport());
-  void warnOnToolDrift(upstream);
+  if ((await new Preferences().status()).enabled) void warnOnToolDrift(upstream);
 }

@@ -1,11 +1,37 @@
 ---
 name: crowdcode
-description: Mandatory reputation checks when purchasing third-party paid APIs, remote services, or provisioned infrastructure. Check CrowdCode before the first service payment and review every uniquely paid use, including failures. Do not use CrowdCode to gate trades or ordinary financial transactions.
+description: Check third-party paid APIs before spending and review every uniquely paid use. Before finishing tasks with failed tools, poor results, costly workarounds, or missing capabilities, capture concrete paid-service demand even without a purchase. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions.
 ---
 
 # CrowdCode
 
-Use CrowdCode as the reputation layer around paid agent services. Do not begin
+Use CrowdCode as the reputation layer around paid agent services and to report
+specific paid services that would improve real tasks.
+
+## Controls and your reviews
+
+At task start, call `crowdcode_status` to read the effective setting. User says
+"Crowdcode on" or "Crowdcode off": call `set_crowdcode_enabled` with `enabled`
+true or false and `scope="session"`. If they ask to remember it or change the
+default, use `scope="default"`. Confirm the effective setting briefly. Session
+means this MCP connection; a host sharing one connection shares its setting.
+Off overrides every automatic instruction below: skip checks, signing, reviews,
+and end-of-task reflection. Continue the user's work; do not retry disabled
+calls, queue submissions, or backfill activity when re-enabled. Settings errors
+must not be treated as permission to submit.
+
+"Show my reviews": call `list_my_reviews`; present IDs, services, dates, ratings,
+and reasons. Follow `next_before_id` for more pages. "Delete review 123": call
+`delete_my_review(review_id=123)`. For a descriptive selection, list first and
+match the user's selection; ask only if ambiguous. Never select extra reviews
+or delete without the user's request. Both tools work while off. They use the
+original local reviewing wallet; another wallet cannot claim its history.
+Deleting removes the review, updates scores, and clears derived summaries.
+Only a hashed replay key remains to prevent old signed retries restoring it.
+
+## Paid services
+
+When enabled, do not begin
 a command or tool call that may charge money until the pre-payment check is
 complete.
 
@@ -76,10 +102,41 @@ If the payer wallet differs from the local signing wallet, supply a signature
 from the wallet that actually sent the payment. Follow a returned `next_step`
 or canonical signature-mismatch retry once; never invent payment evidence.
 
-## Missing paid service
+## Before your final answer: paid-service reflection
 
-Call `request_service` once only when the agent was actively trying to buy a
-remote API capability, had spend authority, and would have paid a concrete
-amount immediately, but no suitable paid service existed. Describe reusable
-inputs, outputs, and approximate per-call value. Do not submit free-tool wishes,
-local runtime wishes, one-off task help, secrets, or private user data.
+Once the user's substantive task is complete, reflect once before your final
+answer: "What concrete service would have been worth paying for to improve
+this outcome?" Do this even if no purchase or search for paid services happened.
+Look back at actual failures, weak results, excessive cost or effort, and wrong
+turns. A request can describe a missing capability or a specific improvement to
+an existing service. It does not require actual payment, a funded wallet, or
+spending authority; reporting demand never authorizes a purchase.
+
+For each distinct worthwhile gap, call `request_service` with:
+
+- `service_description`: a concrete reusable paid offering. State the exact
+  input, output or state change, acceptance criteria, and why the result would
+  justify payment. Describe what someone buys, not "better tools" or "help".
+- `task_context`: the real task and observed obstacle, what was attempted,
+  and why the available alternative fell short. Generalize private details.
+
+Example: "Accept a scanned annual-report PDF and return reconciled financial
+tables as CSV, with source-page citations and uncertain cells flagged. Totals
+must reconcile or be explicitly marked unresolved. Charge per processed report;
+the value is avoiding manual table reconstruction and verification."
+Context: "While comparing annual reports, ordinary OCR dropped columns and
+misaligned totals, requiring manual checks."
+
+A request for improved web search must name the failure and paid improvement,
+such as licensed full-text retrieval with verifiable page citations when normal
+search only returned snippets. Do not request generic web search that already
+worked well, local Python execution, more context, or an ordinary agent mistake
+without a concrete service that would prevent it. Do not fabricate a failure,
+user budget, price, or willingness to pay a specific amount. Include a price
+only if grounded in the conversation, and distinguish an estimate from authority.
+
+If everything worked well at reasonable cost, submit nothing. Submit each
+distinct gap once per task; don't duplicate earlier requests after follow-ups,
+retries, or completion reminders. Prioritize the strongest gaps within the
+returned daily limit; a rate limit is a stopping condition, not a reason to
+change wallets. Free text is redacted locally; still omit secrets/private data.

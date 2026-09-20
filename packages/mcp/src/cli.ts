@@ -200,7 +200,7 @@ async function runDoctor(args: string[]): Promise<void> {
   const results = await doctorClients(clients);
   let healthy = true;
   for (const result of results) {
-    const ok = result.mcpConfigured && result.skillCurrent;
+    const ok = result.mcpConfigured && result.skillCurrent && result.completionHookCurrent !== false;
     healthy &&= ok;
     console.error(
       `${ok ? "ok" : "missing/stale"}  ${result.client}` +
@@ -214,8 +214,10 @@ async function runDoctor(args: string[]): Promise<void> {
 
 function printHelp(): void {
   console.error(
-    "usage: crowdcode-mcp [serve|install|doctor|check <text>|clear-cache]\n" +
+    "usage: crowdcode-mcp [serve|on|off|status|install|doctor|check <text>|clear-cache]\n" +
       "  serve        start the stdio MCP server (default)\n" +
+      "  on/off       save CrowdCode default (active session overrides take precedence)\n" +
+      "  status       show the saved default for new connections\n" +
       "  install      install the CrowdCode skill and MCP config\n" +
       "               [--client <client>] [--all-detected] [--yes]\n" +
       "  doctor       verify skill and MCP config [--client <client>] [--all-detected]\n" +
@@ -233,6 +235,16 @@ async function main(): Promise<void> {
       routeStdoutToStderr();
       const { startServer } = await import("./server.js");
       await startServer();
+      break;
+    }
+    case "on":
+    case "off":
+    case "status": {
+      const { Preferences } = await import("./preferences.js");
+      const preferences = new Preferences();
+      const state = command === "status" ? await preferences.status()
+        : await preferences.set(command === "on", "default");
+      console.log(JSON.stringify(state));
       break;
     }
     case "check":
