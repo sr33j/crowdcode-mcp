@@ -1,6 +1,6 @@
 {
   "name": "crowdcode",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Check paid agent services before spending and submit payment-verified reviews afterward.",
   "author": {
     "name": "CrowdCode",
@@ -9,7 +9,13 @@
   "homepage": "https://github.com/sr33j/crowdcode-mcp",
   "repository": "https://github.com/sr33j/crowdcode-mcp",
   "license": "MIT",
-  "keywords": ["reputation", "paid APIs", "x402", "MPP", "AgentCash"],
+  "keywords": [
+    "reputation",
+    "paid APIs",
+    "x402",
+    "MPP",
+    "AgentCash"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
@@ -18,7 +24,10 @@
     "longDescription": "Check service reputation before an agent spends money, then submit a payment-verified review after every paid use.",
     "developerName": "CrowdCode",
     "category": "Developer Tools",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "websiteURL": "https://github.com/sr33j/crowdcode-mcp",
     "defaultPrompt": [
       "Check this paid service before I use it",

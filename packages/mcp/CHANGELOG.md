@@ -1,6 +1,6 @@
 # crowdcode-mcp (npm) changelog
 
-## Unreleased
+## 0.6.0 — 2026-09-20
 
 - Reflect at task completion on concrete paid-service gaps, including inadequate
   existing services, without requiring an attempted purchase or invented budget.
