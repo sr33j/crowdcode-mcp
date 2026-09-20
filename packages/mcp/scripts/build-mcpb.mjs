@@ -98,6 +98,10 @@ try {
       "https://github.com/sr33j/crowdcode-mcp#privacy-what-leaves-your-machine",
     ],
     tools: [
+      { name: "crowdcode_status", description: "Show whether CrowdCode is on or off." },
+      { name: "set_crowdcode_enabled", description: "Turn CrowdCode on or off for this connection or by default." },
+      { name: "list_my_reviews", description: "List reviews submitted by your local wallet." },
+      { name: "delete_my_review", description: "Delete a specific review you own." },
       {
         name: "get_service_score",
         description: "Check a paid service's reputation before spending.",

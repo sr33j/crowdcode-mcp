@@ -18,6 +18,7 @@ rest; the process exits nonzero if any job failed:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import traceback
 from datetime import UTC, datetime
@@ -91,6 +92,8 @@ def run_payment_reverification(now: datetime) -> None:
             ),
         ).fetchall()
 
+        from crowdcode.review_management import lock_review_writes
+        lock_review_writes(conn)
         upgraded = 0
         touched_services: set[str] = set()
         for row in rows:
@@ -151,140 +154,146 @@ def run_payment_reverification(now: datetime) -> None:
 
 
 def run_consistency_sweep(now: datetime) -> None:
+    from crowdcode.review_management import lock_review_writes
     with connect() as conn:
-        rows = conn.execute(
-            """
-            select id, service_id, reviewer_wallet, rating, payment_verified,
-                   signature_verified, payment_verification_level,
-                   created_at, user_id
-            from reviews
-            order by created_at asc, id asc
-            """
-        ).fetchall()
-
-        # Backfill users + reviews.user_id from history (idempotent).
-        wallet_user_ids: dict[str, int] = {}
-        for row in rows:
-            wallet = row["reviewer_wallet"]
-            if wallet and wallet not in wallet_user_ids:
-                wallet_user_ids[wallet] = ensure_user(conn, wallet)["user_id"]
-        backfilled = 0
-        for row in rows:
-            wallet = row["reviewer_wallet"]
-            if wallet and row["user_id"] is None:
-                conn.execute(
-                    "update reviews set user_id = %s where id = %s",
-                    (wallet_user_ids[wallet], row["id"]),
-                )
-                backfilled += 1
-        if backfilled:
-            print(f"sweep: backfilled user_id on {backfilled} review(s)")
-
-        users = conn.execute(
-            "select user_id, wallet_address, raw_trust, is_seed, slashed_at from wallet_users"
-        ).fetchall()
-        pinned = {
-            u["wallet_address"]: TrustRow(
-                raw_trust=float(u["raw_trust"]),
-                is_seed=bool(u["is_seed"]),
-                slashed=u["slashed_at"] is not None,
-            )
-            for u in users
-        }
-
-        # Replay: recompute every non-seed wallet's raw trust from scratch.
-        # Multiple paid outcomes by one wallet for one service on one UTC day
-        # form a single trust event, matching the scoring influence cap.
-        raw: dict[str, float] = {}
-        trust: dict[str, TrustRow] = {}
-        for wallet, row in pinned.items():
-            if row.is_seed or row.slashed:
-                trust[wallet] = row
-            else:
-                raw[wallet] = 0.0
-                trust[wallet] = TrustRow(raw_trust=0.0)
-
-        events: dict[tuple[str, str, object], list[ReviewRow]] = {}
-        event_order: dict[tuple[str, str, object], tuple[datetime, int]] = {}
-        for row in rows:
-            wallet = row["reviewer_wallet"]
-            review = ReviewRow(
-                wallet=wallet,
-                rating=int(row["rating"]),
-                payment_verified=bool(row["payment_verified"]),
-                signature_verified=bool(row["signature_verified"]),
-                created_at=row["created_at"],
-                payment_verification_level=row.get("payment_verification_level"),
-            )
-            if wallet is None:
-                continue
-            key = (
-                row["service_id"],
-                wallet,
-                row["created_at"].replace(tzinfo=UTC).date()
-                if row["created_at"].tzinfo is None
-                else row["created_at"].astimezone(UTC).date(),
-            )
-            events.setdefault(key, []).append(review)
-            event_order[key] = max(
-                event_order.get(key, (row["created_at"], int(row["id"]))),
-                (row["created_at"], int(row["id"])),
-            )
-
-        per_service: dict[str, list[ReviewRow]] = {}
-        for key in sorted(events, key=lambda item: event_order[item]):
-            service_id, wallet, _ = key
-            event_reviews = events[key]
-            event_at = event_order[key][0]
-            bucket = aggregate_daily_reviews(event_reviews, event_at)[0]
-            if wallet in raw:
-                loo = compute_score(
-                    per_service.get(service_id, []),
-                    trust,
-                    event_at,
-                    exclude_wallet=wallet,
-                )
-                raw[wallet] = updated_raw_trust(
-                    raw[wallet], loo.score, bucket.rating
-                )
-                trust[wallet] = TrustRow(raw_trust=raw[wallet])
-            per_service.setdefault(service_id, []).extend(event_reviews)
-
-        for user in users:
-            wallet = user["wallet_address"]
-            if wallet not in raw:
-                continue
-            stored = float(user["raw_trust"])
-            if abs(raw[wallet] - stored) > DRIFT_TOLERANCE:
-                print(
-                    f"sweep: trust drift user_id={user['user_id']} "
-                    f"stored={stored:.4f} recomputed={raw[wallet]:.4f}"
-                )
-            conn.execute(
-                "update wallet_users set raw_trust = %s, trust_updated_at = %s where user_id = %s",
-                (raw[wallet], now, user["user_id"]),
-            )
-
-        # Recompute every service's stored score with decay at `now` — this is
-        # also what keeps decay staleness bounded between reviews.
-        services = conn.execute("select id, score, n_eff from services").fetchall()
-        for service in services:
-            result = compute_score(per_service.get(service["id"], []), trust, now)
-            if abs(result.score - float(service["score"])) > DRIFT_TOLERANCE:
-                print(
-                    f"sweep: score drift service={service['id']} "
-                    f"stored={float(service['score']):.4f} recomputed={result.score:.4f}"
-                )
-            conn.execute(
-                """
-                update services
-                set score = %s, n_eff = %s, score_updated_at = %s
-                where id = %s
-                """,
-                (result.score, result.n_eff, now, service["id"]),
-            )
+        lock_review_writes(conn)
+        replay_scores(conn, now)
         conn.commit()
-    print(f"sweep: {len(rows)} review(s), {len(users)} user(s), {len(services)} service(s)")
+
+
+def replay_scores(conn: Any, now: datetime) -> None:
+    """Replay trust and scores inside the caller's transaction, including deletion."""
+    rows = conn.execute(
+        """
+        select id, service_id, reviewer_wallet, rating, payment_verified,
+               signature_verified, payment_verification_level,
+               created_at, user_id
+        from reviews
+        order by created_at asc, id asc
+        """
+    ).fetchall()
+
+    # Backfill users + reviews.user_id from history (idempotent).
+    wallet_user_ids: dict[str, int] = {}
+    for row in rows:
+        wallet = row["reviewer_wallet"]
+        if wallet and wallet not in wallet_user_ids:
+            wallet_user_ids[wallet] = ensure_user(conn, wallet)["user_id"]
+    backfilled = 0
+    for row in rows:
+        wallet = row["reviewer_wallet"]
+        if wallet and row["user_id"] is None:
+            conn.execute(
+                "update reviews set user_id = %s where id = %s",
+                (wallet_user_ids[wallet], row["id"]),
+            )
+            backfilled += 1
+    if backfilled:
+        logging.getLogger(__name__).info(f"sweep: backfilled user_id on {backfilled} review(s)")
+
+    users = conn.execute(
+        "select user_id, wallet_address, raw_trust, is_seed, slashed_at from wallet_users"
+    ).fetchall()
+    pinned = {
+        u["wallet_address"]: TrustRow(
+            raw_trust=float(u["raw_trust"]),
+            is_seed=bool(u["is_seed"]),
+            slashed=u["slashed_at"] is not None,
+        )
+        for u in users
+    }
+
+    # Replay: recompute every non-seed wallet's raw trust from scratch.
+    # Multiple paid outcomes by one wallet for one service on one UTC day
+    # form a single trust event, matching the scoring influence cap.
+    raw: dict[str, float] = {}
+    trust: dict[str, TrustRow] = {}
+    for wallet, row in pinned.items():
+        if row.is_seed or row.slashed:
+            trust[wallet] = row
+        else:
+            raw[wallet] = 0.0
+            trust[wallet] = TrustRow(raw_trust=0.0)
+
+    events: dict[tuple[str, str, object], list[ReviewRow]] = {}
+    event_order: dict[tuple[str, str, object], tuple[datetime, int]] = {}
+    for row in rows:
+        wallet = row["reviewer_wallet"]
+        review = ReviewRow(
+            wallet=wallet,
+            rating=int(row["rating"]),
+            payment_verified=bool(row["payment_verified"]),
+            signature_verified=bool(row["signature_verified"]),
+            created_at=row["created_at"],
+            payment_verification_level=row.get("payment_verification_level"),
+        )
+        if wallet is None:
+            continue
+        key = (
+            row["service_id"],
+            wallet,
+            row["created_at"].replace(tzinfo=UTC).date()
+            if row["created_at"].tzinfo is None
+            else row["created_at"].astimezone(UTC).date(),
+        )
+        events.setdefault(key, []).append(review)
+        event_order[key] = max(
+            event_order.get(key, (row["created_at"], int(row["id"]))),
+            (row["created_at"], int(row["id"])),
+        )
+
+    per_service: dict[str, list[ReviewRow]] = {}
+    for key in sorted(events, key=lambda item: event_order[item]):
+        service_id, wallet, _ = key
+        event_reviews = events[key]
+        event_at = event_order[key][0]
+        bucket = aggregate_daily_reviews(event_reviews, event_at)[0]
+        if wallet in raw:
+            loo = compute_score(
+                per_service.get(service_id, []),
+                trust,
+                event_at,
+                exclude_wallet=wallet,
+            )
+            raw[wallet] = updated_raw_trust(
+                raw[wallet], loo.score, bucket.rating
+            )
+            trust[wallet] = TrustRow(raw_trust=raw[wallet])
+        per_service.setdefault(service_id, []).extend(event_reviews)
+
+    for user in users:
+        wallet = user["wallet_address"]
+        if wallet not in raw:
+            continue
+        stored = float(user["raw_trust"])
+        if abs(raw[wallet] - stored) > DRIFT_TOLERANCE:
+            logging.getLogger(__name__).info(
+                f"sweep: trust drift user_id={user['user_id']} "
+                f"stored={stored:.4f} recomputed={raw[wallet]:.4f}"
+            )
+        conn.execute(
+            "update wallet_users set raw_trust = %s, trust_updated_at = %s where user_id = %s",
+            (raw[wallet], now, user["user_id"]),
+        )
+
+    # Recompute every service's stored score with decay at `now` — this is
+    # also what keeps decay staleness bounded between reviews.
+    services = conn.execute("select id, score, n_eff from services").fetchall()
+    for service in services:
+        result = compute_score(per_service.get(service["id"], []), trust, now)
+        if abs(result.score - float(service["score"])) > DRIFT_TOLERANCE:
+            logging.getLogger(__name__).info(
+                f"sweep: score drift service={service['id']} "
+                f"stored={float(service['score']):.4f} recomputed={result.score:.4f}"
+            )
+        conn.execute(
+            """
+            update services
+            set score = %s, n_eff = %s, score_updated_at = %s
+            where id = %s
+            """,
+            (result.score, result.n_eff, now, service["id"]),
+        )
 
 
 def _summary_input_reviews(
@@ -327,14 +336,14 @@ def _summary_input_reviews(
     return weighted or [row for row in rows if row["payment_verified"] or row["signature_verified"]]
 
 
-def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str, Any]]]]:
+def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str, Any]], int]]:
     """Read every stale service's summarizer input in one short-lived
     connection. Model calls happen afterwards with no connection held — the
     pooler drops a connection idled across a slow LLM round trip."""
     with connect() as conn:
         pending = conn.execute(
             """
-            select s.id, s.name
+            select s.id, s.name, s.review_revision
             from services s
             where exists (
               select 1 from reviews r
@@ -362,7 +371,7 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
         return [
             (service["id"], service["name"], _summary_input_reviews(
                 conn, service["id"], trust, now
-            ))
+            ), service["review_revision"])
             for service in pending
         ]
 
@@ -378,7 +387,7 @@ def run_service_summaries(now: datetime) -> None:
 
     settings = get_settings()
     summarized = 0
-    for service_id, service_name, reviews in inputs:
+    for service_id, service_name, reviews, revision in inputs:
         if not reviews:
             continue
 
@@ -425,9 +434,9 @@ def run_service_summaries(now: datetime) -> None:
                 """
                 update services
                 set review_summary = %s::jsonb, last_summarized_at = %s
-                where id = %s
+                where id = %s and review_revision = %s
                 """,
-                (_as_json(stored), now, service_id),
+                (_as_json(stored), now, service_id, revision),
             )
             conn.commit()
         summarized += 1

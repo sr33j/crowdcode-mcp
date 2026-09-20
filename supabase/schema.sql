@@ -237,3 +237,12 @@ alter table service_identifiers enable row level security;
 alter table service_requests enable row level security;
 alter table wallet_users enable row level security;
 alter table app_cache enable row level security;
+
+-- Deletion retains no review content, wallet, or raw payment reference.
+-- The hash prevents old signed submissions from restoring deleted reviews.
+create table if not exists deleted_review_keys (
+  replay_key text primary key
+);
+alter table services add column if not exists review_revision bigint not null default 0;
+create index if not exists reviews_owner_id_idx
+  on reviews (lower(reviewer_wallet), id desc);

@@ -114,7 +114,7 @@ describe("cross-client installation", () => {
     );
     const skill = await readFile(join(oldSkillDir, "SKILL.md"), "utf8");
     expect(skill).toContain(
-      "Mandatory reputation checks when purchasing third-party paid APIs",
+      "Check third-party paid APIs before spending",
     );
 
     const cursor = JSON.parse(await readFile(cursorConfig, "utf8"));
@@ -161,5 +161,25 @@ describe("cross-client installation", () => {
       /no changes were written/,
     );
     expect(await readFile(config, "utf8")).toBe("{ malformed but valuable");
+  });
+});
+
+
+describe("completion hook installation", () => {
+  it("preserves unrelated hooks and installs its reminder only once", async () => {
+    const env = await fixture("linux");
+    const path = join(env.homeDir, ".claude", "settings.json");
+    await mkdir(join(env.homeDir, ".claude"), { recursive: true });
+    const other = { hooks: [{ type: "command", command: "existing-hook" }] };
+    await writeFile(path, JSON.stringify({ theme: "dark", hooks: { Stop: [other], UserPromptSubmit: [other] } }));
+    await installForClients(["claude-code"], env);
+    await installForClients(["claude-code"], env);
+    const settings = JSON.parse(await readFile(path, "utf8"));
+    expect(settings.theme).toBe("dark");
+    expect(settings.hooks.Stop).toHaveLength(2);
+    expect(settings.hooks.Stop[0]).toEqual(other);
+    expect(settings.hooks.UserPromptSubmit).toEqual([other]);
+    const hook = await readFile(join(env.homeDir, ".crowdcode", "hooks", "completion.cjs"), "utf8");
+    expect(hook.length).toBeGreaterThan(0);
   });
 });

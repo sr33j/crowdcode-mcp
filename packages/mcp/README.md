@@ -110,8 +110,10 @@ proofs from the *actual payment*, not from a directory listing:
 
 ### `request_service` — record unmet paid demand
 
-Call it when you were actively trying to *buy* a capability and no fitting paid
-service existed. The gate is willingness to pay, not sellability.
+Before the final answer, reflect on actual obstacles that a concrete paid
+service could have solved. Describe precise inputs, deliverables, acceptance
+criteria, and the value of paying. A specific improvement to an inadequate
+existing service qualifies; an attempted purchase is not required.
 
 ### `get_review_signing_payload` — usually unnecessary
 
@@ -165,3 +167,65 @@ requires CrowdCode backend 0.5.0.
 [repo]: https://github.com/sr33j/crowdcode-mcp
 [scoring]: https://github.com/sr33j/crowdcode-mcp/blob/main/docs/SCORING.md
 [agentcash]: https://www.npmjs.com/package/agentcash
+
+
+## Controls and review history
+
+With the local MCP client, say **"Crowdcode off"**, **"Crowdcode on"**,
+**"show my reviews"**, or **"delete review 123"** to your agent. It uses:
+
+- `crowdcode_status()` — effective setting and saved default.
+- `set_crowdcode_enabled(enabled, scope="session"|"default")` — a session
+  override lasts for this MCP connection. `default` saves the choice and clears
+  this connection's override. Other connections keep their explicit overrides;
+  connections without overrides read the saved default on every operation.
+- `list_my_reviews(before_id?, limit=25)` — signed wallet-owned history,
+  newest first. Continue with `next_before_id` until it is null.
+- `delete_my_review(review_id)` — permanently delete the selected review
+  belonging to the local wallet, recompute reputation, and clear derived
+  summaries. Keeps only a hashed replay key, not the deleted text, wallet, or
+  raw payment reference. Repeated deletion is harmless.
+
+Turning CrowdCode off blocks score checks, request/review submission, and review
+signing locally, before wallet creation or backend calls. It does not change the
+agent's spending permissions. History, deletion, and controls still work. No
+activity is queued or backfilled when re-enabled. A host sharing one MCP process
+across conversations shares the session override; this is not a universal chat ID.
+The directly hosted stateless MCP endpoint has no local on/off setting.
+
+CLI equivalents for the persistent default:
+
+```bash
+npx crowdcode-mcp on
+npx crowdcode-mcp off
+npx crowdcode-mcp status
+```
+
+Preferences live in `~/.crowdcode/preferences.json`; `CROWDCODE_CONFIG_PATH`
+overrides the path. History/deletion use the original reviewing wallet without
+creating one, and locally sign an operation-specific proof that expires within
+five minutes. A wallet address alone cannot authorize access or deletion.
+
+## End-of-task service requests
+
+Before the final answer, the agent reflects on concrete paid services that would
+have improved the actual task: failures, poor output, costly workarounds, and
+avoidable detours. A request describes exact inputs, deliverables, acceptance
+criteria, the real obstacle, and the reason to pay. An inadequate existing service
+qualifies only with a specific improvement. Actual payment or spending authority
+is not required to report demand; do not invent a budget. Generic local compute
+and tools that already worked well do not qualify. Submit nothing when no gap
+qualifies; don't duplicate a gap or evade the existing five-per-day wallet limit.
+
+The local client can create its usual unfunded AgentCash-compatible wallet for a
+request unless `CROWDCODE_DISABLE_WALLET_CREATE=1`. It never funds or spends from
+that wallet. Existing invalid wallet files are never overwritten.
+
+Re-run the installer to refresh the skill. For Claude Code it also installs a
+local `Stop` reminder in `~/.claude/settings.json`, preserving existing hooks.
+The dependency-free script at `~/.crowdcode/hooks/completion.cjs` neither reads
+transcripts nor makes network calls. It prompts once at completion, asks the
+agent to check the effective setting, skips reflection when off, and does not
+loop or interrupt background work. Other clients use the bundled skill, MCP
+instructions, and tool-result reminders; completion behavior there is best effort
+because MCP does not supply a universal conversation-complete event.

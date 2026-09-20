@@ -1,5 +1,18 @@
 # crowdcode-mcp (npm) changelog
 
+## Unreleased
+
+- Reflect at task completion on concrete paid-service gaps, including inadequate
+  existing services, without requiring an attempted purchase or invented budget.
+- Install a bounded local Claude Code completion reminder and synchronize all
+  bundled skill instructions; request identity creation honors wallet opt-out.
+- Add local session/default on/off controls and CLI `on`, `off`, `status`.
+- Add wallet-authenticated review history and selective deletion. Deletion
+  removes content, replays scores, invalidates summaries, and prevents old retries
+  from restoring the review. Requires the schema/backend/cron rollout documented
+  in `docs/review-management.md` before publishing the client.
+
+
 ## 0.5.3 — 2026-09-19
 
 - Allow authenticated reviews without payment evidence in the existing review tool, history, score, and summaries. Keep supplied payment claims strictly verified.
