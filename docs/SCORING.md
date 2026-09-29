@@ -6,13 +6,15 @@ Regression simulation: `tests/test_scoring_sim.py` (deterministic, seed=42).
 The figures and sweep results in §6 are historical v1 evidence from
 `docs/scoring/sim_scoring3.py`, using a public prior of 3.0.
 
-V2 changes the public service prior from 3.0 to **4.0**, retaining strength 2.
-Reputation's internal leave-one-out consensus retains the **3.0** prior, so
-wallet trust and seed requirements remain unchanged. A higher public default
-must not create reputation evidence for wallets that have earned no trust.
+The public service prior is **3.0**, with strength 2. This restores the neutral
+prior after briefly using 4.0. Reputation's internal leave-one-out consensus
+retains its separate **3.0** prior, so wallet trust and seed requirements remain
+unchanged. Future public-prior adjustments must not create reputation evidence
+for wallets that have earned no trust.
 
 For deployment, pause backend review writes and the cron, apply
-`supabase/scoring-v2.sql`, deploy v2 to both, and run
+`supabase/scoring-prior-three.sql` (superseding `scoring-v2.sql`), deploy the
+updated backend and cron to both services, and run
 `crowdcode.cron.run_consistency_sweep(utc_now())` before resuming service.
 The replay refreshes every stored score from review history, including empty
 services; changing the schema default alone does not refresh existing scores.
@@ -59,7 +61,7 @@ score(s) = ( Σᵢ wᵢ·rᵢ + κ·μ₀ ) / ( Σᵢ wᵢ + κ )
 - `rᵢ` — rating (1–5) of review i on resource s
 - `wᵢ` — weight of review i (below)
 - `κ = 2` — prior strength in pseudo-reviews
-- `μ₀ = 4.0` — public prior mean. It is fixed, not automatically fitted.
+- `μ₀ = 3.0` — public prior mean. It is fixed, not automatically fitted.
 
 Published alongside the score: `n_eff = Σᵢ wᵢ`. A resource with `n_eff ≈ 0`
 must display as **unproven at the prior**, never as a starred rating.
@@ -116,7 +118,8 @@ cap: raw is clamped above at 1.0
 authoritative replay, process each wallet/service/UTC-day bucket once and
 compute the resource's **leave-one-out consensus** `LOO` — the weighted score
 with this wallet's own reviews excluded and a **3.0 prior**, strength 2.
-This internal consensus is intentionally different from the published score.
+This internal consensus excludes the reviewer's own evidence and keeps its
+prior independent of future changes to the published score's prior.
 The current consensus implies a success probability:
 
 ```
@@ -222,7 +225,7 @@ and limit correlated/self-review influence before broadening automatic seeding.
 | Param | Value | Meaning | How chosen |
 |---|---|---|---|
 | κ | 2 | prior pseudo-reviews | sweep (§6.4) |
-| μ₀ | 4.0 | public service prior mean | operator choice |
+| μ₀ | 3.0 | public service prior mean | operator choice |
 | trust μ₀ | 3.0 | internal reputation consensus prior | preserves v1 trust |
 | η | 0.02 | trust learning rate | sweep — larger values caused honest-wallet flicker and let random walkers transiently cross θ |
 | cap | 1.0 | max non-seed raw trust | sweep — the wide cap→θ gap keeps honest wallets far from the zero-weight cliff |

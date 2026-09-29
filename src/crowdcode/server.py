@@ -1010,7 +1010,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
     # Canonical score (docs/SCORING.md v1): stored on the services row,
     # refreshed by the review write path and the nightly consistency sweep.
     # The LEFT JOIN keeps zero-review services visible at the prior
-    # (score 4.0, n_eff 0 => displayed as "unproven", never as a rating).
+    # (score 3.0, n_eff 0 => displayed as "unproven", never as a rating).
     sql = """
         select
           s.id as service_id,

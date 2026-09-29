@@ -21,7 +21,7 @@ ALGORITHM = "crowdcode-scoring-v2"
 
 # Score prior (Bayesian shrinkage): kappa pseudo-reviews at the prior mean.
 KAPPA = 2.0
-MU0 = 4.0
+MU0 = 3.0
 # Reputation still uses a neutral consensus prior. An optimistic public prior
 # must not let fresh wallets earn trust without evidence from trusted wallets.
 TRUST_MU0 = 3.0
