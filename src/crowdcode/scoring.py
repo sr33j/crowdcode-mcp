@@ -1,4 +1,4 @@
-"""Canonical scoring & reputation math (docs/SCORING.md v1).
+"""Canonical scoring & reputation math (docs/SCORING.md v2).
 
 Every published score — the MCP get_service_score tool, /api/services,
 /api/services/top, /api/services/{id} — comes from compute_score() here, either
@@ -17,11 +17,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
-ALGORITHM = "crowdcode-scoring-v1"
+ALGORITHM = "crowdcode-scoring-v2"
 
 # Score prior (Bayesian shrinkage): kappa pseudo-reviews at the prior mean.
 KAPPA = 2.0
-MU0 = 3.0
+MU0 = 4.0
+# Reputation still uses a neutral consensus prior. An optimistic public prior
+# must not let fresh wallets earn trust without evidence from trusted wallets.
+TRUST_MU0 = 3.0
 
 # Reviewer trust. raw trust lives in [TRUST_FLOOR, TRUST_CAP]; effective
 # weight is 0 below THETA (the round-bad-actors-to-zero mechanism) and never
@@ -180,14 +183,14 @@ def compute_score(
     now: datetime,
     *,
     exclude_wallet: str | None = None,
+    prior_mean: float = MU0,
 ) -> ScoreResult:
     """score = (sum(w*r) + kappa*mu0) / (sum(w) + kappa); n_eff = sum(w).
 
-    exclude_wallet computes the leave-one-out consensus used for trust
-    updates: a wallet must never earn trust from agreement with a consensus
-    its own reviews created.
+    exclude_wallet omits a wallet's own reviews. Reputation callers use
+    compute_trust_consensus() to also select the neutral internal prior.
     """
-    num = KAPPA * MU0
+    num = KAPPA * prior_mean
     den = KAPPA
     n_eff = 0.0
     eligible = [
@@ -206,6 +209,20 @@ def compute_score(
         den += weight
         n_eff += weight
     return ScoreResult(score=num / den, n_eff=n_eff)
+
+
+def compute_trust_consensus(
+    reviews: Iterable[ReviewRow],
+    trust_map: Mapping[str, TrustRow],
+    now: datetime,
+    *,
+    exclude_wallet: str,
+) -> ScoreResult:
+    """Leave-one-out evidence for reputation, retaining the neutral v1 prior."""
+    return compute_score(
+        reviews, trust_map, now,
+        exclude_wallet=exclude_wallet, prior_mean=TRUST_MU0,
+    )
 
 
 def implied_p(loo_score: float) -> float:

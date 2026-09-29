@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Automatically seed registered hosted OpenCrowd mainnet agent wallets at trust
+  1.0 using an optional operator-owned database view. Apply
+  `supabase/opencrowd-wallets.sql` in the shared deployment, then sync seeds and
+  replay scores. Validate explicit seed addresses to reject pasted env settings.
+
+- Raise the public service-score prior from 3.0 to 4.0 (strength remains 2),
+  labeled `crowdcode-scoring-v2`. Keep reputation's internal consensus prior
+  at 3.0 so the change grants no trust to unsupported fresh wallets.
+- Update new-service database defaults. Existing deployments must apply
+  `supabase/scoring-v2.sql` and replay scores before serving the new algorithm;
+  see `docs/SCORING.md`.
+
 ## 0.5.2 (backend) — 2026-09-18
 
 - Resolve services by endpoint/id independently of shared payment wallets. Keep payment destinations service-scoped, reject ambiguous wallet-only lookup, and serialize first-review registration. Deploy backend first, then apply `supabase/shared-payment-wallets.sql`; it preserves existing service IDs and reviews.

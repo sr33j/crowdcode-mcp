@@ -1,8 +1,21 @@
-# CrowdCode Scoring & Reputation — Design Doc (v1)
+# CrowdCode Scoring & Reputation — Design Doc (v2)
 
-Status: **implemented (`crowdcode-scoring-v1`, updated for backend 0.5.0)**
-Date: 2026-07-26
-Simulation evidence: `docs/scoring/sim_scoring3.py` (deterministic, seed=42)
+Status: **implemented (`crowdcode-scoring-v2`); deployment requires a score replay**
+Updated: 2026-09-29
+Regression simulation: `tests/test_scoring_sim.py` (deterministic, seed=42).
+The figures and sweep results in §6 are historical v1 evidence from
+`docs/scoring/sim_scoring3.py`, using a public prior of 3.0.
+
+V2 changes the public service prior from 3.0 to **4.0**, retaining strength 2.
+Reputation's internal leave-one-out consensus retains the **3.0** prior, so
+wallet trust and seed requirements remain unchanged. A higher public default
+must not create reputation evidence for wallets that have earned no trust.
+
+For deployment, pause backend review writes and the cron, apply
+`supabase/scoring-v2.sql`, deploy v2 to both, and run
+`crowdcode.cron.run_consistency_sweep(utc_now())` before resuming service.
+The replay refreshes every stored score from review history, including empty
+services; changing the schema default alone does not refresh existing scores.
 
 ---
 
@@ -19,10 +32,9 @@ backtest — accuracy is a number we report, not a claim we make.
 
 ## 2. Scope and principles
 
-- **One canonical score.** A single scoring function serves the MCP tools and
-  the website. (Today the MCP returns `weighted_rating` with no prior while the
-  site ranks on `rank_score` with a hardcoded 4.0/weight-5 prior — both are
-  replaced by this spec.)
+- **One canonical public score.** A single scoring function serves the MCP tools
+  and the website. `weighted_rating` and `rank_score` are aliases of `score`.
+  The internal reputation consensus uses the same math with a neutral prior.
 - **Payment evidence is optional.** Unpaid reviews require an authenticated
   wallet signature and use the existing `signature_only` multiplier. When an
   x402/mppx payment is claimed, CrowdCode must verify the transaction on its
@@ -47,9 +59,7 @@ score(s) = ( Σᵢ wᵢ·rᵢ + κ·μ₀ ) / ( Σᵢ wᵢ + κ )
 - `rᵢ` — rating (1–5) of review i on resource s
 - `wᵢ` — weight of review i (below)
 - `κ = 2` — prior strength in pseudo-reviews
-- `μ₀` — prior mean; start at 3.0, re-fit from the payment-verified global mean
-  per resource type (npm packages, paid APIs, MCP servers have different
-  empirical distributions)
+- `μ₀ = 4.0` — public prior mean. It is fixed, not automatically fitted.
 
 Published alongside the score: `n_eff = Σᵢ wᵢ`. A resource with `n_eff ≈ 0`
 must display as **unproven at the prior**, never as a starred rating.
@@ -104,22 +114,27 @@ cap: raw is clamped above at 1.0
 
 **Update rule (proper scoring rule / information content).** During the nightly
 authoritative replay, process each wallet/service/UTC-day bucket once and
-compute the resource's **leave-one-out score** `LOO` — the score with this
-wallet's own reviews excluded. The current consensus implies a success
-probability:
+compute the resource's **leave-one-out consensus** `LOO` — the weighted score
+with this wallet's own reviews excluded and a **3.0 prior**, strength 2.
+This internal consensus is intentionally different from the published score.
+The current consensus implies a success probability:
 
 ```
 p = clamp( (LOO − 1) / 4 , 0.05, 0.95 )
 likelihood = p        if rating ≥ 4     (the review "predicted success")
            = 1 − p    if rating ≤ 2     (the review "predicted failure")
-           = —        ratings of 3 give no trust update
+           = —        bucket ratings strictly between 2 and 4 give no update
 Δraw = η · log₂( likelihood / 0.5 )     (η = 0.02)
 ```
 
-**Slashing.** Provable fraud — invalid or reused payment proof, worthless-token
-payment, funding-graph linkage between reviewer and the resource's payee (wash
-trading) — sets raw trust to the floor permanently and removes the wallet's
-reviews from all scores retroactively.
+**Negative trust and slashing.** Raw trust −5 is the maximum accumulated trust
+penalty, not a negative review weight. Every value below 0.1 contributes zero.
+An unslashed wallet can recover by earning trust; even at the maximum gain
+`0.02 × log₂(1.9) ≈ 0.01852`, moving from −5 to 0.1 takes at least 276
+positive daily-bucket events. Multiple services can produce events on one day.
+A separate `slashed_at` flag forces zero weight even for seeds and prevents
+trust updates. Current code honors that flag but does not set it automatically;
+invalid payment claims are rejected rather than automatically slashing wallets.
 
 ### 3.4 Admissibility (hard gates, before any math)
 
@@ -151,10 +166,21 @@ reviews from all scores retroactively.
 ### 3.5 Seeds
 
 Initial seed set: the operator's own wallets (the wallets on this machine),
-pinned at trust 1.0, stored in a `seed_wallets` table. Seeds do **not** need to
+pinned at trust 1.0, stored in `wallet_users.is_seed`. Seeds do **not** need to
 review every resource — trust propagates (§6.3). Over time the seed set can
 grow to include long-lived, high-accuracy wallets (with hysteresis); that is a
 governance decision, not an algorithm change.
+
+Hosted OpenCrowd deployments can install `supabase/opencrowd-wallets.sql`.
+Its operator-owned view supplies registered mainnet `agent_eoa` addresses;
+those wallets are also pinned at 1.0 on first review, server startup, and cron
+seed reconciliation. Explicit seeds are unioned with this registry. Standalone
+installations work without the view. Legacy external wallets, test/demo agents,
+and unregistered CLI wallets receive no automatic seed status. Deleted hosted
+agents keep historical seed identity; `slashed_at` still overrides seed weight.
+
+TODO: Revisit unconditional hosted trust, calibrate reputation against outcomes,
+and limit correlated/self-review influence before broadening automatic seeding.
 
 ## 4. Why these mechanics (the math, briefly)
 
@@ -179,10 +205,11 @@ governance decision, not an algorithm change.
   0.45; with it, their weight is exactly 0 and MAE fell to 0.06.
 - **No reflecting floor at zero for raw trust** — with a floor at 0, a
   coin-flipping wallet random-walks off the wall and drifts upward (one reached
-  0.31 in simulation). Letting raw trust go to −5 means a random or adversarial
-  wallet sinks and would need ~50 consecutive correct calls to ever cross θ.
+  0.31 in simulation). Letting raw trust go to −5 means a penalized wallet
+  accumulates debt; recovery from the floor takes at least 276 maximally
+  rewarded bucket events before crossing θ.
 - **Seed anchoring (EigenTrust structure)** — trust updates are zero while a
-  resource's consensus sits at the prior (p = 0.5 ⇒ log₂1 = 0), and
+  resource's internal consensus sits at its 3.0 prior (p = 0.5 ⇒ log₂1 = 0), and
   zero-weight wallets cannot move a consensus. Therefore trust can only *begin*
   to be earned on resources whose scores were moved by already-weighted wallets
   — trust mass flows outward from the seeds, exactly the EigenTrust
@@ -195,7 +222,8 @@ governance decision, not an algorithm change.
 | Param | Value | Meaning | How chosen |
 |---|---|---|---|
 | κ | 2 | prior pseudo-reviews | sweep (§6.4) |
-| μ₀ | 3.0 → fit | prior mean, per resource type | backtest |
+| μ₀ | 4.0 | public service prior mean | operator choice |
+| trust μ₀ | 3.0 | internal reputation consensus prior | preserves v1 trust |
 | η | 0.02 | trust learning rate | sweep — larger values caused honest-wallet flicker and let random walkers transiently cross θ |
 | cap | 1.0 | max non-seed raw trust | sweep — the wide cap→θ gap keeps honest wallets far from the zero-weight cliff |
 | θ | 0.1 | zero-weight threshold | sweep |

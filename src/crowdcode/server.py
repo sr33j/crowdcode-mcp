@@ -1010,7 +1010,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
     # Canonical score (docs/SCORING.md v1): stored on the services row,
     # refreshed by the review write path and the nightly consistency sweep.
     # The LEFT JOIN keeps zero-review services visible at the prior
-    # (score 3.0, n_eff 0 => displayed as "unproven", never as a rating).
+    # (score 4.0, n_eff 0 => displayed as "unproven", never as a rating).
     sql = """
         select
           s.id as service_id,
@@ -1358,8 +1358,6 @@ def _sync_seed_wallets_at_startup() -> None:
     from CROWDCODE_SEED_WALLETS at trust 1.0. Failures must not stop the
     server — the cron run repeats the sync."""
     settings = get_settings()
-    if not settings.seed_wallets:
-        return
     try:
         with connect() as conn:
             sync_seed_wallets(conn, settings.seed_wallets)

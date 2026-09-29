@@ -42,6 +42,7 @@ from crowdcode.scoring import (
     TrustRow,
     aggregate_daily_reviews,
     compute_score,
+    compute_trust_consensus,
     review_weight,
     updated_raw_trust,
 )
@@ -249,7 +250,7 @@ def replay_scores(conn: Any, now: datetime) -> None:
         event_at = event_order[key][0]
         bucket = aggregate_daily_reviews(event_reviews, event_at)[0]
         if wallet in raw:
-            loo = compute_score(
+            loo = compute_trust_consensus(
                 per_service.get(service_id, []),
                 trust,
                 event_at,
@@ -473,17 +474,14 @@ def main() -> None:
     now = utc_now()
     failed = False
 
-    if settings.seed_wallets:
-        try:
-            with connect() as conn:
-                sync_seed_wallets(conn, settings.seed_wallets)
-                conn.commit()
-            print(f"seeds: synced {len(settings.seed_wallets)} wallet(s)")
-        except Exception:
-            traceback.print_exc()
-            failed = True
-    else:
-        print("seeds: CROWDCODE_SEED_WALLETS not set; skipping sync")
+    try:
+        with connect() as conn:
+            sync_seed_wallets(conn, settings.seed_wallets)
+            conn.commit()
+        print("seeds: synced explicit operator and registered OpenCrowd wallets")
+    except Exception:
+        traceback.print_exc()
+        failed = True
 
     for job in (
         run_payment_reverification,

@@ -146,11 +146,14 @@ alter table reviews
 
 alter table services
   add column if not exists resource_type text not null default 'api',
-  add column if not exists score double precision not null default 3.0,
+  add column if not exists score double precision not null default 4.0,
   add column if not exists n_eff double precision not null default 0,
   add column if not exists score_updated_at timestamptz,
   add column if not exists review_summary jsonb,
   add column if not exists last_summarized_at timestamptz;
+
+-- ADD COLUMN IF NOT EXISTS does not update defaults on existing installations.
+alter table services alter column score set default 4.0;
 
 -- Cross-restart cache for cron-generated payloads (e.g. project_ideas).
 create table if not exists app_cache (
