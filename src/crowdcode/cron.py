@@ -474,17 +474,14 @@ def main() -> None:
     now = utc_now()
     failed = False
 
-    if settings.seed_wallets:
-        try:
-            with connect() as conn:
-                sync_seed_wallets(conn, settings.seed_wallets)
-                conn.commit()
-            print(f"seeds: synced {len(settings.seed_wallets)} wallet(s)")
-        except Exception:
-            traceback.print_exc()
-            failed = True
-    else:
-        print("seeds: CROWDCODE_SEED_WALLETS not set; skipping sync")
+    try:
+        with connect() as conn:
+            sync_seed_wallets(conn, settings.seed_wallets)
+            conn.commit()
+        print("seeds: synced explicit operator and registered OpenCrowd wallets")
+    except Exception:
+        traceback.print_exc()
+        failed = True
 
     for job in (
         run_payment_reverification,

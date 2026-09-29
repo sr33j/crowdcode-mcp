@@ -8,6 +8,7 @@ scoring.compute_score.
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Iterable
 
 import psycopg
@@ -24,6 +25,19 @@ from crowdcode.scoring import (
 
 def ensure_user(conn: psycopg.Connection, wallet: str) -> dict[str, Any]:
     """Get-or-create the users row for a normalized wallet address."""
+    # Only the operator-installed view can grant hosted trust. A client cannot
+    # claim to be OpenCrowd in its review payload to promote an arbitrary wallet.
+    if wallet in load_opencrowd_seed_wallets(conn):
+        return conn.execute(
+            """
+            insert into wallet_users (wallet_address, is_seed, raw_trust, trust_updated_at)
+            values (%s, true, 1.0, now())
+            on conflict (wallet_address) do update
+            set is_seed = true, raw_trust = 1.0, trust_updated_at = now()
+            returning user_id, wallet_address, is_seed, raw_trust, slashed_at
+            """,
+            (wallet,),
+        ).fetchone()
     row = conn.execute(
         """
         insert into wallet_users (wallet_address)
@@ -150,13 +164,32 @@ def apply_review_trust_update(
     return new_raw
 
 
+def load_opencrowd_seed_wallets(conn: psycopg.Connection) -> set[str]:
+    """Optional operator-owned bridge to the hosted agent wallet registry.
+
+    Standalone CrowdCode installations have no bridge and retain explicit seeds.
+    """
+    bridge = conn.execute(
+        "select to_regclass('opencrowd_seed_wallets') as relation"
+    ).fetchone()
+    if not bridge or bridge["relation"] is None:
+        return set()
+    return {
+        row["wallet_address"]
+        for row in conn.execute("select wallet_address from opencrowd_seed_wallets").fetchall()
+    }
+
+
 def sync_seed_wallets(conn: psycopg.Connection, wallets: Iterable[str]) -> None:
-    """Make the users table match CROWDCODE_SEED_WALLETS exactly: listed
-    wallets are seeds pinned at trust 1.0; previously-seeded wallets no longer
-    listed are demoted (keeping their raw trust). A missing/empty setting is a
-    no-op rather than a mass demotion — an unset env var must not unseat the
-    trust anchors."""
-    seeds = sorted({w.strip().lower() for w in wallets if w and w.strip()})
+    """Pin explicit operator and registered hosted wallets at trust 1.0.
+
+    Hosted seeds survive explicit-list reconciliation. An empty explicit list
+    never demotes existing seeds. Slashed wallets remain excluded by scoring.
+    """
+    explicit = {w.strip().lower() for w in wallets if w and w.strip()}
+    if any(re.fullmatch(r"0x[0-9a-f]{40}", wallet) is None for wallet in explicit):
+        raise ValueError("CROWDCODE_SEED_WALLETS must contain only comma-separated EVM addresses")
+    seeds = sorted(explicit | load_opencrowd_seed_wallets(conn))
     if not seeds:
         return
     for wallet in seeds:
@@ -169,7 +202,8 @@ def sync_seed_wallets(conn: psycopg.Connection, wallets: Iterable[str]) -> None:
             """,
             (wallet,),
         )
-    conn.execute(
-        "update wallet_users set is_seed = false where is_seed and wallet_address != all(%s)",
-        (seeds,),
-    )
+    if explicit:
+        conn.execute(
+            "update wallet_users set is_seed = false where is_seed and wallet_address != all(%s)",
+            (seeds,),
+        )

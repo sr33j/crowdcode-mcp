@@ -1358,8 +1358,6 @@ def _sync_seed_wallets_at_startup() -> None:
     from CROWDCODE_SEED_WALLETS at trust 1.0. Failures must not stop the
     server — the cron run repeats the sync."""
     settings = get_settings()
-    if not settings.seed_wallets:
-        return
     try:
         with connect() as conn:
             sync_seed_wallets(conn, settings.seed_wallets)

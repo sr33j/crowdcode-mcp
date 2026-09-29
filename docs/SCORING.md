@@ -171,6 +171,17 @@ review every resource — trust propagates (§6.3). Over time the seed set can
 grow to include long-lived, high-accuracy wallets (with hysteresis); that is a
 governance decision, not an algorithm change.
 
+Hosted OpenCrowd deployments can install `supabase/opencrowd-wallets.sql`.
+Its operator-owned view supplies registered mainnet `agent_eoa` addresses;
+those wallets are also pinned at 1.0 on first review, server startup, and cron
+seed reconciliation. Explicit seeds are unioned with this registry. Standalone
+installations work without the view. Legacy external wallets, test/demo agents,
+and unregistered CLI wallets receive no automatic seed status. Deleted hosted
+agents keep historical seed identity; `slashed_at` still overrides seed weight.
+
+TODO: Revisit unconditional hosted trust, calibrate reputation against outcomes,
+and limit correlated/self-review influence before broadening automatic seeding.
+
 ## 4. Why these mechanics (the math, briefly)
 
 - **Bayesian shrinkage (κ, μ₀)** — with few reviews the score stays near the

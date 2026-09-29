@@ -7,6 +7,7 @@ database, just assertions that the right SQL runs with the right values.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import pytest
 
 from crowdcode.reputation import (
     apply_review_trust_update,
@@ -170,4 +171,32 @@ def test_seed_sync_pins_listed_wallets_and_demotes_the_rest():
 def test_empty_seed_list_is_a_no_op_not_a_mass_demotion():
     conn = FakeConn({})
     sync_seed_wallets(conn, [])
+    assert conn.executed("insert into wallet_users") == []
+    assert conn.executed("set is_seed = false") == []
+
+
+def test_hosted_seeds_survive_explicit_seed_sync():
+    conn = FakeConn({
+        "to_regclass": [{"relation": "opencrowd_seed_wallets"}],
+        "from opencrowd_seed_wallets": [{"wallet_address": HONEST_WALLET}],
+    })
+    sync_seed_wallets(conn, [SEED_WALLET])
+    assert {q[1][0] for q in conn.executed("insert into wallet_users")} == {SEED_WALLET, HONEST_WALLET}
+    assert conn.executed("set is_seed = false")[0][1] == ([SEED_WALLET, HONEST_WALLET],)
+
+
+def test_hosted_seeds_sync_without_an_explicit_list():
+    conn = FakeConn({
+        "to_regclass": [{"relation": "opencrowd_seed_wallets"}],
+        "from opencrowd_seed_wallets": [{"wallet_address": HONEST_WALLET}],
+    })
+    sync_seed_wallets(conn, [])
+    assert conn.executed("insert into wallet_users")[0][1] == (HONEST_WALLET,)
+    assert conn.executed("set is_seed = false") == []
+
+
+def test_invalid_seed_configuration_fails_before_any_writes():
+    conn = FakeConn({})
+    with pytest.raises(ValueError, match="comma-separated EVM"):
+        sync_seed_wallets(conn, [SEED_WALLET + "\nMPPX_TEMPO_TOKEN_ADDRESS=0x123"])
     assert conn.queries == []
