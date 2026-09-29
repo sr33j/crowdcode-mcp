@@ -42,6 +42,7 @@ from crowdcode.scoring import (
     TrustRow,
     aggregate_daily_reviews,
     compute_score,
+    compute_trust_consensus,
     review_weight,
     updated_raw_trust,
 )
@@ -249,7 +250,7 @@ def replay_scores(conn: Any, now: datetime) -> None:
         event_at = event_order[key][0]
         bucket = aggregate_daily_reviews(event_reviews, event_at)[0]
         if wallet in raw:
-            loo = compute_score(
+            loo = compute_trust_consensus(
                 per_service.get(service_id, []),
                 trust,
                 event_at,

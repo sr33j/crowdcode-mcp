@@ -12,10 +12,12 @@ from crowdcode.scoring import (
     THETA,
     TRUST_CAP,
     TRUST_FLOOR,
+    TRUST_MU0,
     ReviewRow,
     TrustRow,
     aggregate_daily_reviews,
     compute_score,
+    compute_trust_consensus,
     decay_factor,
     effective_weight,
     implied_p,
@@ -65,7 +67,7 @@ def test_legacy_rows_without_a_level_fall_back_to_payment_verified():
 
 def test_no_reviews_sits_at_the_prior():
     result = compute_score([], {}, NOW)
-    assert result.score == MU0
+    assert result.score == MU0 == 4.0
     assert result.n_eff == 0.0
     assert is_unproven(result.n_eff)
 
@@ -75,7 +77,7 @@ def test_single_verified_seed_review():
     result = compute_score([review("0xseed", 5)], {"0xseed": SEED}, NOW)
     assert result.n_eff == 2.0
     assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA)
-    assert result.score == 4.0
+    assert result.score == 4.5
     assert not is_unproven(result.n_eff)
 
 
@@ -88,7 +90,7 @@ def test_same_wallet_same_utc_day_is_one_weighted_average_bucket():
 
     result = compute_score(reviews, {"0xseed": SEED}, NOW)
     assert result.n_eff == 2.0
-    assert result.score == MU0
+    assert result.score == 3.5
 
 
 def test_same_day_rating_uses_proof_and_decay_weights_but_caps_evidence():
@@ -173,11 +175,32 @@ def test_agreeing_with_a_confident_consensus_earns_trust():
     assert abs(trust_delta(4.6, 1)) > abs(trust_delta(4.6, 5))
 
 
-def test_no_trust_moves_while_consensus_sits_at_the_prior():
+def test_no_trust_moves_while_consensus_sits_at_the_trust_prior():
     # p = 0.5 => log2(1) = 0: trust can only be earned on resources whose
     # consensus already moved, which is what anchors trust to the seeds.
-    assert trust_delta(MU0, 5) == 0.0
-    assert trust_delta(MU0, 1) == 0.0
+    assert trust_delta(TRUST_MU0, 5) == 0.0
+    assert trust_delta(TRUST_MU0, 1) == 0.0
+
+
+def test_optimistic_public_prior_cannot_bootstrap_untrusted_wallets():
+    reviews = [review(f"wallet{i}", 5) for i in range(50)]
+    trust = {r.wallet: TrustRow(raw_trust=0.0) for r in reviews}
+    assert compute_score(reviews, trust, NOW).score == 4.0
+    for wallet in trust:
+        loo = compute_trust_consensus(reviews, trust, NOW, exclude_wallet=wallet)
+        assert loo.score == 3.0
+        assert loo.n_eff == 0.0
+        assert updated_raw_trust(0.0, loo.score, 5) == 0.0
+
+
+def test_trust_consensus_preserves_v1_with_real_seed_evidence():
+    reviews = [review("seed", 5), review("other", 1)]
+    trust = {"seed": SEED, "other": TrustRow(raw_trust=0.5)}
+    public = compute_score(reviews, trust, NOW, exclude_wallet="other")
+    loo = compute_trust_consensus(reviews, trust, NOW, exclude_wallet="other")
+    assert public.score == 4.5
+    assert loo.score == 4.0
+    assert math.isclose(trust_delta(loo.score, 5), 0.02 * math.log2(1.5))
 
 
 def test_an_accurate_reviewer_gains_and_a_coin_flipper_loses():

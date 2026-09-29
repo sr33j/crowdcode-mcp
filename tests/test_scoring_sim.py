@@ -15,6 +15,7 @@ from crowdcode.scoring import (
     ReviewRow,
     TrustRow,
     compute_score,
+    compute_trust_consensus,
     effective_weight,
     updated_raw_trust,
 )
@@ -77,7 +78,7 @@ def _run():
                 works = rng.random() < RELIABILITY[service]
                 rating = _rating_for(kind, works, rng)
                 if name != "seed":
-                    loo = compute_score(
+                    loo = compute_trust_consensus(
                         reviews[service], trust, NOW, exclude_wallet=name
                     )
                     raw[name] = updated_raw_trust(raw[name], loo.score, rating)

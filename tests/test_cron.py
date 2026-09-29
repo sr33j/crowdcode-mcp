@@ -109,6 +109,9 @@ def test_sweep_backfills_user_ids(monkeypatch):
     monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
     cron.run_consistency_sweep(NOW)
     assert conn.executed("update reviews set user_id")[0][1] == (4, 9)
+    # A five-star review with no trusted evidence must not earn reputation
+    # from the optimistic public prior during the production replay.
+    assert conn.executed("update wallet_users set raw_trust")[0][1][0] == 0.0
 
 
 def _summary_row(wallet, *, verified, rating=5):

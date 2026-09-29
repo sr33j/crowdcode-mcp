@@ -17,6 +17,7 @@ from crowdcode.scoring import (
     ScoreResult,
     TrustRow,
     compute_score,
+    compute_trust_consensus,
     updated_raw_trust,
 )
 
@@ -139,7 +140,7 @@ def apply_review_trust_update(
     trust_map = load_trust_map(
         conn, {r.wallet for r in reviews if r.wallet is not None} | {wallet}
     )
-    loo = compute_score(reviews, trust_map, now, exclude_wallet=wallet)
+    loo = compute_trust_consensus(reviews, trust_map, now, exclude_wallet=wallet)
     new_raw = updated_raw_trust(float(user["raw_trust"]), loo.score, rating)
     if new_raw != float(user["raw_trust"]):
         conn.execute(
