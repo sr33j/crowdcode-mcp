@@ -12,6 +12,18 @@ where mode = 'mainnet' and wallet_kind = 'agent_eoa'
 
 revoke all on public.opencrowd_seed_wallets from public;
 
+-- Supabase may grant these roles access through postgres default privileges.
+-- Explicitly remove those grants from this private registry view as well.
+do $$
+declare audience text;
+begin
+  foreach audience in array array['anon', 'authenticated', 'service_role'] loop
+    if exists (select 1 from pg_roles where rolname = audience) then
+      execute format('revoke all on public.opencrowd_seed_wallets from %I', audience);
+    end if;
+  end loop;
+end $$;
+
 -- The CrowdCode operator owns/reads this view. No new privileges are granted
 -- to hosted app, gateway, anonymous, or authenticated database roles.
 -- Backend ensure_user() consults it before scoring a wallet's first review;
