@@ -246,6 +246,8 @@ alter table app_cache enable row level security;
 create table if not exists deleted_review_keys (
   replay_key text primary key
 );
+-- Same default-deny posture as the tables above; safe to rerun.
+alter table deleted_review_keys enable row level security;
 alter table services add column if not exists review_revision bigint not null default 0;
 create index if not exists reviews_owner_id_idx
   on reviews (lower(reviewer_wallet), id desc);

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Enable row-level security on `deleted_review_keys` in `supabase/schema.sql`.
+  Existing deployments should rerun the idempotent schema or apply
+  `alter table deleted_review_keys enable row level security;` so the table
+  is default-deny for the Supabase anon/authenticated roles like the others.
+
 - Automatically seed registered hosted OpenCrowd mainnet agent wallets at trust
   1.0 using an optional operator-owned database view. Apply
   `supabase/opencrowd-wallets.sql` in the shared deployment, then sync seeds and
