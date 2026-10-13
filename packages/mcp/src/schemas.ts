@@ -88,7 +88,10 @@ export const signingPayloadShape = {
 export const reviewServiceShape = {
   rating: z.number().int().describe(RATING_DESCRIPTION),
   reason: z.string().describe("Review text (redacted locally before sending)"),
-  payment_reference: z.string().min(1).nullish().describe("Optional unique settlement reference; omit when no payment is claimed"),
+  payment_reference: z.string().min(1).nullish().describe(
+    "Optional unique settlement reference; omit when no payment is claimed. " +
+      "x402: the settlement tx hash (Base), or x402:monad:<tx_hash> for Monad (eip155:143)",
+  ),
   review_nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).nullish().describe("Unpaid review retry identifier; generated automatically when omitted"),
   service_id: identityShape.service_id,
   task_context: z.string().nullish(),

@@ -638,7 +638,7 @@ def review_service(
     reference or blame the provider for a client-side failure.
 
     When claiming payment, use the actual settlement reference and payee.
-    x402 Base USDC and mppx Tempo claims require a verified on-chain transfer
+    x402 Base/Monad USDC and mppx Tempo claims require a verified on-chain transfer
     from reviewer_wallet to the service payee. Optional payment_proof is the
     original base64 response header, not decoded JSON. Invalid supplied payment
     evidence is rejected; it is never downgraded into an unpaid review.

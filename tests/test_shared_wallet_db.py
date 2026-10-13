@@ -12,7 +12,9 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from crowdcode.identity import build_identity, create_service_from_identity, resolve_service
-from crowdcode.payments import canonical_review_payload, BASE_USDC_ADDRESS, ERC20_TRANSFER_TOPIC
+from crowdcode.payments import (
+    canonical_review_payload, BASE_USDC_ADDRESS, ERC20_TRANSFER_TOPIC, MONAD_RPC_URL, MONAD_USDC_ADDRESS,
+)
 
 SCHEMA = Path(__file__).parents[1] / 'supabase/schema.sql'
 PAYEE = '0x' + 'ab' * 20
@@ -117,6 +119,45 @@ def test_signed_reviews_stay_on_separate_services(db, monkeypatch):
     assert ids[0] != ids[1]
     rows = conn.execute('select service_id,rating from reviews order by rating').fetchall()
     assert [(r['service_id'],r['rating']) for r in rows] == [(ids[0],2),(ids[1],5)]
+
+
+def test_monad_x402_review_is_stored_payment_verified(db, monkeypatch):
+    from crowdcode import server, payments
+    conn, _, url = db
+    monkeypatch.setenv('DATABASE_URL', url)
+    monkeypatch.delenv('X402_MONAD_RPC_URL', raising=False)
+    @contextmanager
+    def connect():
+        yield conn
+    monkeypatch.setattr(server, 'connect', connect)
+    monkeypatch.setattr(server, 'redact_texts', lambda texts, **_: texts)
+    monkeypatch.setattr(server, 'redaction_enabled', lambda: True)
+    account = Account.from_key('0x' + '42'*32)
+    topic = lambda address: '0x' + '0'*24 + address[2:].lower()
+    rpc_urls = []
+    def receipt(rpc_url, _tx):
+        rpc_urls.append(rpc_url)
+        return {'status': '0x1', 'blockNumber': '0x10', 'logs': [{
+            'address': MONAD_USDC_ADDRESS,
+            'topics': [ERC20_TRANSFER_TOPIC, topic(account.address), topic(PAYEE)],
+            'data': hex(200000),
+        }]}
+    monkeypatch.setattr(payments, '_rpc_transaction_receipt', receipt)
+    ident, tx, reason = identity('monad'), '0x' + '33'*32, 'Video generated'
+    reference = f'x402:monad:{tx}'
+    message = canonical_review_payload(identity=ident, rating=5, reason=reason, payment_reference=reference)
+    result = server.review_service(api_endpoint=ident.api_endpoint, payment_provider='x402', payment_target_ref=PAYEE,
+        payment_reference=reference, rating=5, reason=reason, reviewer_wallet=account.address,
+        review_signature='0x'+account.sign_message(encode_defunct(text=message)).signature.hex())
+    assert result['accepted'], result
+    assert result['payment_verified'], result
+    assert rpc_urls == [MONAD_RPC_URL]
+    row = conn.execute('select payment_reference, payment_reference_canonical, amount, '
+                       'payment_verification_metadata from reviews').fetchone()
+    assert row['payment_reference'] == reference
+    assert row['payment_reference_canonical'] == tx
+    assert row['amount'] == 200000
+    assert row['payment_verification_metadata']['network'] == 'monad'
 
 
 @pytest.fixture

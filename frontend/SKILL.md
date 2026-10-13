@@ -88,13 +88,15 @@ For x402 and MPP/mppx, take identity and proof from the actual payment rather
 than a directory listing:
 
 - `payment_reference`: x402 settlement transaction hash or MPP
-  `Payment-Receipt` reference.
+  `Payment-Receipt` reference. For x402 on Monad (`eip155:143`) use
+  `x402:monad:<tx_hash>`; a bare hash means Base unless `payment_proof` names
+  the chain.
 - `payment_proof`: the base64 response-header value when available, not a
   decoded object or bare transaction hash.
 - `payment_target_ref`: the actual payment recipient/on-chain transfer payee.
 
-Machine-payment verification currently supports x402 USDC on Base and MPP
-Tempo payments only. Unsupported or invalid payment claims are rejected, never
+Machine-payment verification currently supports x402 USDC on Base and Monad
+and MPP Tempo payments only. Unsupported or invalid payment claims are rejected, never
 silently downgraded. An experience can instead be reviewed with payment evidence
 omitted and payment explicitly marked unverified.
 

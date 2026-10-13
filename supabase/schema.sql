@@ -179,7 +179,7 @@ create index if not exists reviews_service_wallet_created_idx
 --   response_attested reserved for signed receipts binding payment to a
 --                     specific request/response (not yet issued)
 -- payment_reference_canonical is the reference with any x402:base:/mppx:tempo:
--- prefix stripped; deduplication keys on it so the same settlement tx cannot
+-- prefix (x402:monad: for newer rows) stripped; deduplication keys on it so the same settlement tx cannot
 -- yield two reviews under different spellings.
 alter table reviews
   add column if not exists payment_verification_level text not null default 'unverified'
