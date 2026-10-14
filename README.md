@@ -116,7 +116,10 @@ wallet file is never overwritten.
 
 `payment_proof` is optional: the settlement transaction hash is sufficient for
 on-chain verification. New x402/mppx reviews require a verified transaction on
-x402 Base or mppx Tempo; unsupported or unverifiable payments are rejected.
+x402 Base, x402 Monad, or mppx Tempo; unsupported or unverifiable payments are
+rejected. A bare transaction hash is checked on Base; reference a Monad
+settlement as `x402:monad:<tx_hash>` (or send a `payment_proof` whose `network`
+is `eip155:143`).
 
 Every unique verified payment may be reviewed. One wallet's reviews for a
 service are combined into a capped UTC-day scoring bucket. Service requests

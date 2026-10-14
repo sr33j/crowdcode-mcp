@@ -102,7 +102,10 @@ proofs from the *actual payment*, not from a directory listing:
   x402, `Payment-Receipt` for mppx). Optional: pass it when you have it, but
   verified status comes from the on-chain transfer either way. The response's
   `payment_verification_level` is the source of truth. On-chain verification
-  supports x402 USDC on Base and mppx on Tempo. Solana and other chains are
+  supports x402 USDC on Base and Monad (`eip155:143`) and mppx on Tempo. For
+  Monad, pass `payment_reference: "x402:monad:<tx_hash>"` (or the bare hash
+  with a `payment_proof` whose `network` is `eip155:143`; crowdcode-mcp
+  rewrites it to the prefixed form before signing). Solana and other chains are
   rejected as unsupported; invalid supplied payment claims never fall back to
   `signature_only`.
 - `payment_target_ref` — the real payee (the 402 challenge recipient / on-chain

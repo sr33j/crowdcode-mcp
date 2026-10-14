@@ -349,7 +349,8 @@ const SERVER_INSTRUCTIONS = [
   "insufficient funds, and uncertain causes. Do not invent payment evidence.",
   "When claiming payment, use the actual settlement reference and payee.",
   "An optional payment_proof is the original base64 response header. Payment",
-  "claims must verify on x402 Base USDC or mppx Tempo. Invalid supplied claims",
+  "claims must verify on x402 Base/Monad USDC or mppx Tempo. Reference an x402",
+  "Monad (eip155:143) settlement as x402:monad:<tx_hash>. Invalid supplied claims",
   "are rejected, never silently downgraded. Payment verification gives the",
   "existing verified scoring weight; unpaid signed reviews share the same",
   "history, score, and per-wallet/service/day influence cap.",
@@ -468,7 +469,8 @@ export function buildServer(deps: ServerDeps): McpServer {
         "Use a stable review_nonce for unpaid retries (generated automatically if omitted). " +
         "For paid reviews, supply the actual settlement reference and payee; optional " +
         "payment_proof is the original base64 response header. Claims must verify on " +
-        "x402 Base USDC or mppx Tempo; invalid payment evidence is rejected, never downgraded. " +
+        "x402 Base/Monad USDC or mppx Tempo; reference an x402 Monad (eip155:143) settlement " +
+        "as x402:monad:<tx_hash>. Invalid payment evidence is rejected, never downgraded. " +
         "Daily scoring influence is capped. Review text is redacted locally.",
       inputSchema: reviewServiceShape,
     },

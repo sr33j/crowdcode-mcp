@@ -254,6 +254,40 @@ describe("transparent review signing", () => {
     ).toBe(true);
   });
 
+  it("signs x402 Monad receipts with an x402:monad:<tx> reference", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream((name) =>
+      name === "get_service_score"
+        ? { found: false, reason: "service not found" }
+        : { accepted: true, payment_verified: true },
+    );
+    const handlers = createToolHandlers({
+      engine,
+      upstream,
+      wallet: { walletDir: await walletDirWith(KEY), autoCreate: false, env: {} as NodeJS.ProcessEnv },
+    });
+    const tx = "0x" + "cd".repeat(32);
+    const args = {
+      ...MPPX_ARGS,
+      payment_provider: "x402",
+      payment_reference: tx,
+      payment_proof: Buffer.from(JSON.stringify({ success: true, transaction: tx,
+        network: "eip155:143" })).toString("base64"),
+    };
+    await handlers.review_service(args);
+    const sent = upstream.calls.find((c) => c.name === "review_service")!.args;
+    expect(sent.payment_reference).toBe(`x402:monad:${tx}`);
+    expect(sent.payment_proof).toBe(args.payment_proof);
+    const message = canonicalReviewPayload({
+      identity: buildIdentity(args),
+      rating: args.rating,
+      reason: String(sent.reason),
+      paymentReference: `x402:monad:${tx}`,
+    });
+    expect(await verifyMessage({ address: ACCOUNT.address, message,
+      signature: sent.review_signature as `0x${string}` })).toBe(true);
+  });
+
   it("passes a caller-supplied signature through untouched", async () => {
     const engine = await makeEngine();
     const upstream = fakeUpstream(() => ({ accepted: true }));

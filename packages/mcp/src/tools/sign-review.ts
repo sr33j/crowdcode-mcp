@@ -20,6 +20,7 @@ import {
   type ServiceIdentity,
 } from "../canonical/identity.js";
 import { canonicalReviewPayload } from "../canonical/payload.js";
+import { x402PaymentReference } from "../canonical/x402.js";
 import {
   loadWallet,
   type LoadedWallet,
@@ -90,6 +91,16 @@ function isMachineProvider(value: unknown): boolean {
   }
 }
 
+function mayBeX402(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  try {
+    const provider = normalizePaymentProvider(String(value));
+    return provider === null || provider === "x402";
+  } catch {
+    return false;
+  }
+}
+
 export async function prepareSignedReview(
   deps: SigningDeps,
   args: Record<string, unknown>,
@@ -97,6 +108,17 @@ export async function prepareSignedReview(
 ): Promise<PreparedReview> {
   if (args.review_signature || (args.payment_reference != null && args.payment_provider && !isMachineProvider(args.payment_provider))) {
     return { args, signed: false };
+  }
+
+  // Sign the chain-qualified reference (x402:monad:<tx>) for x402 receipts
+  // settled off Base, so the reference alone tells the backend which chain
+  // to verify on.
+  if (args.payment_proof != null && mayBeX402(args.payment_provider)) {
+    const reference = x402PaymentReference(
+      args.payment_reference as string | null | undefined,
+      args.payment_proof,
+    );
+    if (reference !== args.payment_reference) args = { ...args, payment_reference: reference };
   }
 
   if (args.payment_reference == null) {

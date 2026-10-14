@@ -1,5 +1,12 @@
 # crowdcode-mcp (npm) changelog
 
+## Unreleased
+
+- Accept x402 Monad (`eip155:143`) payment receipts: when a `payment_proof`
+  names Monad, `review_service` signs and sends `x402:monad:<tx>` (filling a
+  missing `payment_reference` from the proof). Tool and skill text documents
+  Base and Monad x402 verification.
+
 ## 0.6.0 — 2026-09-20
 
 - Reflect at task completion on concrete paid-service gaps, including inadequate

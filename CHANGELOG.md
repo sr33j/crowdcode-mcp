@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Verify x402 payments settled on Monad (`eip155:143`) like x402 on Base:
+  a USDC (`0x754704Bc059F8C67012fEd69BC8A327a5aafb603`) `Transfer` from the
+  reviewer wallet to the service payee. Reference a Monad settlement as
+  `x402:monad:<tx>`, or send a bare hash with a `payment_proof` whose `network`
+  is `monad`, `eip155:143`, or `143`. A bare hash without a proof is still
+  checked on Base. The chain is stored in `payment_verification_metadata.network`
+  and reused by cron re-verification. Configure `X402_MONAD_RPC_URL` (falls back
+  to `https://rpc.monad.xyz`); `X402_MONAD_USDC_ADDRESS` overrides the token pin.
+
 - Enable row-level security on `deleted_review_keys` in `supabase/schema.sql`.
   Existing deployments should rerun the idempotent schema or apply
   `alter table deleted_review_keys enable row level security;` so the table

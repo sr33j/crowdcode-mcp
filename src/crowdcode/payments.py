@@ -27,13 +27,63 @@ ERC20_TRANSFER_TOPIC = (
 
 TEMPO_RPC_URL = "https://rpc.tempo.xyz"
 BASE_RPC_URL = "https://mainnet.base.org"
+MONAD_RPC_URL = "https://rpc.monad.xyz"
 
 # Token pinning (docs/SCORING.md §3.4): a verified payment must move the
 # expected token, otherwise a self-minted worthless ERC-20 buys the verified
-# multiplier. x402 on Base is pinned to native USDC by default; the Tempo
-# token for mppx must be configured via MPPX_TEMPO_TOKEN_ADDRESS — without
-# it, new mppx reviews fail closed with a retryable configuration error.
+# multiplier. x402 on Base and Monad is pinned to native Circle USDC by
+# default; the Tempo token for mppx must be configured via
+# MPPX_TEMPO_TOKEN_ADDRESS — without it, new mppx reviews fail closed with a
+# retryable configuration error.
 BASE_USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+MONAD_USDC_ADDRESS = "0x754704bc059f8c67012fed69bc8a327a5aafb603"
+
+
+@dataclass(frozen=True)
+class X402Chain:
+    network: str
+    label: str
+    aliases: frozenset[str]
+    rpc_env: str
+    default_rpc_url: str
+    token_env: str
+    default_token: str
+
+
+# EVM chains x402 payments may settle on. `network` is the short name used in
+# x402:<network>:<tx> references and stored in verification metadata so the
+# cron re-verify pass checks the same chain.
+X402_CHAINS = {
+    "base": X402Chain(
+        network="base",
+        label="Base",
+        aliases=frozenset({"base", "eip155:8453", "8453"}),
+        rpc_env="X402_BASE_RPC_URL",
+        default_rpc_url=BASE_RPC_URL,
+        token_env="X402_USDC_ADDRESS",
+        default_token=BASE_USDC_ADDRESS,
+    ),
+    "monad": X402Chain(
+        network="monad",
+        label="Monad",
+        aliases=frozenset({"monad", "eip155:143", "143"}),
+        rpc_env="X402_MONAD_RPC_URL",
+        default_rpc_url=MONAD_RPC_URL,
+        token_env="X402_MONAD_USDC_ADDRESS",
+        default_token=MONAD_USDC_ADDRESS,
+    ),
+}
+DEFAULT_X402_NETWORK = "base"
+
+
+def x402_network(value: Any) -> str | None:
+    """Map an x402 network label (name, CAIP-2 id, or chain id) to its short
+    name in X402_CHAINS; None when the chain is unsupported."""
+    cleaned = str(value).strip().lower()
+    for chain in X402_CHAINS.values():
+        if cleaned in chain.aliases:
+            return chain.network
+    return None
 
 # What the payment check actually proved (docs/SCORING.md §3.4).
 LEVEL_UNVERIFIED = "unverified"
@@ -56,7 +106,10 @@ RETRYABLE_FAILURES = frozenset({FAILURE_RPC_UNREACHABLE})
 
 # Dedup/storage form of payment_reference: the same settlement tx must not
 # yield two reviews under 0x<hash> and x402:base:<hash> spellings.
-_REFERENCE_PREFIX_RE = re.compile(r"^(?:x402:base:|mppx:tempo:)", re.IGNORECASE)
+_REFERENCE_PREFIX_RE = re.compile(
+    r"^(?:x402:(?:" + "|".join(X402_CHAINS) + r"):|mppx:tempo:)", re.IGNORECASE
+)
+_X402_REFERENCE_NETWORK_RE = re.compile(r"^x402:([a-z0-9]+):", re.IGNORECASE)
 
 
 def canonical_payment_reference(reference: str) -> str:
@@ -65,6 +118,14 @@ def canonical_payment_reference(reference: str) -> str:
     only for dedup, storage, and on-chain lookup."""
     canonical = _REFERENCE_PREFIX_RE.sub("", reference.strip())
     return canonical.lower() if TX_HASH_RE.match(canonical) else canonical
+
+
+def x402_reference_network(reference: str) -> str | None:
+    """The chain named by an x402:<network>:<tx> reference prefix, or None for
+    a bare transaction hash (which settles on DEFAULT_X402_NETWORK unless a
+    payment_proof names another chain)."""
+    match = _X402_REFERENCE_NETWORK_RE.match(reference.strip())
+    return match.group(1).lower() if match else None
 
 
 @dataclass(frozen=True)
@@ -300,19 +361,23 @@ def _verify_signed_machine_payment(
         if not TX_HASH_RE.match(canonical):
             return PaymentVerification(
                 False,
-                "payment_reference must be an EVM transaction hash for x402 Base or mppx Tempo",
+                "payment_reference must be an EVM transaction hash for x402 Base/Monad or mppx Tempo",
                 error_code="unsupported_payment_reference",
             )
+        network = None
+        if identity.payment_provider == "x402":
+            network = x402_reference_network(payment_reference) or DEFAULT_X402_NETWORK
         check, verification_meta = check_payment_reference_onchain(
             provider=identity.payment_provider,
             payment_target_ref=identity.payment_target_ref,
             reviewer_wallet=wallet,
             tx_hash=canonical,
+            network=network,
         )
         verification_meta["proof_present"] = False
         verification_meta["source"] = "payment_reference"
         if not check.ok or check.transfer is None:
-            return _chain_failure(identity.payment_provider, check)
+            return _chain_failure(identity.payment_provider, check, verification_meta["network"])
         metadata: dict[str, Any] = {
             "review_payload": json.loads(payload),
             "signature_recovered_wallet": recovered,
@@ -427,7 +492,7 @@ def _verify_mppx_payment(
     verification_meta["source"] = "payment_proof"
 
     if not check.ok or check.transfer is None:
-        return _chain_failure("mppx", check)
+        return _chain_failure("mppx", check, verification_meta["network"])
 
     transfer = check.transfer
     metadata: dict[str, Any] = {
@@ -493,28 +558,35 @@ def _verify_x402_payment(
     # Hex tx hashes are case-insensitive: compare (and look up) in lowercase
     # so a checksummed reference matches, like the proofless path does.
     tx_hash = tx_hash.lower()
-    if payment_reference.strip().lower() not in {tx_hash, f"x402:base:{tx_hash}"}:
-        return PaymentVerification(False, "payment_reference does not match x402 transaction")
 
-    network = str(proof.get("network") or proof.get("chain") or "base").lower()
-    if network not in {"base", "eip155:8453", "8453"}:
+    # The proof names the chain; a proof without one inherits the reference
+    # prefix (x402:monad:<tx>) and otherwise defaults to Base.
+    proof_network = proof.get("network") or proof.get("chain")
+    if proof_network is None:
+        network = x402_reference_network(payment_reference) or DEFAULT_X402_NETWORK
+    else:
+        network = x402_network(proof_network)
+    if network not in X402_CHAINS:
         return PaymentVerification(
             False,
-            "only x402 Base EVM payments are supported",
+            "only x402 Base and Monad EVM payments are supported",
             error_code="unsupported_payment_chain",
         )
+    if payment_reference.strip().lower() not in {tx_hash, f"x402:{network}:{tx_hash}"}:
+        return PaymentVerification(False, "payment_reference does not match x402 transaction")
 
     check, verification_meta = check_payment_reference_onchain(
         provider="x402",
         payment_target_ref=identity.payment_target_ref,
         reviewer_wallet=reviewer_wallet,
         tx_hash=tx_hash,
+        network=network,
     )
     verification_meta["proof_present"] = True
     verification_meta["source"] = "payment_proof"
 
     if not check.ok or check.transfer is None:
-        return _chain_failure("x402", check)
+        return _chain_failure("x402", check, network)
 
     transfer = check.transfer
     required = _amount_to_int(
@@ -534,6 +606,7 @@ def _verify_x402_payment(
 
     metadata = {
         "provider": "x402",
+        "network": network,
         "proof": proof,
         "transaction": {
             "hash": tx_hash,
@@ -562,8 +635,11 @@ class OnchainCheck:
     block_number: int | None = None
 
 
-def _chain_failure(provider: str, check: OnchainCheck) -> PaymentVerification:
-    network = "Base" if provider == "x402" else "Tempo"
+def _chain_failure(
+    provider: str, check: OnchainCheck, network: str | None
+) -> PaymentVerification:
+    chain = X402_CHAINS.get(network or "") if provider == "x402" else None
+    network = chain.label if chain else "Tempo"
     if check.failure == FAILURE_RPC_UNREACHABLE:
         return PaymentVerification(
             False,
@@ -597,10 +673,11 @@ def _chain_failure(provider: str, check: OnchainCheck) -> PaymentVerification:
     )
 
 
-def _x402_chain_config() -> tuple[str, str | None]:
-    rpc_url = os.environ.get("X402_BASE_RPC_URL", BASE_RPC_URL)
+def _x402_chain_config(network: str) -> tuple[str, str | None]:
+    chain = X402_CHAINS[network]
+    rpc_url = os.environ.get(chain.rpc_env) or chain.default_rpc_url
     token = _normalize_evm_address(
-        os.environ.get("X402_USDC_ADDRESS") or BASE_USDC_ADDRESS
+        os.environ.get(chain.token_env) or chain.default_token
     )
     return rpc_url, token
 
@@ -617,21 +694,29 @@ def check_payment_reference_onchain(
     payment_target_ref: str | None,
     reviewer_wallet: str,
     tx_hash: str,
+    network: str | None = None,
 ) -> tuple[OnchainCheck, dict[str, Any]]:
     """The single on-chain payment check, shared by the proof paths, the
     tx-hash-only path, and the cron re-verify pass: fetch the receipt, require
     status 1, and find an ERC-20 Transfer of the pinned token from
     reviewer_wallet to the service payee. Also returns the compact
     verification-metadata dict (caller fills in proof_present/source).
+
+    ``network`` selects the x402 chain (an X402_CHAINS key or alias; Base when
+    omitted) and is recorded in the metadata so re-verification reuses it.
     """
     if provider == "x402":
-        rpc_url, token = _x402_chain_config()
-        network = "base"
+        network = x402_network(network or DEFAULT_X402_NETWORK)
+    if provider == "x402" and network is not None:
+        rpc_url, token = _x402_chain_config(network)
     elif provider == "mppx":
         rpc_url, token = _mppx_chain_config()
         network = "tempo"
     else:
-        check = OnchainCheck(False, failure="unsupported_provider")
+        check = OnchainCheck(
+            False,
+            failure="unsupported_chain" if provider == "x402" else "unsupported_provider",
+        )
         return check, {
             "network": None,
             "token_pinned": False,

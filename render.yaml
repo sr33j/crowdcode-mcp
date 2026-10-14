@@ -41,6 +41,9 @@ services:
       # Without it, mppx verification fails closed and stores nothing.
       - key: MPPX_TEMPO_TOKEN_ADDRESS
         value: "0x20C000000000000000000000b9537d11c60E8b50"
+      # x402 Monad RPC (e.g. Alchemy); falls back to https://rpc.monad.xyz.
+      - key: X402_MONAD_RPC_URL
+        sync: false
 
   # Nightly batch (docs/SCORING.md §8.2): consistency sweep, per-service
   # review summaries, requested-services summary.
@@ -69,6 +72,9 @@ services:
       # Legacy signature-only re-verification needs the same token pin.
       - key: MPPX_TEMPO_TOKEN_ADDRESS
         value: "0x20C000000000000000000000b9537d11c60E8b50"
+      # x402 Monad RPC (e.g. Alchemy); falls back to https://rpc.monad.xyz.
+      - key: X402_MONAD_RPC_URL
+        sync: false
 
   # Internal-only redaction sidecar: same Rampart + secret-recognizer
   # pipeline as crowdcode-mcp, called by the backend on ingest/egress.

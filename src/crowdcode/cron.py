@@ -101,13 +101,16 @@ def run_payment_reverification(now: datetime) -> None:
             tx_hash = (row["payment_reference_canonical"] or "").strip()
             if not TX_HASH_RE.match(tx_hash):
                 continue
+            meta = dict(row["payment_verification_metadata"] or {})
+            # Re-check on the chain recorded at submit time (x402 Base or
+            # Monad); rows from before multi-chain x402 default to Base.
             check, chain_meta = check_payment_reference_onchain(
                 provider=row["payment_provider"],
                 payment_target_ref=row["payment_target_ref"],
                 reviewer_wallet=row["reviewer_wallet"],
                 tx_hash=tx_hash,
+                network=meta.get("network"),
             )
-            meta = dict(row["payment_verification_metadata"] or {})
             attempts = int(meta.get("reverify_attempts") or 0) + 1
             meta["reverify_attempts"] = attempts
             meta["last_reverified_at"] = now.isoformat()

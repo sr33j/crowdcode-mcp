@@ -272,3 +272,24 @@ def test_reverification_skips_rows_whose_reference_is_not_a_tx_hash(monkeypatch)
     monkeypatch.setattr(cron, "check_payment_reference_onchain", _explode)
     cron.run_payment_reverification(NOW)
     assert conn.executed("update reviews") == []
+
+
+def test_reverification_rechecks_on_the_recorded_x402_network(monkeypatch):
+    calls = []
+    conn = FakeConn({"->>'verification_failure'": [
+        _reverify_candidate(id=1, payment_verification_metadata={
+            "network": "monad", "verification_failure": "rpc_unreachable"}),
+        _reverify_candidate(id=2),  # legacy row: no network recorded
+    ]})
+    monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
+    monkeypatch.setattr(
+        cron,
+        "check_payment_reference_onchain",
+        lambda **kw: calls.append(kw["network"]) or (
+            OnchainCheck(False, failure="rpc_unreachable"),
+            {"verification_failure": "rpc_unreachable"},
+        ),
+    )
+    monkeypatch.setattr(cron, "recompute_service_score", lambda *_: None)
+    cron.run_payment_reverification(NOW)
+    assert calls == ["monad", None]

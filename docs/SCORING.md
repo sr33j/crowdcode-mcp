@@ -146,7 +146,7 @@ invalid payment claims are rejected rather than automatically slashing wallets.
    trust aggregate all reviews for one wallet/resource/UTC day into one capped
    bucket; there is no review-ingest throttle.
 3. `payment_reference` unique on its **canonical form** (provider prefixes
-   like `x402:base:` stripped) — the same settlement tx can never yield two
+   like `x402:base:` / `x402:monad:` stripped) — the same settlement tx can never yield two
    reviews under different spellings.
 4. A **supplied** payment proof must fully verify (receipt status 1, Transfer
    `from` == reviewer, `to` == payment_target_ref, **token pinned** — USDC on
@@ -161,8 +161,10 @@ invalid payment claims are rejected rather than automatically slashing wallets.
    nothing, and does not reserve the reference.
 6. Token pinning is symmetric across both routes. A missing pin is a retryable
    verifier-configuration error and stores nothing.
-7. New machine-payment verification supports x402 USDC on Base and mppx on
-   Tempo. Solana and all other chains are explicitly unsupported; they never
+7. New machine-payment verification supports x402 USDC on Base and Monad
+   (`eip155:143`, referenced as `x402:monad:<tx>` or named by the proof's
+   `network`; the chain is stored in `payment_verification_metadata.network`
+   and reused by re-verification) and mppx on Tempo. Solana and all other chains are explicitly unsupported; they never
    fall back to `signature_only` on a failed payment claim. Omitting all payment
    evidence instead admits an authenticated unpaid review at `signature_only`.
 
