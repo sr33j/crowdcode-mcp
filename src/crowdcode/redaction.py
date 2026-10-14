@@ -9,6 +9,9 @@ fail-closed by omission).
 Configuration: REDACTOR_URL (e.g. http://127.0.0.1:8090). When unset,
 enforcement is disabled and text passes through unchanged — deployments
 opt in by running the sidecar. REDACTOR_TOKEN adds a shared-secret header.
+REDACTION_REQUIRED=1 (set in production) treats a missing REDACTOR_URL as an
+unavailable sidecar, so a lost configuration rejects writes and drops egress
+text instead of silently passing it through.
 """
 
 from __future__ import annotations
@@ -28,6 +31,10 @@ def _config() -> tuple[str | None, str | None]:
     return url, token
 
 
+def redaction_required() -> bool:
+    return os.environ.get("REDACTION_REQUIRED", "").strip() == "1"
+
+
 def redaction_enabled() -> bool:
     return _config()[0] is not None
 
@@ -41,7 +48,8 @@ def redact_texts(
     """Redact a batch of texts through the sidecar.
 
     Returns a list aligned with the input (None entries preserved).
-    - Sidecar not configured: returns the input unchanged (enforcement off).
+    - Sidecar not configured: returns the input unchanged (enforcement off),
+      unless REDACTION_REQUIRED=1, which treats it as failing.
     - Sidecar failing and fail_closed=True: raises RedactionUnavailable
       (callers reject the write).
     - Sidecar failing and fail_closed=False: returns None (callers must drop
@@ -49,7 +57,11 @@ def redact_texts(
     """
     url, token = _config()
     if url is None:
-        return texts
+        if not redaction_required():
+            return texts
+        if fail_closed:
+            raise RedactionUnavailable("redaction is required but REDACTOR_URL is not set")
+        return None
 
     payload = [text or "" for text in texts]
     headers = {"content-type": "application/json"}
