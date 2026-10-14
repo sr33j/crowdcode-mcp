@@ -16,11 +16,23 @@ from crowdcode.redaction import (
 def clear_env(monkeypatch):
     monkeypatch.delenv("REDACTOR_URL", raising=False)
     monkeypatch.delenv("REDACTOR_TOKEN", raising=False)
+    monkeypatch.delenv("REDACTION_REQUIRED", raising=False)
 
 
 def test_disabled_when_unconfigured():
     assert not redaction_enabled()
     assert redact_texts(["raw text", None], fail_closed=True) == ["raw text", None]
+
+
+def test_required_but_unconfigured_fails_closed(monkeypatch):
+    monkeypatch.setenv("REDACTION_REQUIRED", "1")
+    with pytest.raises(RedactionUnavailable):
+        redact_texts(["raw text"], fail_closed=True)
+
+
+def test_required_but_unconfigured_drops_egress_text(monkeypatch):
+    monkeypatch.setenv("REDACTION_REQUIRED", "1")
+    assert redact_texts(["raw text"], fail_closed=False) is None
 
 
 def test_enabled_when_configured(monkeypatch):

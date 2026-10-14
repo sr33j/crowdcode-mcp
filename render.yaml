@@ -34,6 +34,9 @@ services:
         sync: false
       - key: REDACTOR_TOKEN
         sync: false
+      # Missing REDACTOR_URL rejects writes instead of storing raw text.
+      - key: REDACTION_REQUIRED
+        value: "1"
       # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5).
       - key: CROWDCODE_SEED_WALLETS
         sync: false
@@ -69,6 +72,8 @@ services:
         sync: false
       - key: REDACTOR_TOKEN
         sync: false
+      - key: REDACTION_REQUIRED
+        value: "1"
       # Legacy signature-only re-verification needs the same token pin.
       - key: MPPX_TEMPO_TOKEN_ADDRESS
         value: "0x20C000000000000000000000b9537d11c60E8b50"
