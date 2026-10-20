@@ -18,7 +18,8 @@
   timed out, every request was dropped, and the website's request list became
   empty. The request summary now drops only chunks the sidecar cannot process,
   and when it cannot process any it fails the job and keeps the last
-  published summary.
+  published summary. A connection failure (the sidecar restarting after a
+  deploy) waits 5 s before the retry.
 
 - Verify x402 payments settled on Solana mainnet. Reference them as
   `x402:solana:<base58 signature>` (case-sensitive; aliases `solana` and
