@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import httpx
 
@@ -49,8 +50,10 @@ CHUNK_SIZE = 10
 # is waiting on a page load.
 BATCH_TIMEOUT = 60.0
 # A timed-out chunk keeps running in the sidecar and lands in its memo, so one
-# retry usually succeeds immediately.
+# retry usually succeeds immediately. Connection failures (a sidecar that is
+# restarting after a deploy) get a short pause first.
 ATTEMPTS = 2
+RETRY_DELAY = 5.0
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +115,11 @@ def redact_texts(
     for number, indexes in enumerate(chunks, start=1):
         payload = [texts[i] or "" for i in indexes]
         error: Exception | None = None
-        for _ in range(attempts):
+        for attempt in range(attempts):
+            if attempt and isinstance(error, httpx.TransportError) and not isinstance(
+                error, httpx.TimeoutException
+            ):
+                time.sleep(RETRY_DELAY)
             try:
                 redacted = _post_chunk(url, headers, payload, timeout)
             except Exception as exc:
