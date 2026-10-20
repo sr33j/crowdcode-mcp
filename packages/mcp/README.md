@@ -102,12 +102,23 @@ proofs from the *actual payment*, not from a directory listing:
   x402, `Payment-Receipt` for mppx). Optional: pass it when you have it, but
   verified status comes from the on-chain transfer either way. The response's
   `payment_verification_level` is the source of truth. On-chain verification
-  supports x402 USDC on Base and Monad (`eip155:143`) and mppx on Tempo. For
-  Monad, pass `payment_reference: "x402:monad:<tx_hash>"` (or the bare hash
-  with a `payment_proof` whose `network` is `eip155:143`; crowdcode-mcp
-  rewrites it to the prefixed form before signing). Solana and other chains are
-  rejected as unsupported; invalid supplied payment claims never fall back to
-  `signature_only`.
+  supports x402 USDC on Base, Monad (`eip155:143`) and Solana, and mppx on
+  Tempo. For Monad, pass `payment_reference: "x402:monad:<tx_hash>"` (or the
+  bare hash with a `payment_proof` whose `network` is `eip155:143`;
+  crowdcode-mcp rewrites it to the prefixed form before signing). For Solana,
+  pass `x402:solana:<base58 signature>` (or a `payment_proof` whose `network`
+  is `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) with the Solana payee as
+  `payment_target_ref`. Other chains are rejected as unsupported; invalid
+  supplied payment claims never fall back to `signature_only`.
+- `payer_signature` — x402 Solana only. The reviewer wallet is EVM, but a
+  Solana payer is a base58 key, so a Solana payment is a verified purchase only
+  when the payer also signs the payer link message (`spec/CANONICAL_PAYLOAD.md`
+  in the GitHub repository). crowdcode-mcp signs
+  it automatically with agentcash's Solana wallet
+  (`~/.agentcash/solana-wallet.json`) unless the proof names another payer, and
+  retries once without it if the backend reports `payer_signature_invalid`.
+  Without it the transfer is recorded as observed and the review is weighted
+  as `signature_only`.
 - `payment_target_ref` — the real payee (the 402 challenge recipient / on-chain
   `Transfer` `to`), not a bazaar-advertised `payTo`.
 

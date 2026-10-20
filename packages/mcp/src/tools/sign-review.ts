@@ -20,10 +20,13 @@ import {
   type ServiceIdentity,
 } from "../canonical/identity.js";
 import { canonicalReviewPayload } from "../canonical/payload.js";
-import { x402PaymentReference } from "../canonical/x402.js";
+import { payerLinkMessage, solanaReferenceSignature } from "../canonical/solana.js";
+import { x402PaymentReference, x402ProofPayer } from "../canonical/x402.js";
 import {
+  loadSolanaWallet,
   loadWallet,
   type LoadedWallet,
+  type SolanaWallet,
   type WalletSource,
 } from "../wallet.js";
 import { getReviewSigningPayload, type SigningDeps } from "./signing-payload.js";
@@ -78,6 +81,13 @@ export interface PreparedReview {
     review_nonce?: string | null;
   };
   signed: boolean;
+  /**
+   * Local agentcash Solana wallet that signed payer_signature for an x402
+   * Solana review. Signing is speculative (the backend, not the client,
+   * reads the transaction's payer), so a payer_signature_invalid rejection
+   * is retried once without it, as an unlinked observation.
+   */
+  payer_wallet?: SolanaWallet;
 }
 
 function isMachineProvider(value: unknown): boolean {
@@ -173,9 +183,17 @@ export async function prepareSignedReview(
     payload.identity as Parameters<typeof buildIdentity>[0],
   );
   const signedReason = String(payload.reason);
+  const payer =
+    args.payer_signature == null && identity.payment_provider === "x402" &&
+    solanaReferenceSignature(args.payment_reference) !== null
+      ? await solanaPayer(wallet.walletDir, args.payment_proof)
+      : null;
   return {
     args: {
       ...args,
+      ...(payer && loaded.address
+        ? { payer_signature: payer.sign(payerLinkMessage(loaded.address, payload.message)) }
+        : {}),
       // Pass the resolved identity verbatim so the backend rebuilds the exact
       // payload that was just signed.
       service_id: identity.service_id,
@@ -192,6 +210,7 @@ export async function prepareSignedReview(
     wallet_source: loaded.source,
     wallet_created: loaded.created,
     wallet: loaded,
+    ...(payer ? { payer_wallet: payer } : {}),
     signed_payload: {
       identity,
       rating: args.rating as number,
@@ -200,6 +219,27 @@ export async function prepareSignedReview(
     review_nonce: args.review_nonce as string | null | undefined,
     },
   };
+}
+
+/**
+ * The local Solana wallet, unless the proof names a different payer (then the
+ * local key did not pay and its signature could only be rejected).
+ */
+async function solanaPayer(walletDir: string | undefined, proof: unknown): Promise<SolanaWallet | null> {
+  const wallet = await loadSolanaWallet(walletDir);
+  const named = x402ProofPayer(proof);
+  return wallet && (named === null || named === wallet.address) ? wallet : null;
+}
+
+/** Retry args for an unlinked Solana observation after a payer_signature rejection. */
+export function withoutPayerSignature(
+  prepared: PreparedReview,
+  args: Record<string, unknown>,
+  response: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!prepared.payer_wallet || response.error_code !== "payer_signature_invalid") return null;
+  const { payer_signature: _dropped, ...rest } = args;
+  return rest;
 }
 
 const SIGNED_IDENTITY_FIELDS = [
@@ -266,8 +306,12 @@ export async function resignFromMismatch(
   const signature = await prepared.wallet.account.signMessage({
     message,
   });
+  const address = prepared.wallet.address;
   return {
     ...prepared.args,
+    ...(prepared.payer_wallet && address
+      ? { payer_signature: prepared.payer_wallet.sign(payerLinkMessage(address, message)) }
+      : {}),
     service_id: identity.service_id,
     api_endpoint: identity.api_endpoint,
     payment_provider: identity.payment_provider,

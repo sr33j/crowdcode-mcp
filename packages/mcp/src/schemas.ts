@@ -90,7 +90,8 @@ export const reviewServiceShape = {
   reason: z.string().describe("Review text (redacted locally before sending)"),
   payment_reference: z.string().min(1).nullish().describe(
     "Optional unique settlement reference; omit when no payment is claimed. " +
-      "x402: the settlement tx hash (Base), or x402:monad:<tx_hash> for Monad (eip155:143)",
+      "x402: the settlement tx hash (Base), x402:monad:<tx_hash> for Monad (eip155:143), " +
+      "or x402:solana:<base58 signature> for Solana (case-sensitive)",
   ),
   review_nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).nullish().describe("Unpaid review retry identifier; generated automatically when omitted"),
   service_id: identityShape.service_id,
@@ -124,6 +125,18 @@ export const reviewServiceShape = {
         "signature always wins.",
     ),
   signature_scheme: z.string().default("eip191"),
+  payer_signature: z
+    .string()
+    .nullish()
+    .describe(
+      "x402 Solana only: base58 ed25519 signature by the Solana payer over the " +
+        "payer link message, which makes the review a verified purchase. " +
+        "crowdcode-mcp signs automatically with the agentcash Solana wallet.",
+    ),
+  payer_wallet: z
+    .string()
+    .nullish()
+    .describe("x402 Solana only, optional: the base58 payer address that signed payer_signature"),
 };
 
 export const MIRRORED_REMOTE_TOOLS = [

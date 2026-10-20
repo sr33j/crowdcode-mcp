@@ -89,14 +89,19 @@ than a directory listing:
 
 - `payment_reference`: x402 settlement transaction hash or MPP
   `Payment-Receipt` reference. For x402 on Monad (`eip155:143`) use
-  `x402:monad:<tx_hash>`; a bare hash means Base unless `payment_proof` names
+  `x402:monad:<tx_hash>`; for x402 on Solana use `x402:solana:<signature>`
+  (base58, case-sensitive). A bare hash means Base unless `payment_proof` names
   the chain.
 - `payment_proof`: the base64 response-header value when available, not a
   decoded object or bare transaction hash.
-- `payment_target_ref`: the actual payment recipient/on-chain transfer payee.
+- `payment_target_ref`: the actual payment recipient/on-chain transfer payee
+  (the Solana payee address for x402 Solana).
 
-Machine-payment verification currently supports x402 USDC on Base and Monad
-and MPP Tempo payments only. Unsupported or invalid payment claims are rejected, never
+Machine-payment verification currently supports x402 USDC on Base, Monad and
+Solana, and MPP Tempo payments only. A Solana payment counts as verified only
+when the Solana payer also signs (`payer_signature`, automatic with the
+agentcash Solana wallet); otherwise it is recorded as observed and weighted as
+unverified. Unsupported or invalid payment claims are rejected, never
 silently downgraded. An experience can instead be reviewed with payment evidence
 omitted and payment explicitly marked unverified.
 

@@ -2,8 +2,11 @@
  * x402 settlement references (mirrors X402_CHAINS in
  * src/crowdcode/payments.py). The backend checks a bare transaction hash on
  * Base; a settlement on another chain is referenced as
- * `x402:<network>:<tx_hash>`, e.g. `x402:monad:0x…` for Monad (eip155:143).
+ * `x402:<network>:<tx>`, e.g. `x402:monad:0x…` for Monad (eip155:143) or
+ * `x402:solana:<base58 signature>` for Solana (case-sensitive).
  */
+
+import { isSolanaSignature } from "./solana.js";
 
 const X402_NETWORKS: Record<string, string> = {
   base: "base",
@@ -12,6 +15,9 @@ const X402_NETWORKS: Record<string, string> = {
   monad: "monad",
   "eip155:143": "monad",
   "143": "monad",
+  solana: "solana",
+  // Lowercased, like every lookup key here.
+  "solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp": "solana",
 };
 
 const DEFAULT_X402_NETWORK = "base";
@@ -54,13 +60,14 @@ export function x402Settlement(
   if (parsed === null) return null;
   const transaction =
     parsed.transaction ?? parsed.transactionHash ?? parsed.txHash ?? parsed.reference;
-  if (typeof transaction !== "string" || !TX_HASH_RE.test(transaction)) return null;
   const rawNetwork = parsed.network ?? parsed.chain;
   const network =
     rawNetwork === undefined || rawNetwork === null
       ? DEFAULT_X402_NETWORK
       : x402Network(rawNetwork);
-  return network === null ? null : { transaction, network };
+  if (typeof transaction !== "string" || network === null) return null;
+  const valid = network === "solana" ? isSolanaSignature(transaction) : TX_HASH_RE.test(transaction);
+  return valid ? { transaction, network } : null;
 }
 
 /**
@@ -80,8 +87,14 @@ export function x402PaymentReference(
   const prefix = network === DEFAULT_X402_NETWORK ? "" : `x402:${network}:`;
   if (reference === null || reference === undefined) return prefix + transaction;
   const bare = reference.trim();
-  if (prefix !== "" && bare.toLowerCase() === transaction.toLowerCase()) {
-    return prefix + bare;
-  }
+  // Base58 signatures are case-sensitive; EVM hashes are not.
+  const same = network === "solana" ? bare === transaction : bare.toLowerCase() === transaction.toLowerCase();
+  if (prefix !== "" && same) return prefix + bare;
   return reference;
+}
+
+/** The `payer` an x402 payment-response proof names, if any (unverified hint). */
+export function x402ProofPayer(proof: unknown): string | null {
+  const payer = parseProof(proof)?.payer;
+  return typeof payer === "string" && payer.trim() !== "" ? payer.trim() : null;
 }

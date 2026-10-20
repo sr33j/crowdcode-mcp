@@ -14,6 +14,7 @@
  *      wallet.
  */
 
+import { createPrivateKey, createPublicKey, sign as cryptoSign } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,7 @@ import {
 } from "viem/accounts";
 import { getAddress } from "viem/utils";
 import { z } from "zod";
+import { base58Decode, base58Encode } from "./canonical/solana.js";
 
 export type WalletSource = "agentcash" | "none";
 
@@ -170,4 +172,59 @@ function parseStored(raw: string, file: string): LoadedWallet {
 
 function none(error?: string, errorCode?: string): LoadedWallet {
   return { source: "none", account: null, address: null, error, errorCode };
+}
+
+/**
+ * agentcash's Solana wallet, ~/.agentcash/solana-wallet.json (agentcash
+ * src/wallet/svm.ts): `{ privateKey: base58(32-byte ed25519 seed), address,
+ * createdAt }`. agentcash pays x402 Solana with this key, so it can sign the
+ * payer link that makes a Solana review verified. Read-only: CrowdCode never
+ * creates a Solana key, and a missing or invalid file just means reviews go
+ * out without payer_signature.
+ */
+export interface SolanaWallet {
+  address: string;
+  /** ed25519 over the UTF-8 bytes of `message`; base58 signature. */
+  sign(message: string): string;
+}
+
+const solanaWalletSchema = z.object({
+  privateKey: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]+$/),
+  address: z.string(),
+  createdAt: z.string().optional(),
+});
+
+// PKCS#8 DER prefix for a raw 32-byte Ed25519 seed (RFC 8410).
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+
+export async function loadSolanaWallet(walletDir?: string): Promise<SolanaWallet | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(walletDir ?? defaultWalletDir(), "solana-wallet.json"), "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: z.infer<typeof solanaWalletSchema>;
+  try {
+    parsed = solanaWalletSchema.parse(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+  const secret = base58Decode(parsed.privateKey);
+  // agentcash stores the 32-byte seed; Solana CLI keypairs are seed + pubkey.
+  if (secret === null || (secret.length !== 32 && secret.length !== 64)) return null;
+  const key = createPrivateKey({
+    key: Buffer.concat([ED25519_PKCS8_PREFIX, Buffer.from(secret.subarray(0, 32))]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const jwk = createPublicKey(key).export({ format: "jwk" });
+  const address = base58Encode(Buffer.from(String(jwk.x), "base64url"));
+  // Same defense as the EVM file: the stored address must derive from the key.
+  if (address !== parsed.address.trim()) return null;
+  if (secret.length === 64 && base58Encode(secret.subarray(32)) !== address) return null;
+  return {
+    address,
+    sign: (message) => base58Encode(cryptoSign(null, Buffer.from(message, "utf8"), key)),
+  };
 }

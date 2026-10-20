@@ -1,3 +1,4 @@
+import { createPublicKey, verify } from "node:crypto";
 import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { getConfig } from "../src/config.js";
 import { RedactionEngine } from "@crowdcode/redaction";
 import { buildIdentity } from "../src/canonical/identity.js";
 import { canonicalReviewPayload } from "../src/canonical/payload.js";
+import { base58Decode, base58Encode, payerLinkMessage } from "../src/canonical/solana.js";
 import { createToolHandlers } from "../src/server.js";
 import type { Upstream } from "../src/upstream.js";
 import { UpstreamError } from "../src/upstream.js";
@@ -536,5 +538,100 @@ describe("transparent review signing", () => {
         .content[0]!.text,
     );
     expect(second.onboarding_cta).toBeUndefined();
+  });
+});
+
+describe("x402 Solana payer linkage", () => {
+  beforeEach(() => resetWalletCache());
+
+  const SIG = "5eHrTHo8wSNNNf857kCqzX15YW1AaETvyDW5bAyv3EBZp57PFhXMGj4zoi9mYi9XGKEA5bCzNFTdm2mdaeLwH5uj";
+  const SOLANA_PAYEE = "53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t";
+  const SEED = Uint8Array.from({ length: 32 }, (_, i) => i);
+  const SOLANA_ADDRESS = "FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF";
+  const proof = (payer: string) => Buffer.from(JSON.stringify({
+    success: true, transaction: SIG, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer,
+  })).toString("base64");
+  const ARGS = {
+    rating: 5,
+    reason: "fresh results",
+    api_endpoint: "https://api.solana-seller.example/v1/search",
+    payment_provider: "x402",
+    payment_target_ref: SOLANA_PAYEE,
+  };
+
+  async function dirWithSolana(withSolana = true): Promise<string> {
+    const dir = await walletDirWith(KEY);
+    if (withSolana) {
+      await writeFile(join(dir, "solana-wallet.json"), JSON.stringify({
+        privateKey: base58Encode(SEED), address: SOLANA_ADDRESS, createdAt: "2026-01-01T00:00:00Z" }));
+    }
+    return dir;
+  }
+
+  function verifiesPayerLink(sent: Record<string, unknown>): boolean {
+    const message = canonicalReviewPayload({ identity: buildIdentity(sent), rating: 5,
+      reason: String(sent.reason), paymentReference: String(sent.payment_reference) });
+    const publicKey = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), base58Decode(SOLANA_ADDRESS)!]),
+      format: "der", type: "spki" });
+    return verify(null, Buffer.from(payerLinkMessage(ACCOUNT.address, message), "utf8"), publicKey,
+      base58Decode(String(sent.payer_signature))!);
+  }
+
+  async function run(args: Record<string, unknown>, dir: string,
+                     respond: (args: Record<string, unknown>) => Record<string, unknown> = () => ({ accepted: true })) {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream((name, sent) =>
+      name === "get_service_score" ? { found: false, reason: "service not found" } : respond(sent));
+    const handlers = createToolHandlers({ engine, upstream,
+      wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv } });
+    const result = JSON.parse((await handlers.review_service(args)).content[0]!.text);
+    return { result, reviews: upstream.calls.filter((c) => c.name === "review_service").map((c) => c.args) };
+  }
+
+  it("signs payer_signature with the agentcash Solana wallet", async () => {
+    const { reviews } = await run({ ...ARGS, payment_proof: proof(SOLANA_ADDRESS) }, await dirWithSolana());
+    expect(reviews).toHaveLength(1);
+    const sent = reviews[0]!;
+    expect(sent.payment_reference).toBe(`x402:solana:${SIG}`);
+    expect(sent.payer_wallet).toBeUndefined();
+    expect(verifiesPayerLink(sent)).toBe(true);
+    const message = canonicalReviewPayload({ identity: buildIdentity(sent), rating: 5,
+      reason: String(sent.reason), paymentReference: `x402:solana:${SIG}` });
+    expect(await verifyMessage({ address: ACCOUNT.address, message,
+      signature: sent.review_signature as `0x${string}` })).toBe(true);
+  });
+
+  it("signs proofless x402:solana references too", async () => {
+    const { reviews } = await run({ ...ARGS, payment_reference: `x402:solana:${SIG}` }, await dirWithSolana());
+    expect(verifiesPayerLink(reviews[0]!)).toBe(true);
+  });
+
+  it("does not sign when the proof names another payer or no Solana wallet exists", async () => {
+    const other = await run({ ...ARGS, payment_proof: proof("2b1JD7tcidGtAYCVm1dDKTgVHRoihSJ1uqz3jf9WwSLP") },
+      await dirWithSolana());
+    expect(other.reviews[0]!.payer_signature).toBeUndefined();
+    const none = await run({ ...ARGS, payment_reference: `x402:solana:${SIG}` }, await dirWithSolana(false));
+    expect(none.reviews[0]!.payer_signature).toBeUndefined();
+    expect(none.reviews[0]!.review_signature).toEqual(expect.any(String));
+  });
+
+  it("retries once as an unlinked observation when the local key was not the payer", async () => {
+    const { result, reviews } = await run({ ...ARGS, payment_reference: `x402:solana:${SIG}` },
+      await dirWithSolana(), (sent) => sent.payer_signature
+        ? { accepted: false, error_code: "payer_signature_invalid", reason: "payer_signature does not match" }
+        : { accepted: true, payment_verification_level: "signature_only" });
+    expect(reviews).toHaveLength(2);
+    expect(reviews[1]!.payer_signature).toBeUndefined();
+    expect(reviews[1]!.review_signature).toBe(reviews[0]!.review_signature);
+    expect(result.accepted).toBe(true);
+  });
+
+  it("never strips a caller-supplied payer_signature", async () => {
+    const { reviews, result } = await run({ ...ARGS, payment_reference: `x402:solana:${SIG}`, payer_signature: "abc" },
+      await dirWithSolana(), () => ({ accepted: false, error_code: "payer_signature_invalid" }));
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.payer_signature).toBe("abc");
+    expect(result.error_code).toBe("payer_signature_invalid");
   });
 });
