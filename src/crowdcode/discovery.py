@@ -36,6 +36,7 @@ import httpx
 import psycopg
 
 from crowdcode.identity import normalize_api_endpoint
+from crowdcode.networks import fetch_service_networks
 from crowdcode.scoring import as_float, is_unproven
 
 CDP_SEARCH_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/search"
@@ -158,12 +159,16 @@ def tokens(text: str) -> list[str]:
     return [w for w in dict.fromkeys(words) if len(w) >= 3 and w not in _STOPWORDS]
 
 
+def _matches(token: str, haystack: set[str]) -> bool:
+    # A shared six-letter stem matches word forms: "generation" and "generate-ics".
+    return token in haystack or any(w.startswith(token) or (len(token) >= 6 and w[:6] == token[:6]) for w in haystack)
+
+
 def relevance(query_tokens: list[str], text: str) -> float:
     if not query_tokens:
         return 0.0
     haystack = set(re.findall(r"[a-z0-9]+", text.lower()))
-    hits = sum(1 for t in query_tokens if t in haystack or any(w.startswith(t) for w in haystack))
-    return hits / len(query_tokens)
+    return sum(1 for t in query_tokens if _matches(t, haystack)) / len(query_tokens)
 
 
 def _endpoint(value: Any) -> str | None:
@@ -289,8 +294,12 @@ def caller_candidates(raw: Any, networks: Iterable[str]) -> list[Candidate]:
     return out
 
 
-def directory_candidates(rows: list[dict[str, Any]], query: str, limit: int = 6) -> list[Candidate]:
+def directory_candidates(rows: list[dict[str, Any]], query: str, limit: int = 6,
+                         networks: dict[str, dict[str, Any]] | None = None,
+                         payer_networks: Iterable[str] = DEFAULT_NETWORKS) -> list[Candidate]:
+    """Reviewed services matching the query, with the networks CrowdCode has seen them paid or advertised on."""
     query_tokens = tokens(query)
+    payer_networks = tuple(payer_networks)
     scored = []
     for row in rows:
         endpoint = _endpoint(row.get("canonical_endpoint"))
@@ -300,11 +309,10 @@ def directory_candidates(rows: list[dict[str, Any]], query: str, limit: int = 6)
         if score < 0.5:
             continue
         protocol = "mpp" if row.get("payment_provider") == "mppx" else "x402"
-        scored.append((score, Candidate(
-            endpoint=endpoint, name=row.get("name"),
-            offers=[Offer("tempo" if protocol == "mpp" else None, protocol, None, True if protocol == "mpp" else None)],
-            sources=["crowdcode"],
-        )))
+        seen = [n for n in ((networks or {}).get(row.get("id")) or {}).get("networks", []) if n in NETWORK_TOKENS]
+        offers = [Offer(n, "mpp" if n == "tempo" else "x402", None, n in payer_networks) for n in seen] or [
+            Offer("tempo" if protocol == "mpp" else None, protocol, None, ("tempo" in payer_networks) if protocol == "mpp" else None)]
+        scored.append((score, Candidate(endpoint=endpoint, name=row.get("name"), offers=offers, sources=["crowdcode"])))
     scored.sort(key=lambda item: -item[0])
     return [candidate for _, candidate in scored[:limit]]
 
@@ -546,7 +554,8 @@ def find_services(
     if conn_factory is not None:
         try:
             with conn_factory() as conn:
-                listed = _ordered(directory_candidates(directory_rows(conn), query))
+                listed = _ordered(directory_candidates(directory_rows(conn), query, networks=_service_networks(conn),
+                                                       payer_networks=payer_networks))
                 sources["crowdcode"] = {"ok": True, "count": len(listed)}
                 found.extend(listed)
                 merged = _merge(found)
@@ -568,6 +577,13 @@ def find_services(
         "total_matches": len(ranked),
         "sources": sources,
     }
+
+
+def _service_networks(conn: Any) -> dict[str, dict[str, Any]]:
+    try:
+        return fetch_service_networks(conn)
+    except Exception:  # network evidence only refines offers; never fail the search for it
+        return {}
 
 
 def _ordered(candidates: list[Candidate]) -> list[Candidate]:
