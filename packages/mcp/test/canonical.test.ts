@@ -6,6 +6,8 @@ import {
   normalizePaymentProvider,
 } from "../src/canonical/identity.js";
 import { canonicalReviewPayload, reasonHash } from "../src/canonical/payload.js";
+import { base58Decode, base58Encode, payerLinkMessage } from "../src/canonical/solana.js";
+import { createPrivateKey, sign } from "node:crypto";
 
 interface NormalizationVector {
   input: string | null;
@@ -47,7 +49,17 @@ const vectors = JSON.parse(
   provider_normalization: NormalizationVector[];
   service_id: ServiceIdVector[];
   review_payload: PayloadVector[];
+  payer_link: PayerLinkVector[];
 };
+
+interface PayerLinkVector {
+  payload: string;
+  reviewer_wallet: string;
+  payer_seed_base58: string;
+  payer: string;
+  expected_message: string;
+  expected_signature: string;
+}
 
 function checkNormalization(
   fn: (value: string | null) => string | null,
@@ -110,4 +122,22 @@ describe("canonicalReviewPayload", () => {
       expect(reasonHash(vector.reason)).toBe(vector.expected_reason_hash);
     });
   }
+});
+
+describe("payer link (Solana payer_signature)", () => {
+  it.each(vectors.payer_link.map((v) => [v.reviewer_wallet, v] as const))(
+    "matches the Python reference for %s",
+    (_name, vector) => {
+      const message = payerLinkMessage(vector.reviewer_wallet, vector.payload);
+      expect(message).toBe(vector.expected_message);
+      const seed = base58Decode(vector.payer_seed_base58)!;
+      const key = createPrivateKey({
+        key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
+        format: "der",
+        type: "pkcs8",
+      });
+      // Ed25519 is deterministic: the signature is a vector too.
+      expect(base58Encode(sign(null, Buffer.from(message, "utf8"), key))).toBe(vector.expected_signature);
+    },
+  );
 });

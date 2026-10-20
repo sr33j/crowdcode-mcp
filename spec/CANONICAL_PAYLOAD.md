@@ -88,6 +88,40 @@ identity** — it never parses the client's message. The client's signed message
 must therefore match the server's reconstruction byte-for-byte, including the
 resolved `service_id` (see Identity resolution below).
 
+### Solana payer link (`payer_signature`)
+
+x402 payments on Solana are made by a base58 ed25519 key, not by the EVM
+`reviewer_wallet`. The payer links its payment to the review with a separate
+signature; the canonical payload, its version, and the EIP-191 signature are
+unchanged (the payload's `payment_reference` is `x402:solana:<signature>`,
+base58 exactly as settled, never lowercased; `payment_target_ref` is the
+base58 Solana payee, trimmed but never lowercased).
+
+The payer signs the UTF-8 bytes of this message (three lines joined by `\n`,
+no trailing newline) with plain ed25519 — Solana wallet `signMessage`
+semantics, no prefix or envelope:
+
+```
+CrowdCode review payer link v1
+reviewer_wallet:<reviewer_wallet trimmed and lowercased>
+payload_sha256:<lowercase hex sha256 of the UTF-8 canonical payload message>
+```
+
+The payload is the exact message the reviewer signed (the server rebuilds it
+from its resolved identity, as for the EIP-191 signature). Committing to the
+reviewer wallet keeps one payer signature from being replayed by another
+reviewer. The signature is sent base58-encoded (64 bytes) as
+`payer_signature`, optionally with `payer_wallet` (the base58 payer address);
+the server verifies it against each payer of the transaction (or only
+`payer_wallet`). Coinbase CDP `cdp.solana.signMessage({ address, message })`
+produces exactly this encoding. When it fails, `review_service` returns the
+message to sign as `expected_payer_message`.
+
+Implementations: `payer_link_message` in `src/crowdcode/payments.py`,
+`payerLinkMessage` in `packages/mcp/src/canonical/solana.ts`; conformance
+vectors (with deterministic ed25519 signatures) under `payer_link` in
+`spec/review-payload-vectors.json`.
+
 ## Identity normalization (normative, feeds the payload)
 
 ### `normalize_api_endpoint`

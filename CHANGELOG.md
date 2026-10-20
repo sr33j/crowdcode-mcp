@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Verify x402 payments settled on Solana mainnet. Reference them as
+  `x402:solana:<base58 signature>` (case-sensitive; aliases `solana` and
+  `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) with the Solana payee as
+  `payment_target_ref`. The backend fetches the transaction over JSON-RPC
+  (`SOLANA_RPC_URL`, default `https://api.mainnet-beta.solana.com`), requires
+  success and an SPL USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
+  transfer from the payer's token account to the payee's. A new
+  `review_service` field, `payer_signature` (base58 ed25519 by the Solana payer
+  over the payer link message in `spec/CANONICAL_PAYLOAD.md`, optionally with
+  `payer_wallet`), links the payer to the EVM reviewer wallet and earns
+  `onchain_verified`. Without it the transfer is recorded as observed and the
+  review is admitted at `signature_only` under a reviewer-scoped key, without
+  reserving the reference, so nobody can claim or block a Solana payment they
+  did not send. A service may hold one EVM and one Solana payee; the first
+  verified Solana payment registers the latter. `cryptography` (already
+  installed through `mcp`) is now a direct dependency for ed25519. No schema
+  migration is required.
+
 - Verify x402 payments settled on Monad (`eip155:143`) like x402 on Base:
   a USDC (`0x754704Bc059F8C67012fEd69BC8A327a5aafb603`) `Transfer` from the
   reviewer wallet to the service payee. Reference a Monad settlement as

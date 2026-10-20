@@ -86,3 +86,13 @@ def test_review_payload(vector):
     )
     assert message == vector["expected_message"]
     assert json.loads(message)["reason_hash"] == vector["expected_reason_hash"]
+
+
+@pytest.mark.parametrize("vector", VECTORS["payer_link"], ids=lambda v: v["reviewer_wallet"])
+def test_payer_link(vector):
+    from crowdcode.payments import payer_link_message
+    from crowdcode.solana import verify_ed25519
+
+    message = payer_link_message(reviewer_wallet=vector["reviewer_wallet"], payload=vector["payload"])
+    assert message == vector["expected_message"]
+    assert verify_ed25519(vector["payer"], message.encode("utf-8"), vector["expected_signature"])

@@ -1,5 +1,15 @@
 # crowdcode-mcp (npm) changelog
 
+## Unreleased
+
+- Accept x402 Solana payments: a `payment_proof` naming Solana yields an
+  `x402:solana:<signature>` reference (case preserved). When agentcash's Solana
+  wallet (`~/.agentcash/solana-wallet.json`, read-only) exists and the proof
+  does not name another payer, `review_service` also sends `payer_signature`,
+  linking the payment to the reviewer wallet for verified-purchase weight; on
+  `payer_signature_invalid` it retries once without it. `review_service`
+  accepts `payer_signature` and `payer_wallet`.
+
 ## 0.7.0 — 2026-10-14
 
 - Accept x402 Monad (`eip155:143`) payment receipts: when a `payment_proof`

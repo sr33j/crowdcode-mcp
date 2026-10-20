@@ -467,13 +467,17 @@ def test_proof_still_rejects_a_genuinely_different_tx_hash(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("identity", "proof"),
+    ("identity", "proof", "error_code"),
     [
-        (IDENTITY, {"status": "success", "method": "solana", "reference": TX_HASH}),
-        (_x402_identity(), {"transaction": TX_HASH, "network": "solana"}),
+        # mppx has no Solana method; x402 Solana settles under a base58
+        # signature, so an EVM hash with a Solana proof is malformed.
+        (IDENTITY, {"status": "success", "method": "solana", "reference": TX_HASH},
+         "unsupported_payment_chain"),
+        (_x402_identity(), {"transaction": TX_HASH, "network": "solana"},
+         "unsupported_payment_reference"),
     ],
 )
-def test_solana_machine_payments_are_explicitly_unsupported(identity, proof):
+def test_evm_hash_solana_payment_claims_are_unsupported(identity, proof, error_code):
     reason = "solid data"
     verification = verify_review_payment(
         identity=identity,
@@ -485,7 +489,7 @@ def test_solana_machine_payments_are_explicitly_unsupported(identity, proof):
         review_signature=_signed_for(identity, reason),
     )
     assert not verification.ok
-    assert verification.error_code == "unsupported_payment_chain"
+    assert verification.error_code == error_code
     assert not verification.retryable
 
 

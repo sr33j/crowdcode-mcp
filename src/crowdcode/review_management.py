@@ -8,7 +8,11 @@ from typing import Any
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-from crowdcode.payments import _normalize_evm_address, canonical_payment_reference
+from crowdcode.payments import (
+    UNLINKED_REFERENCE_PREFIX,
+    _normalize_evm_address,
+    canonical_payment_reference,
+)
 
 
 def management_message(action: str, wallet: str, expires_at: int,
@@ -38,7 +42,12 @@ def authorize(action: str, reviewer_wallet: str, expires_at: int,
     return wallet.lower()
 
 
-def review_replay_key(wallet: str | None, reference: str | None, nonce: str | None) -> str:
+def review_replay_key(wallet: str | None, reference: str | None, nonce: str | None,
+                      *, stored_canonical: str | None = None) -> str:
+    # Unlinked Solana observations store no payment_reference; their
+    # reviewer-scoped canonical key keeps deletion from blocking the payer.
+    if reference is None and stored_canonical and stored_canonical.startswith(UNLINKED_REFERENCE_PREFIX):
+        return hashlib.sha256(f"payment:{stored_canonical}".encode()).hexdigest()
     if reference is not None:
         value = "payment:" + canonical_payment_reference(reference)
     else:

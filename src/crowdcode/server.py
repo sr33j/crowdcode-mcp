@@ -34,6 +34,7 @@ from crowdcode.payments import (
     canonical_payment_reference,
     canonical_review_payload,
     canonical_review_payload_from_hash,
+    unlinked_reference_key,
     utc_now,
     verify_review_payment,
 )
@@ -584,14 +585,15 @@ def delete_my_review(
     with connect() as conn:
         lock_review_writes(conn)
         row = conn.execute(
-            """select service_id, payment_reference, review_nonce from reviews
-               where id = %s and lower(reviewer_wallet) = %s for update""",
+            """select service_id, payment_reference, review_nonce, payment_reference_canonical
+               from reviews where id = %s and lower(reviewer_wallet) = %s for update""",
             (review_id, wallet),
         ).fetchone()
         if row is None:
             return {"accepted": True, "deleted": False, "review_id": review_id,
                     "reason": "No matching review owned by this wallet"}
-        key = review_replay_key(wallet, row["payment_reference"], row["review_nonce"])
+        key = review_replay_key(wallet, row["payment_reference"], row["review_nonce"],
+                                stored_canonical=row["payment_reference_canonical"])
         conn.execute("insert into deleted_review_keys(replay_key) values (%s) on conflict do nothing", (key,))
         conn.execute("delete from reviews where id = %s", (review_id,))
         # Trust can affect scores and narrative selection for other services.
@@ -623,6 +625,8 @@ def review_service(
     reviewer_wallet: str | None = None,
     review_signature: str | None = None,
     signature_scheme: str = "eip191",
+    payer_signature: str | None = None,
+    payer_wallet: str | None = None,
 ) -> dict[str, Any]:
     """Review a service experience, whether or not payment occurred.
 
@@ -639,9 +643,14 @@ def review_service(
 
     When claiming payment, use the actual settlement reference and payee.
     x402 Base/Monad USDC and mppx Tempo claims require a verified on-chain transfer
-    from reviewer_wallet to the service payee. Optional payment_proof is the
-    original base64 response header, not decoded JSON. Invalid supplied payment
-    evidence is rejected; it is never downgraded into an unpaid review.
+    from reviewer_wallet to the service payee. x402 Solana USDC is referenced as
+    x402:solana:<base58 signature> with the Solana payee as payment_target_ref;
+    it counts as verified only with payer_signature, the Solana payer's base58
+    ed25519 signature over the payer link message (spec/CANONICAL_PAYLOAD.md),
+    optionally naming payer_wallet. Without it the payment is recorded as
+    observed and the review is weighted as unverified. Optional payment_proof
+    is the original base64 response header, not decoded JSON. Invalid supplied
+    payment evidence is rejected; it is never downgraded into an unpaid review.
     """
     reason = reason.strip()
     payment_reference = payment_reference.strip() if payment_reference is not None else None
@@ -695,6 +704,8 @@ def review_service(
             reviewer_wallet=reviewer_wallet,
             review_signature=review_signature,
             signature_scheme=signature_scheme,
+            payer_signature=payer_signature,
+            payer_wallet=payer_wallet,
         )
         if not verification.ok:
             status = (
@@ -712,6 +723,8 @@ def review_service(
                 "accepted": False,
                 "reason": verification.reason,
             }
+            if verification.expected_payer_message:
+                failure["expected_payer_message"] = verification.expected_payer_message
             if verification.missing_wallet:
                 failure["next_step"] = _next_step(
                     "install_wallet",
@@ -756,9 +769,22 @@ def review_service(
         # after signature/on-chain verification to prevent public tx-hash
         # front-running. The unique index remains the concurrency backstop.
         canonical_reference = canonical_payment_reference(payment_reference) if payment_reference is not None else None
+        # An unlinked Solana observation is stored under a reviewer-scoped key
+        # and without payment_reference, so it can neither reserve nor (via
+        # deletion) block the payment for the payer who later links it.
+        own_reference = (
+            unlinked_reference_key(verification.reviewer_wallet, canonical_reference)
+            if canonical_reference is not None and verification.reviewer_wallet
+            else None
+        )
+        stored_reference = payment_reference if verification.claims_reference else None
+        stored_canonical = verification.canonical_reference or canonical_reference
         lock_review_writes(conn)
-        replay_key = review_replay_key(verification.reviewer_wallet, payment_reference, review_nonce)
-        if conn.execute("select replay_key from deleted_review_keys where replay_key = %s", (replay_key,)).fetchone():
+        replay_keys = [review_replay_key(verification.reviewer_wallet, payment_reference, review_nonce)]
+        if not verification.claims_reference:
+            replay_keys.append(review_replay_key(
+                verification.reviewer_wallet, None, None, stored_canonical=stored_canonical))
+        if conn.execute("select replay_key from deleted_review_keys where replay_key = any(%s)", (replay_keys,)).fetchone():
             return {"accepted": False, "status": "rejected", "retryable": False,
                     "error_code": "review_deleted", "reason": "This review was deleted; do not resubmit it"}
         if review_nonce and service is not None:
@@ -774,8 +800,9 @@ def review_service(
                  and lower(payment_reference_canonical) = lower(%s)
                )
                or payment_reference = %s
+               or payment_reference_canonical = %s
             """,
-            (canonical_reference, canonical_reference, payment_reference),
+            (canonical_reference, canonical_reference, payment_reference, own_reference),
         ).fetchone()
         if existing is not None:
             return {
@@ -811,7 +838,9 @@ def review_service(
             task_context = redacted[1]
 
         if service is None:
-            created = create_service_from_identity(conn, identity, payment_verified=payment_reference is not None)
+            created = create_service_from_identity(
+                conn, identity, payment_verified=stored_reference is not None
+            )
             if created.error:
                 return {"accepted": False, "reason": created.error}
             service = created.row
@@ -844,7 +873,7 @@ def review_service(
                     service["id"],
                     rating,
                     reason,
-                    payment_reference,
+                    stored_reference,
                     task_context,
                     verification.reviewer_id,
                     effective_identity.payment_provider,
@@ -861,7 +890,7 @@ def review_service(
                     verification.amount,
                     verification.payment_verification_level,
                     Jsonb(verification.payment_verification_metadata or {}),
-                    verification.canonical_reference or canonical_reference,
+                    stored_canonical,
                     review_nonce,
                 ),
             ).fetchone()

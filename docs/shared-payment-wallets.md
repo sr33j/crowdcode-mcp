@@ -20,7 +20,10 @@ review registers it. Existing service identities still reject unregistered
 endpoint aliases and payment destinations. Wallet-only lookup succeeds only
 when exactly one service matches; otherwise the caller must supply the endpoint
 or service ID. Machine-payment aliases remain case-insensitive and can span
-x402 (Base or Monad) and mppx/Tempo for the same registered EVM payee.
+x402 (Base or Monad) and mppx/Tempo for the same registered EVM payee. A
+service may also hold one x402 Solana payee (base58, matched exactly); the
+first verified Solana payment registers it as a `payment_target` identifier
+(docs/SCORING.md §3.4 rule 8).
 
 Registration takes a transaction advisory lock and re-resolves the endpoint to
 avoid duplicate services during concurrent first reviews. A transfer proves

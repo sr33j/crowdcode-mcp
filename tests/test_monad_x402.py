@@ -108,7 +108,7 @@ def test_base_network_aliases(value):
     assert x402_network(value) == "base"
 
 
-@pytest.mark.parametrize("value", ["solana", "eip155:1", "", None, 143.5])
+@pytest.mark.parametrize("value", ["solana:devnet", "eip155:1", "", None, 143.5])
 def test_unknown_networks_are_unsupported(value):
     assert x402_network(value) is None
 

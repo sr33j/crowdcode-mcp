@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { loadWallet, resetWalletCache } from "../src/wallet.js";
+import { createPublicKey, verify } from "node:crypto";
+import { base58Decode, base58Encode } from "../src/canonical/solana.js";
+import { loadSolanaWallet, loadWallet, resetWalletCache } from "../src/wallet.js";
 
 const KEY = ("0x" + "42".repeat(32)) as `0x${string}`;
 const ACCOUNT = privateKeyToAccount(KEY);
@@ -137,5 +139,48 @@ describe("loadWallet", () => {
     });
     expect(wallet.source).toBe("none");
     await expect(stat(join(dir, "wallet.json"))).rejects.toThrow();
+  });
+});
+
+describe("loadSolanaWallet", () => {
+  // agentcash's svm wallet shape: base58 of the 32-byte ed25519 seed.
+  const SEED = Uint8Array.from({ length: 32 }, (_, i) => i);
+  const ADDRESS = "FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF"; // spec/review-payload-vectors.json
+
+  async function withFile(contents: unknown): Promise<string> {
+    const dir = await tempDir();
+    await writeFile(join(dir, "solana-wallet.json"), JSON.stringify(contents));
+    return dir;
+  }
+
+  it("loads the agentcash Solana wallet and signs ed25519 in base58", async () => {
+    const dir = await withFile({ privateKey: base58Encode(SEED), address: ADDRESS, createdAt: "2026-01-01" });
+    const wallet = await loadSolanaWallet(dir);
+    expect(wallet?.address).toBe(ADDRESS);
+    const signature = base58Decode(wallet!.sign("hello"))!;
+    const publicKey = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), base58Decode(ADDRESS)!]),
+      format: "der",
+      type: "spki",
+    });
+    expect(verify(null, Buffer.from("hello"), publicKey, signature)).toBe(true);
+  });
+
+  it("accepts a 64-byte seed+pubkey secret", async () => {
+    const secret = Uint8Array.from([...SEED, ...base58Decode(ADDRESS)!]);
+    const dir = await withFile({ privateKey: base58Encode(secret), address: ADDRESS });
+    expect((await loadSolanaWallet(dir))?.address).toBe(ADDRESS);
+  });
+
+  it("returns null for missing, malformed, or mismatched files and never creates one", async () => {
+    const empty = await tempDir();
+    expect(await loadSolanaWallet(empty)).toBeNull();
+    await expect(stat(join(empty, "solana-wallet.json"))).rejects.toThrow();
+    expect(await loadSolanaWallet(await withFile({ privateKey: "0OIl", address: ADDRESS }))).toBeNull();
+    expect(await loadSolanaWallet(await withFile({
+      privateKey: base58Encode(SEED), address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }))).toBeNull();
+    const dir = await tempDir();
+    await writeFile(join(dir, "solana-wallet.json"), "not json");
+    expect(await loadSolanaWallet(dir)).toBeNull();
   });
 });

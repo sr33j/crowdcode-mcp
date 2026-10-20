@@ -30,6 +30,14 @@ Current behavior:
 
 Future Stripe verification should be implemented here first.
 
+## `src/crowdcode/solana.py`
+
+Solana primitives for x402 Solana verification: base58, ed25519 verification
+(`cryptography`), `getTransaction` over JSON-RPC, and extraction of pinned-USDC
+SPL transfers into the payee's token accounts. Payer linkage
+(`payer_signature`) and admission rules live in `payments.py`
+(docs/SCORING.md §3.4 rule 8).
+
 ## `src/crowdcode/scoring.py`
 
 Contains simple scoring helpers:

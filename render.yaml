@@ -47,6 +47,10 @@ services:
       # x402 Monad RPC (e.g. Alchemy); falls back to https://rpc.monad.xyz.
       - key: X402_MONAD_RPC_URL
         sync: false
+      # x402 Solana RPC (e.g. Alchemy); falls back to the rate-limited
+      # https://api.mainnet-beta.solana.com.
+      - key: SOLANA_RPC_URL
+        sync: false
 
   # Nightly batch (docs/SCORING.md §8.2): consistency sweep, per-service
   # review summaries, requested-services summary.

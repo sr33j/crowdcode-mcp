@@ -23,7 +23,8 @@ from crowdcode.identity import (  # noqa: E402
     normalize_api_endpoint,
     normalize_payment_provider,
 )
-from crowdcode.payments import canonical_review_payload  # noqa: E402
+from crowdcode.payments import canonical_review_payload, payer_link_message  # noqa: E402
+from crowdcode.solana import b58encode  # noqa: E402
 
 
 ENDPOINT_INPUTS = [
@@ -71,6 +72,12 @@ SERVICE_ID_INPUTS = [
         "api_endpoint": "https://svc.example.com/",
         "payment_provider": "stripe",
         "payment_target_ref": "acct_123",
+    },
+    {
+        # Solana payees are case-sensitive base58: trimmed, never lowercased.
+        "api_endpoint": "https://api.solana-seller.example/v1/search",
+        "payment_provider": "x402",
+        "payment_target_ref": " 53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t ",
     },
 ]
 
@@ -246,6 +253,51 @@ REVIEW_PAYLOAD_INPUTS.append({
 })
 
 
+SOLANA_SIGNATURE = "5eHrTHo8wSNNNf857kCqzX15YW1AaETvyDW5bAyv3EBZp57PFhXMGj4zoi9mYi9XGKEA5bCzNFTdm2mdaeLwH5uj"
+REVIEW_PAYLOAD_INPUTS.append({
+    "name": "x402 solana payee and base58 reference (case preserved)",
+    "identity": {"service_id": "svc_0123456789abcdef0123",
+                 "api_endpoint": "https://api.solana-seller.example/v1/search",
+                 "payment_provider": "x402",
+                 "payment_target_ref": "53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t",
+                 "directory_slug": None},
+    "rating": 5,
+    "reason": "Fresh results in 300 ms",
+    "payment_reference": f"x402:solana:{SOLANA_SIGNATURE}",
+})
+
+# Deterministic ed25519 test key (RFC 8032 keys are 32-byte seeds).
+PAYER_SEED = bytes(range(32))
+PAYER_LINK_INPUTS = [
+    {"payload_case": "x402 solana payee and base58 reference (case preserved)",
+     "reviewer_wallet": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"},
+    {"payload_case": "full identity, ascii",
+     "reviewer_wallet": "0x0000000000000000000000000000000000000001"},
+]
+
+
+def payer_link_vectors(payloads: list[dict]) -> list[dict]:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    key = Ed25519PrivateKey.from_private_bytes(PAYER_SEED)
+    payer = b58encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+    by_name = {vector["name"]: vector["expected_message"] for vector in payloads}
+    vectors = []
+    for case in PAYER_LINK_INPUTS:
+        payload = by_name[case["payload_case"]]
+        message = payer_link_message(reviewer_wallet=case["reviewer_wallet"], payload=payload)
+        vectors.append({
+            "payload": payload,
+            "reviewer_wallet": case["reviewer_wallet"],
+            "payer_seed_base58": b58encode(PAYER_SEED),
+            "payer": payer,
+            "expected_message": message,
+            "expected_signature": b58encode(key.sign(message.encode("utf-8"))),
+        })
+    return vectors
+
+
 def review_payload_vectors() -> list[dict]:
     vectors = []
     for case in REVIEW_PAYLOAD_INPUTS:
@@ -282,6 +334,7 @@ def main() -> None:
         "service_id": service_id_vectors(),
         "review_payload": review_payload_vectors(),
     }
+    out["payer_link"] = payer_link_vectors(out["review_payload"])
     target = REPO_ROOT / "spec" / "review-payload-vectors.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(out, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")

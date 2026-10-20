@@ -25,6 +25,7 @@ import {
 import {
   prepareSignedReview,
   resignFromMismatch,
+  withoutPayerSignature,
   installWalletNextStep,
   type PreparedReview,
   type WalletOptions,
@@ -312,9 +313,17 @@ export function createToolHandlers(deps: ServerDeps) {
       // Signature-mismatch recovery (identity resolution race): re-sign the
       // backend's expected_message once with the same wallet and retry. A
       // second mismatch is surfaced to the caller.
+      let sentArgs = prepared.args;
       const retryArgs = await resignFromMismatch(prepared, payload);
       if (retryArgs !== null) {
+        sentArgs = retryArgs;
         payload = await forwardPayload("review_service", retryArgs);
+      }
+      // The local Solana key signed the payer link speculatively; if it was
+      // not this transaction's payer, submit once as an unlinked observation.
+      const unlinkedArgs = withoutPayerSignature(prepared, sentArgs, payload);
+      if (unlinkedArgs !== null) {
+        payload = await forwardPayload("review_service", unlinkedArgs);
       }
       return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for concrete improvements worth paying for, grounded in this task. Skip if all worked well; do not duplicate earlier requests." });
     },
@@ -349,8 +358,9 @@ const SERVER_INSTRUCTIONS = [
   "insufficient funds, and uncertain causes. Do not invent payment evidence.",
   "When claiming payment, use the actual settlement reference and payee.",
   "An optional payment_proof is the original base64 response header. Payment",
-  "claims must verify on x402 Base/Monad USDC or mppx Tempo. Reference an x402",
-  "Monad (eip155:143) settlement as x402:monad:<tx_hash>. Invalid supplied claims",
+  "claims must verify on x402 Base/Monad/Solana USDC or mppx Tempo. Reference an x402",
+  "Monad (eip155:143) settlement as x402:monad:<tx_hash> and a Solana settlement as",
+  "x402:solana:<signature> with the Solana payee. Invalid supplied claims",
   "are rejected, never silently downgraded. Payment verification gives the",
   "existing verified scoring weight; unpaid signed reviews share the same",
   "history, score, and per-wallet/service/day influence cap.",
@@ -469,8 +479,10 @@ export function buildServer(deps: ServerDeps): McpServer {
         "Use a stable review_nonce for unpaid retries (generated automatically if omitted). " +
         "For paid reviews, supply the actual settlement reference and payee; optional " +
         "payment_proof is the original base64 response header. Claims must verify on " +
-        "x402 Base/Monad USDC or mppx Tempo; reference an x402 Monad (eip155:143) settlement " +
-        "as x402:monad:<tx_hash>. Invalid payment evidence is rejected, never downgraded. " +
+        "x402 Base/Monad/Solana USDC or mppx Tempo; reference an x402 Monad (eip155:143) settlement " +
+        "as x402:monad:<tx_hash> and a Solana one as x402:solana:<signature> (Solana payee as " +
+        "payment_target_ref; the agentcash Solana wallet signs payer_signature automatically). " +
+        "Invalid payment evidence is rejected, never downgraded. " +
         "Daily scoring influence is capped. Review text is redacted locally.",
       inputSchema: reviewServiceShape,
     },
