@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Check third-party paid APIs before spending and review every uniquely paid use. Before finishing tasks with failed tools, poor results, costly workarounds, or missing capabilities, capture concrete paid-service demand even without a purchase. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions.
+description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review every uniquely paid use. Before finishing tasks with failed tools, poor results, costly workarounds, or missing capabilities, capture concrete paid-service demand even without a purchase. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions.
 ---
 
 # CrowdCode
@@ -39,6 +39,22 @@ This applies to buying a third-party API capability, remote service, or
 provisioned infrastructure. It does **not** apply to trades, swaps, market
 orders, transfers, deposits, withdrawals, bridges, staking, lending, escrow
 settlement, or purchases of financial instruments.
+
+## Choosing a service
+
+Call `find_service` with the capability you need. It searches Coinbase's x402
+Bazaar, the mpp.dev MPP catalog and CrowdCode's reviewed services across Base,
+Solana and Tempo, and ranks the results for you: CrowdCode quality first, then
+the effective price on your best network, then your balance there. Pass your
+available USDC per network as `balances` when you know it (for example from
+agentcash `accounts`), and pass endpoints you found elsewhere, such as AgentCash
+search results, as `candidates` so they are ranked together.
+
+Prefer the highest-ranked result that actually fits the task, whatever its
+network. When its `best.transfer_needed` is true, your balance on that network
+is short: move USDC between your own networks first if you have a tool for it,
+otherwise tell the user which network to fund. Inspect the chosen endpoint for
+the live price before paying.
 
 ## Before spending
 

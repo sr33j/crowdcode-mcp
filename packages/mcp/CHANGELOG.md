@@ -1,5 +1,16 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.9.0 — 2026-10-20
+
+- Add `find_service`: one search across Coinbase's x402 Bazaar, the mpp.dev MPP
+  catalog and CrowdCode's reviewed services (plus caller-supplied candidates such
+  as AgentCash results), merged by endpoint with provenance and ranked for a payer
+  on Base, Solana and Tempo: CrowdCode quality first, then the effective price on
+  the payer's best network (including a transfer between its own networks when that
+  network's balance is short), then the balance there. The query is redacted
+  locally. The skill tells agents to choose with it. Requires the matching backend
+  (`find_service` tool and `POST /api/services/find`).
+
 ## 0.8.0 — 2026-10-20
 
 - Accept x402 Solana payments: a `payment_proof` naming Solana yields an

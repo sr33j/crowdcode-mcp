@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from crowdcode.db import connect
+from crowdcode.discovery import find_services
 from crowdcode.identity import (
     build_identity,
     create_service_from_identity,
@@ -278,6 +279,32 @@ def request_service(
         "directory_match": row["directory_match"],
         "requests_remaining_today": limit_check.remaining,
     }
+
+
+@mcp.tool()
+@_stable_tool
+def find_service(
+    query: str,
+    networks: list[str] | None = None,
+    balances: dict[str, float] | None = None,
+    candidates: list[dict[str, Any]] | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Find the best paid service for a capability across Base, Solana and Tempo.
+
+    Searches Coinbase's x402 Bazaar, the mpp.dev MPP catalog and CrowdCode's
+    reviewed services, merges them by endpoint, and ranks for this payer:
+    CrowdCode quality first, then effective price on the payer's best network
+    (adding one transfer between its own networks when that network's balance
+    is short), then the balance there. `networks`: networks the payer can pay
+    on (default base, solana, tempo). `balances`: available USDC per network,
+    e.g. {"base": 1.2, "solana": 0.4, "tempo": 0}. `candidates`: endpoints
+    found elsewhere (e.g. AgentCash search) to rank together, each
+    {endpoint, method?, name?, price_usd?, network?, protocol?, source?}.
+    Inspect the chosen endpoint for its live quote before paying.
+    """
+    return find_services(query, networks=networks, balances=balances,
+                         candidates=candidates, limit=limit, conn_factory=connect)
 
 
 @mcp.tool()
@@ -1370,6 +1397,23 @@ async def all_services(_: Request) -> JSONResponse:
     return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
 
 
+async def find_services_route(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_request")
+    if not isinstance(body, dict) or not isinstance(body.get("query"), str) or not body["query"].strip():
+        return _json_error("query is required", status_code=400, error_code="invalid_request")
+    try:
+        payload = await run_in_threadpool(
+            find_services, body["query"], networks=body.get("networks"), balances=body.get("balances"),
+            candidates=body.get("candidates"), limit=body.get("limit"), conn_factory=connect,
+        )
+    except Exception:
+        return _unexpected_json_error("find_services")
+    return JSONResponse(payload)
+
+
 async def service_detail(request: Request) -> JSONResponse:
     service_id = request.path_params["service_id"]
     try:
@@ -1406,6 +1450,7 @@ def create_app() -> Starlette:
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
+            Route("/api/services/find", find_services_route, methods=["POST"]),
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             *mcp_app.routes,

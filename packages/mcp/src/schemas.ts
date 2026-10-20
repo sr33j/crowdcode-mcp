@@ -69,6 +69,41 @@ export const requestServiceShape = {
 
 export const getServiceScoreShape = { ...identityShape };
 
+export const findServiceShape = {
+  query: z.string().min(1).max(500).describe("The capability you need, in plain words (redacted locally before sending)"),
+  networks: z
+    .array(z.string())
+    .nullish()
+    .describe("Networks you can pay on: base, solana, tempo (default all three)"),
+  balances: z
+    .record(z.string(), z.number())
+    .nullish()
+    .describe(
+      "Available USDC per network, e.g. {\"base\": 1.2, \"solana\": 0.4, \"tempo\": 0}. " +
+        "Lets the ranking add a transfer cost where a network's balance is short.",
+    ),
+  candidates: z
+    .array(
+      z.object({
+        endpoint: z.string(),
+        method: z.string().nullish(),
+        name: z.string().nullish(),
+        description: z.string().nullish(),
+        price_usd: z.number().nullish(),
+        network: z.string().nullish(),
+        networks: z.array(z.string()).nullish(),
+        protocol: z.string().nullish(),
+        protocols: z.array(z.string()).nullish(),
+        unique_payers: z.number().nullish(),
+        source: z.string().nullish(),
+      }).passthrough(),
+    )
+    .max(50)
+    .nullish()
+    .describe("Endpoints you found elsewhere (for example AgentCash search) to rank together with the catalogs"),
+  limit: z.number().int().min(1).max(25).nullish(),
+};
+
 export const signingPayloadShape = {
   rating: z.number().int().describe(RATING_DESCRIPTION),
   reason: z.string().describe("Review text (redacted locally before hashing)"),
@@ -140,6 +175,7 @@ export const reviewServiceShape = {
 };
 
 export const MIRRORED_REMOTE_TOOLS = [
+  "find_service",
   "request_service",
   "get_service_score",
   "review_service",
