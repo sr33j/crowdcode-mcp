@@ -1,6 +1,6 @@
 {
   "name": "crowdcode",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Check paid agent services before spending and submit payment-verified reviews afterward.",
   "author": {
     "name": "CrowdCode",

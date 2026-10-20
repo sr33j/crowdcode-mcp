@@ -17,6 +17,7 @@ import { getConfig } from "./config.js";
 import { redactArgs } from "./redaction/policy.js";
 import {
   MIRRORED_REMOTE_TOOLS,
+  findServiceShape,
   getServiceScoreShape,
   requestServiceShape,
   reviewServiceShape,
@@ -75,6 +76,10 @@ function errorPayload(
       reason: "CrowdCode is temporarily unavailable",
       next_step,
     };
+  }
+  if (tool === "find_service") {
+    return { status: "unavailable", error_code: "backend_unavailable", retryable: true, ok: false,
+      services: [], reason: "CrowdCode is temporarily unavailable", next_step };
   }
   return {
     status: "unavailable",
@@ -204,6 +209,9 @@ export function createToolHandlers(deps: ServerDeps) {
       return toToolResult({ ...await forwardPayload("request_service", outgoing),
         ...(walletCreated ? { wallet_created: true, wallet_source: "agentcash" } : {}) });
     },
+
+    find_service: async (args: Record<string, unknown>): Promise<ToolResult> =>
+      toToolResult(await forwardPayload("find_service", args)),
 
     get_service_score: async (
       args: Record<string, unknown>,
@@ -339,6 +347,12 @@ const SERVER_INSTRUCTIONS = [
   "transfers, deposits, withdrawals, bridges, staking, lending, escrow",
   "settlement, or purchases of financial instruments.",
   "",
+  "Choosing a service: call find_service with the capability and, when known, your",
+  "USDC balance per network. It searches every catalog across Base, Solana and Tempo",
+  "and ranks by CrowdCode quality, then effective price (including a transfer between",
+  "your own networks when one is short), then balance. Prefer the top result that fits",
+  "the task, whatever its network.",
+  "",
   "Before spending: call get_service_score on each candidate (prefer",
   "api_endpoint + payment_provider + payment_target_ref, or service_id /",
   "directory_slug). Prefer higher `score` (the canonical trust-weighted",
@@ -386,7 +400,7 @@ const SERVER_INSTRUCTIONS = [
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.8.0" },
+    { name: "crowdcode", version: "0.9.0" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -430,6 +444,25 @@ export function buildServer(deps: ServerDeps): McpServer {
       inputSchema: requestServiceShape,
     },
     (args) => handlers.request_service(args),
+  );
+
+  server.registerTool(
+    "find_service",
+    {
+      description:
+        "Find the best paid service for a capability across Base, Solana and Tempo. " +
+        "Searches Coinbase's x402 Bazaar, the mpp.dev MPP catalog and CrowdCode's reviewed " +
+        "services, merges them by endpoint, and ranks them: CrowdCode quality first, then the " +
+        "effective price on your best network (plus one transfer between your own networks when " +
+        "that network's balance is short), then your balance there. Pass your per-network " +
+        "`balances` when known, and endpoints found elsewhere (for example AgentCash search) as " +
+        "`candidates`. Each result names its best network, offers, quality evidence and sources. " +
+        "Catalog prices can be dynamic: inspect the chosen endpoint for its live quote before paying. " +
+        "The query is redacted locally.",
+      inputSchema: findServiceShape,
+      annotations: { readOnlyHint: true },
+    },
+    (args) => handlers.find_service(args),
   );
 
   server.registerTool(

@@ -97,6 +97,23 @@ describe("tool handlers", () => {
     expect(String(submitted.args.reason)).toContain("[EMAIL_1]");
   });
 
+  it("redacts the find_service query and forwards ranking inputs", async () => {
+    const engine = await makeEngine();
+    const upstream = fakeUpstream(() => ({ ok: true, services: [{ rank: 1, endpoint: "https://s.example/a" }] }));
+    const handlers = createToolHandlers({ engine, upstream });
+    const result = await handlers.find_service({
+      query: "token risk scan, email me at jane@corp.com",
+      balances: { base: 1.5, solana: 0 },
+      candidates: [{ endpoint: "https://a.example/x", source: "agentcash" }],
+    });
+    const sent = upstream.calls[0]!;
+    expect(sent.name).toBe("find_service");
+    expect(sent.args.query).not.toContain("jane@corp.com");
+    expect(sent.args.balances).toEqual({ base: 1.5, solana: 0 });
+    expect(sent.args.candidates).toEqual([{ endpoint: "https://a.example/x", source: "agentcash" }]);
+    expect(JSON.parse(result.content[0]!.text).services[0].rank).toBe(1);
+  });
+
   it("forwards get_service_score untouched", async () => {
     const engine = await makeEngine();
     const upstream = fakeUpstream(() => ({ found: true, avg_rating: 4.5 }));
