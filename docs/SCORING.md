@@ -84,7 +84,7 @@ wᵢ = weight(wallet) × proof(i) × decay(Δtᵢ)
   |---|---|---|
   | `unverified` | 1 | nothing beyond admission (legacy/placeholder providers) |
   | `signature_only` | 1 | wallet signature over the review; payment not verified |
-  | `onchain_verified` | 2 | on-chain ERC-20 transfer, reviewer wallet → service payee, pinned token |
+  | `onchain_verified` | 2 | on-chain ERC-20 transfer, reviewer wallet → service payee, pinned token (Solana: SPL USDC transfer, payer → payee, payer linked to the reviewer by `payer_signature`) |
   | `response_attested` | 2 | reserved: signed receipt binding payment to a specific request/response |
 
   "Verified purchase" means exactly `onchain_verified`: a successful receipt
@@ -142,12 +142,17 @@ invalid payment claims are rejected rather than automatically slashing wallets.
 ### 3.4 Admissibility (hard gates, before any math)
 
 1. Valid EIP-191 signature by `reviewer_wallet` over the canonical payload.
+   For x402 Solana, the payer is additionally linked by `payer_signature`
+   (rule 8).
 2. Every unique verified payment may produce a stored review. Scoring and
    trust aggregate all reviews for one wallet/resource/UTC day into one capped
    bucket; there is no review-ingest throttle.
 3. `payment_reference` unique on its **canonical form** (provider prefixes
-   like `x402:base:` / `x402:monad:` stripped) — the same settlement tx can never yield two
-   reviews under different spellings.
+   like `x402:base:` / `x402:monad:` / `x402:solana:` stripped; EVM hashes
+   lowercased, Solana base58 signatures kept case-sensitive) — the same
+   settlement tx can never yield two reviews under different spellings. Only a
+   review that proves the payer (EVM: the Transfer is from `reviewer_wallet`;
+   Solana: a valid `payer_signature`) reserves it.
 4. A **supplied** payment proof must fully verify (receipt status 1, Transfer
    `from` == reviewer, `to` == payment_target_ref, **token pinned** — USDC on
    Base for x402, `MPPX_TEMPO_TOKEN_ADDRESS` on Tempo for mppx — **amount ≥
@@ -164,9 +169,41 @@ invalid payment claims are rejected rather than automatically slashing wallets.
 7. New machine-payment verification supports x402 USDC on Base and Monad
    (`eip155:143`, referenced as `x402:monad:<tx>` or named by the proof's
    `network`; the chain is stored in `payment_verification_metadata.network`
-   and reused by re-verification) and mppx on Tempo. Solana and all other chains are explicitly unsupported; they never
+   and reused by re-verification), x402 USDC on Solana (rule 8) and mppx on
+   Tempo. All other chains are explicitly unsupported; they never
    fall back to `signature_only` on a failed payment claim. Omitting all payment
    evidence instead admits an authenticated unpaid review at `signature_only`.
+8. **x402 on Solana** (`x402:solana:<base58 signature>`, or a proof whose
+   `network` is `solana` / `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`). The
+   backend calls `getTransaction` (`jsonParsed`, commitment `confirmed`) on
+   `SOLANA_RPC_URL`, requires `meta.err == null`, and sums SPL
+   `transfer`/`transferChecked` instructions of the classic token program for
+   the pinned USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`) from
+   token accounts owned by the payer into token accounts owned by
+   `payment_target_ref` (owners and mints from the runtime's token-balance
+   records), capped by the payee's net balance increase. The facilitator pays
+   the fees, and the payer is a base58 key, never the EVM `reviewer_wallet`.
+   Linkage is a base58 ed25519 `payer_signature` by a payer of the transaction
+   over the payer link message (spec/CANONICAL_PAYLOAD.md), which commits to
+   the canonical payload and the reviewer wallet:
+   - valid linkage → `onchain_verified`, reserving the reference;
+   - no `payer_signature` → the transfer is recorded as observed
+     (`payment_verification_metadata.verification_failure = payer_unlinked`)
+     and the review is admitted at `signature_only` without reserving the
+     reference: it is stored under a reviewer-scoped key with
+     `payment_reference` null, so nobody can claim — or block, including by
+     deleting their observation — a public Solana payment they did not send.
+     One observation per reviewer wallet; none once the payer has linked it;
+   - invalid linkage, failed transactions, wrong mint, payee or payer, or a
+     mismatched proof → rejected, storing nothing. A transaction not yet
+     visible is retryable.
+   Payee pinning follows the EVM rule per address family: a service holds one
+   EVM payee and one Solana payee. A service registered with an EVM payee
+   gains its Solana payee at the first linked (verified) Solana payment, and
+   any other Solana payee is then a conflict — the same first-verified-payment
+   registration that applies to an endpoint first seen in an unpaid review.
+   Operators can pre-register a payee as a `payment_target` service
+   identifier (`x402:<solana address>`) to close that window.
 
 ### 3.5 Seeds
 

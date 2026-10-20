@@ -16,6 +16,16 @@ from eth_account.messages import encode_defunct
 from crowdcode.identity import MACHINE_PAYMENT_PROVIDERS, ServiceIdentity
 from crowdcode.rate_limit import identity_id_from_wallet
 from crowdcode.settings import get_settings
+from crowdcode.solana import (
+    SOLANA_COMMITMENT,
+    SOLANA_RPC_URL,
+    SOLANA_USDC_MINT,
+    find_usdc_transfers,
+    is_solana_address,
+    is_solana_signature,
+    rpc_get_transaction,
+    verify_ed25519,
+)
 
 EVM_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 TX_HASH_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
@@ -48,9 +58,12 @@ class X402Chain:
     default_rpc_url: str
     token_env: str
     default_token: str
+    # "evm" (EIP-3009 USDC Transfer log, payer = reviewer_wallet) or "svm"
+    # (SPL transfer, payer linked by an ed25519 payer_signature).
+    kind: str = "evm"
 
 
-# EVM chains x402 payments may settle on. `network` is the short name used in
+# Chains x402 payments may settle on. `network` is the short name used in
 # x402:<network>:<tx> references and stored in verification metadata so the
 # cron re-verify pass checks the same chain.
 X402_CHAINS = {
@@ -72,8 +85,21 @@ X402_CHAINS = {
         token_env="X402_MONAD_USDC_ADDRESS",
         default_token=MONAD_USDC_ADDRESS,
     ),
+    # Aliases are matched lowercased (x402_network); the reference itself, a
+    # base58 transaction signature, stays case-sensitive.
+    "solana": X402Chain(
+        network="solana",
+        label="Solana",
+        aliases=frozenset({"solana", "solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp"}),
+        rpc_env="SOLANA_RPC_URL",
+        default_rpc_url=SOLANA_RPC_URL,
+        token_env="X402_SOLANA_USDC_MINT",
+        default_token=SOLANA_USDC_MINT,
+        kind="svm",
+    ),
 }
 DEFAULT_X402_NETWORK = "base"
+SOLANA_NETWORK = "solana"
 
 
 def x402_network(value: Any) -> str | None:
@@ -102,6 +128,11 @@ FAILURE_TX_FAILED = "tx_failed"
 FAILURE_NO_MATCHING_TRANSFER = "no_matching_transfer"
 FAILURE_TOKEN_NOT_PINNED = "token_not_pinned"
 FAILURE_PAYEE_UNKNOWN = "payee_unknown"
+# Solana only: the transfer verified but no payer_signature linked the payer
+# to reviewer_wallet, so the review is admitted at signature_only.
+FAILURE_PAYER_UNLINKED = "payer_unlinked"
+# Solana only: payer_wallet sent nothing to the payee in this transaction.
+FAILURE_PAYER_MISMATCH = "payer_mismatch"
 RETRYABLE_FAILURES = frozenset({FAILURE_RPC_UNREACHABLE})
 
 # Dedup/storage form of payment_reference: the same settlement tx must not
@@ -115,9 +146,46 @@ _X402_REFERENCE_NETWORK_RE = re.compile(r"^x402:([a-z0-9]+):", re.IGNORECASE)
 def canonical_payment_reference(reference: str) -> str:
     """Signatures are always verified against the reference exactly as
     submitted (the client signed that string); this canonical form exists
-    only for dedup, storage, and on-chain lookup."""
+    only for dedup, storage, and on-chain lookup. Only EVM hashes are
+    lowercased: Solana base58 signatures are case-sensitive."""
     canonical = _REFERENCE_PREFIX_RE.sub("", reference.strip())
     return canonical.lower() if TX_HASH_RE.match(canonical) else canonical
+
+
+# An unlinked Solana observation is stored under a reviewer-scoped key rather
+# than the bare signature: it must never reserve the payment the real payer
+# may still claim with a payer_signature (front-running protection).
+UNLINKED_REFERENCE_PREFIX = "unlinked:"
+
+
+def unlinked_reference_key(reviewer_wallet: str, canonical: str) -> str:
+    return f"{UNLINKED_REFERENCE_PREFIX}{reviewer_wallet.lower()}:{canonical}"
+
+
+def solana_reference_signature(reference: str | None) -> str | None:
+    """The base58 transaction signature named by x402:solana:<sig> (prefix
+    case-insensitive) or a bare signature; None for anything else."""
+    if reference is None:
+        return None
+    cleaned = reference.strip()
+    if cleaned[:12].lower() == "x402:solana:":
+        cleaned = cleaned[12:]
+    return cleaned if is_solana_signature(cleaned) else None
+
+
+PAYER_LINK_MESSAGE_HEADER = "CrowdCode review payer link v1"
+
+
+def payer_link_message(*, reviewer_wallet: str, payload: str) -> str:
+    """The text a Solana payer signs (ed25519, raw UTF-8 bytes) to link its
+    payment to a review: it commits to the exact canonical review payload the
+    reviewer signed and to the reviewer wallet, so it cannot be replayed onto
+    another review or another reviewer (spec/CANONICAL_PAYLOAD.md)."""
+    return "\n".join([
+        PAYER_LINK_MESSAGE_HEADER,
+        f"reviewer_wallet:{reviewer_wallet.strip().lower()}",
+        "payload_sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+    ])
 
 
 def x402_reference_network(reference: str) -> str | None:
@@ -163,6 +231,12 @@ class PaymentVerification:
     canonical_reference: str | None = None
     error_code: str | None = None
     retryable: bool = False
+    # False for an unlinked Solana observation: the review is stored without
+    # payment_reference and must not reserve the globally unique reference.
+    claims_reference: bool = True
+    # Set when payer_signature did not verify, so review_service can return
+    # the exact payer message to sign.
+    expected_payer_message: str | None = None
 
 
 def reviewer_id_from_payment(payment_reference: str) -> str:
@@ -240,7 +314,15 @@ def verify_review_payment(
     reviewer_wallet: str | None = None,
     review_signature: str | None = None,
     signature_scheme: str = "eip191",
+    payer_signature: str | None = None,
+    payer_wallet: str | None = None,
 ) -> PaymentVerification:
+    if (payer_signature is not None or payer_wallet is not None) and (
+        identity.payment_provider != "x402" or solana_reference_signature(payment_reference) is None
+    ):
+        return PaymentVerification(
+            False, "payer_signature and payer_wallet are only used for x402 Solana payments"
+        )
     if payment_reference is not None and not payment_reference.strip():
         return PaymentVerification(False, "omit payment_reference when no payment is claimed")
     if payment_reference is None:
@@ -265,6 +347,8 @@ def verify_review_payment(
             reviewer_wallet=reviewer_wallet,
             review_signature=review_signature,
             signature_scheme=signature_scheme,
+            payer_signature=payer_signature,
+            payer_wallet=payer_wallet,
         )
 
     payment_ok, payment_reason = verify_payment_reference(payment_reference)
@@ -298,6 +382,8 @@ def _verify_signed_machine_payment(
     reviewer_wallet: str | None,
     review_signature: str | None,
     signature_scheme: str,
+    payer_signature: str | None = None,
+    payer_wallet: str | None = None,
 ) -> PaymentVerification:
     if not reviewer_wallet:
         return PaymentVerification(
@@ -353,6 +439,44 @@ def _verify_signed_machine_payment(
 
     canonical = canonical_payment_reference(payment_reference)
 
+    solana_signature = (
+        solana_reference_signature(payment_reference)
+        if identity.payment_provider == "x402"
+        else None
+    )
+    if solana_signature is not None:
+        payment = _verify_solana_x402_payment(
+            identity=identity,
+            payment_reference=payment_reference,
+            signature=solana_signature,
+            payment_proof=payment_proof,
+            reviewer_wallet=wallet,
+            payload=payload,
+            payer_signature=payer_signature,
+            payer_wallet=payer_wallet,
+        )
+        if not payment.ok:
+            return payment
+        metadata = dict(payment.metadata or {})
+        metadata["review_payload"] = json.loads(payload)
+        metadata["signature_recovered_wallet"] = recovered
+        return PaymentVerification(
+            True,
+            payment.reason,
+            reviewer_id=_reviewer_id_from_wallet(wallet),
+            metadata=metadata,
+            reviewer_wallet=wallet,
+            review_signature=review_signature.strip(),
+            signature_scheme=signature_scheme,
+            payment_verified=payment.payment_verification_level in VERIFIED_LEVELS,
+            signature_verified=True,
+            amount=payment.amount,
+            payment_verification_level=payment.payment_verification_level,
+            payment_verification_metadata=payment.payment_verification_metadata,
+            canonical_reference=payment.canonical_reference,
+            claims_reference=payment.claims_reference,
+        )
+
     # Proof is optional, but a supported-chain transaction hash is mandatory.
     # New machine-payment reviews never downgrade a definitive chain failure
     # to signature_only: doing so would let an attacker reserve another
@@ -361,7 +485,8 @@ def _verify_signed_machine_payment(
         if not TX_HASH_RE.match(canonical):
             return PaymentVerification(
                 False,
-                "payment_reference must be an EVM transaction hash for x402 Base/Monad or mppx Tempo",
+                "payment_reference must be an EVM transaction hash for x402 Base/Monad or "
+                "mppx Tempo, or x402:solana:<signature> for x402 Solana",
                 error_code="unsupported_payment_reference",
             )
         network = None
@@ -566,10 +691,18 @@ def _verify_x402_payment(
         network = x402_reference_network(payment_reference) or DEFAULT_X402_NETWORK
     else:
         network = x402_network(proof_network)
+    if network == SOLANA_NETWORK:
+        # A Solana proof's transaction is a base58 signature, never a 0x hash;
+        # it is verified by _verify_solana_x402_payment via payment_reference.
+        return PaymentVerification(
+            False,
+            "payment_reference must be x402:solana:<signature> for a Solana x402 proof",
+            error_code="unsupported_payment_reference",
+        )
     if network not in X402_CHAINS:
         return PaymentVerification(
             False,
-            "only x402 Base and Monad EVM payments are supported",
+            "only x402 Base, Monad and Solana USDC payments are supported",
             error_code="unsupported_payment_chain",
         )
     if payment_reference.strip().lower() not in {tx_hash, f"x402:{network}:{tx_hash}"}:
@@ -666,11 +799,214 @@ def _chain_failure(
             f"{provider} transaction did not succeed on {network}",
             error_code="payment_transaction_failed",
         )
+    if chain is not None and chain.kind == "svm":
+        return PaymentVerification(
+            False,
+            "transaction does not transfer pinned USDC to the registered service payee"
+            if check.failure == FAILURE_NO_MATCHING_TRANSFER
+            else "payer_wallet did not send pinned USDC to the registered service payee",
+            error_code="payment_transfer_mismatch",
+        )
     return PaymentVerification(
         False,
         "reviewer wallet did not send the expected token to the registered service payee",
         error_code="payment_transfer_mismatch",
     )
+
+
+def _verify_solana_x402_payment(
+    *,
+    identity: ServiceIdentity,
+    payment_reference: str,
+    signature: str,
+    payment_proof: str | None,
+    reviewer_wallet: str,
+    payload: str,
+    payer_signature: str | None,
+    payer_wallet: str | None,
+) -> PaymentVerification:
+    """x402 exact on Solana: an SPL transfer of pinned USDC from the payer's
+    token account to the service payee's token account.
+
+    The facilitator is the fee payer and the payer is a base58 key, so the
+    EVM reviewer_wallet can never be matched against the transfer. Linkage
+    is an ed25519 payer_signature over payer_link_message(). Without it the
+    transfer is only *observed*: the review is admitted at signature_only and
+    does not reserve the reference, so nobody can claim (or block) a public
+    Solana payment they did not send.
+    """
+    proof = None
+    required = None
+    if payment_proof:
+        proof = _parse_json_or_base64_json(payment_proof)
+        if proof is None:
+            return PaymentVerification(False, "payment_proof must be valid x402 JSON")
+        proof_tx = (
+            proof.get("transaction")
+            or proof.get("transactionHash")
+            or proof.get("txHash")
+            or proof.get("reference")
+        )
+        proof_network = proof.get("network") or proof.get("chain")
+        if proof_network is not None and x402_network(proof_network) != SOLANA_NETWORK:
+            return PaymentVerification(
+                False, "payment_proof network does not match the Solana payment_reference"
+            )
+        # Base58 is case-sensitive: compare exactly.
+        if not isinstance(proof_tx, str) or proof_tx.strip() != signature:
+            return PaymentVerification(False, "payment_reference does not match x402 transaction")
+        required = _amount_to_int(proof.get("maxAmountRequired") or proof.get("amount"))
+
+    payer_sig = payer_signature.strip() if payer_signature else None
+    payer = payer_wallet.strip() if payer_wallet else None
+    if payer is not None and not is_solana_address(payer):
+        return PaymentVerification(False, "payer_wallet must be a base58 Solana address")
+    if payer is not None and payer_sig is None:
+        return PaymentVerification(False, "payer_wallet requires payer_signature")
+    if payer_sig is not None and not is_solana_signature(payer_sig):
+        return PaymentVerification(
+            False, "payer_signature must be a base58 ed25519 signature (64 bytes)"
+        )
+
+    check, verification_meta = check_solana_payment_onchain(
+        payment_target_ref=identity.payment_target_ref,
+        signature=signature,
+        payer=payer,
+    )
+    verification_meta["proof_present"] = proof is not None
+    verification_meta["source"] = "payment_proof" if proof is not None else "payment_reference"
+    if not check.ok or check.transfer is None:
+        return _chain_failure("x402", check, SOLANA_NETWORK)
+
+    by_payer: dict[str, int] = check.transfer["by_payer"]
+    message = payer_link_message(reviewer_wallet=reviewer_wallet, payload=payload)
+    linked = None
+    if payer_sig is not None:
+        candidates = [payer] if payer is not None else sorted(by_payer)
+        linked = next(
+            (c for c in candidates if verify_ed25519(c, message.encode("utf-8"), payer_sig)),
+            None,
+        )
+        if linked is None:
+            # Supplied linkage evidence must verify; it never downgrades.
+            return PaymentVerification(
+                False,
+                "payer_signature does not match a payer of this transaction",
+                error_code="payer_signature_invalid",
+                expected_payer_message=message,
+            )
+
+    value = by_payer[linked] if linked is not None else max(by_payer.values())
+    if required is not None and value < required:
+        return PaymentVerification(False, "x402 payment amount is below the challenge price")
+    verification_meta["amount_checked"] = required is not None
+    verification_meta["payer_linked"] = linked is not None
+    transaction = {
+        "signature": signature,
+        "payers": by_payer if linked is None else None,
+        "from": linked,
+        "to": check.transfer["to"],
+        "value": str(value),
+        "token": check.transfer["token"],
+        "slot": check.block_number,
+        "fee_payer": check.transfer["fee_payer"],
+        "commitment": SOLANA_COMMITMENT,
+    }
+    transaction = {k: v for k, v in transaction.items() if v is not None}
+    metadata: dict[str, Any] = {
+        "provider": "x402",
+        "network": SOLANA_NETWORK,
+        "proof": proof,
+        "transaction": transaction,
+    }
+    if linked is None:
+        verification_meta["verification_failure"] = FAILURE_PAYER_UNLINKED
+        return PaymentVerification(
+            True,
+            "signature verified; Solana payment observed on-chain but not linked to "
+            "reviewer_wallet (no payer_signature): weighted as unverified payment",
+            metadata=metadata,
+            payment_verification_level=LEVEL_SIGNATURE_ONLY,
+            payment_verification_metadata=verification_meta,
+            canonical_reference=unlinked_reference_key(reviewer_wallet, signature),
+            claims_reference=False,
+        )
+    metadata["payer_link"] = {
+        "scheme": "ed25519",
+        "payer": linked,
+        "payer_signature": payer_sig,
+        "message": message,
+    }
+    return PaymentVerification(
+        True,
+        "verified x402 Solana payment and payer_signature linking payer to reviewer wallet",
+        metadata=metadata,
+        amount=value,
+        payment_verification_level=LEVEL_ONCHAIN_VERIFIED,
+        payment_verification_metadata=verification_meta,
+        canonical_reference=signature,
+    )
+
+
+def check_solana_payment_onchain(
+    *,
+    payment_target_ref: str | None,
+    signature: str,
+    payer: str | None = None,
+) -> tuple[OnchainCheck, dict[str, Any]]:
+    """getTransaction, require meta.err == null, and find pinned-USDC SPL
+    transfers into token accounts owned by the service payee. ``payer``
+    (a base58 owner) restricts the match to transfers out of its accounts.
+
+    On success ``transfer`` holds ``by_payer`` (owner -> base units), the
+    payee (``to``), the mint (``token``) and the fee payer."""
+    chain = X402_CHAINS[SOLANA_NETWORK]
+    rpc_url = os.environ.get(chain.rpc_env) or chain.default_rpc_url
+    mint = os.environ.get(chain.token_env) or chain.default_token
+    token = mint if is_solana_address(mint) else None
+    payee = payment_target_ref.strip() if payment_target_ref else None
+    meta: dict[str, Any] = {
+        "network": SOLANA_NETWORK,
+        "token_pinned": token is not None,
+        "amount_checked": False,
+    }
+
+    def done(check: OnchainCheck) -> tuple[OnchainCheck, dict[str, Any]]:
+        meta["verification_failure"] = check.failure
+        return check, meta
+
+    if token is None:
+        return done(OnchainCheck(False, failure=FAILURE_TOKEN_NOT_PINNED))
+    if payee is None or not is_solana_address(payee):
+        return done(OnchainCheck(False, failure=FAILURE_PAYEE_UNKNOWN))
+    tx = _solana_transaction(rpc_url, signature)
+    if tx is None:
+        return done(OnchainCheck(False, failure=FAILURE_RPC_UNREACHABLE))
+    meta_block = tx.get("meta")
+    if not isinstance(meta_block, dict) or meta_block.get("err") is not None:
+        return done(OnchainCheck(False, failure=FAILURE_TX_FAILED))
+    transfers = find_usdc_transfers(tx, payee=payee, mint=token)
+    by_payer = transfers.by_payer
+    if payer is not None:
+        by_payer = {payer: by_payer[payer]} if payer in by_payer else {}
+        if not by_payer:
+            return done(OnchainCheck(False, failure=FAILURE_PAYER_MISMATCH if transfers.by_payer else FAILURE_NO_MATCHING_TRANSFER))
+    if not by_payer:
+        return done(OnchainCheck(False, failure=FAILURE_NO_MATCHING_TRANSFER))
+    return done(OnchainCheck(
+        True,
+        transfer={
+            "by_payer": by_payer,
+            "to": payee,
+            "token": token,
+            "fee_payer": transfers.fee_payer,
+        },
+        block_number=transfers.slot,
+    ))
+
+
+def _solana_transaction(rpc_url: str, signature: str) -> dict[str, Any] | None:
+    return rpc_get_transaction(rpc_url, signature)
 
 
 def _x402_chain_config(network: str) -> tuple[str, str | None]:
@@ -707,6 +1043,10 @@ def check_payment_reference_onchain(
     """
     if provider == "x402":
         network = x402_network(network or DEFAULT_X402_NETWORK)
+        # Solana payers are base58 keys linked by payer_signature, not the
+        # EVM reviewer_wallet: they are checked by check_solana_payment_onchain.
+        if network is not None and X402_CHAINS[network].kind != "evm":
+            network = None
     if provider == "x402" and network is not None:
         rpc_url, token = _x402_chain_config(network)
     elif provider == "mppx":

@@ -119,6 +119,12 @@
       "payment_provider": "stripe",
       "payment_target_ref": "acct_123",
       "expected": "svc_b3aede4257ba2ae95a5c"
+    },
+    {
+      "api_endpoint": "https://api.solana-seller.example/v1/search",
+      "payment_provider": "x402",
+      "payment_target_ref": " 53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t ",
+      "expected": "svc_ff743e2b8a4db3bf9949"
     }
   ],
   "review_payload": [
@@ -272,6 +278,39 @@
       "review_nonce": "attempt_123",
       "expected_reason_hash": "sha256:c7bb9546b91321bd1650206447ab329c29c3f5da14e597f77570786334525f30",
       "expected_message": "{\"api_endpoint\":\"https://api.example.com/free\",\"directory_slug\":null,\"payment_provider\":null,\"payment_reference\":null,\"payment_target_ref\":null,\"rating\":2,\"reason_hash\":\"sha256:c7bb9546b91321bd1650206447ab329c29c3f5da14e597f77570786334525f30\",\"review_nonce\":\"attempt_123\",\"service_id\":null,\"type\":\"crowdcode.review.v2\"}"
+    },
+    {
+      "name": "x402 solana payee and base58 reference (case preserved)",
+      "identity": {
+        "service_id": "svc_0123456789abcdef0123",
+        "api_endpoint": "https://api.solana-seller.example/v1/search",
+        "payment_provider": "x402",
+        "payment_target_ref": "53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t",
+        "directory_slug": null
+      },
+      "rating": 5,
+      "reason": "Fresh results in 300 ms",
+      "payment_reference": "x402:solana:5eHrTHo8wSNNNf857kCqzX15YW1AaETvyDW5bAyv3EBZp57PFhXMGj4zoi9mYi9XGKEA5bCzNFTdm2mdaeLwH5uj",
+      "expected_reason_hash": "sha256:02d849a2570c872273c81c9a5a59ad2ca0bc39f50cf82c09295ec4bbc4143e36",
+      "expected_message": "{\"api_endpoint\":\"https://api.solana-seller.example/v1/search\",\"directory_slug\":null,\"payment_provider\":\"x402\",\"payment_reference\":\"x402:solana:5eHrTHo8wSNNNf857kCqzX15YW1AaETvyDW5bAyv3EBZp57PFhXMGj4zoi9mYi9XGKEA5bCzNFTdm2mdaeLwH5uj\",\"payment_target_ref\":\"53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t\",\"rating\":5,\"reason_hash\":\"sha256:02d849a2570c872273c81c9a5a59ad2ca0bc39f50cf82c09295ec4bbc4143e36\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}"
+    }
+  ],
+  "payer_link": [
+    {
+      "payload": "{\"api_endpoint\":\"https://api.solana-seller.example/v1/search\",\"directory_slug\":null,\"payment_provider\":\"x402\",\"payment_reference\":\"x402:solana:5eHrTHo8wSNNNf857kCqzX15YW1AaETvyDW5bAyv3EBZp57PFhXMGj4zoi9mYi9XGKEA5bCzNFTdm2mdaeLwH5uj\",\"payment_target_ref\":\"53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t\",\"rating\":5,\"reason_hash\":\"sha256:02d849a2570c872273c81c9a5a59ad2ca0bc39f50cf82c09295ec4bbc4143e36\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}",
+      "reviewer_wallet": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+      "payer_seed_base58": "1thX6LZfHDZZKUs92febYZhYRcXddmzfzF2NvTkPNE",
+      "payer": "FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF",
+      "expected_message": "CrowdCode review payer link v1\nreviewer_wallet:0x7e5f4552091a69125d5dfcb7b8c2659029395bdf\npayload_sha256:e88de833dba98b4e0f099f05f6a18db2745e74c64872c9b3418427f683f19cdf",
+      "expected_signature": "87gXNuSUx4ea81D4Zk56GXdqGuh4P3ReWwPBcwSpHVMAbrdhdeRaHLcuJkUzxedd2x4CvRepbjnro5XYuTLcD9g"
+    },
+    {
+      "payload": "{\"api_endpoint\":\"https://api.example.com/v1\",\"directory_slug\":\"example-ocr\",\"payment_provider\":\"x402\",\"payment_reference\":\"0xabababababababababababababababababababababababababababababababab\",\"payment_target_ref\":\"0xabcdef0123456789abcdef0123456789abcdef01\",\"rating\":5,\"reason_hash\":\"sha256:0f73a31d28c0e2f1b9bc4deafc14b510f228b55abde71d3fcbc8fb406fc2c330\",\"service_id\":\"svc_0123456789abcdef0123\",\"type\":\"crowdcode.review.v1\"}",
+      "reviewer_wallet": "0x0000000000000000000000000000000000000001",
+      "payer_seed_base58": "1thX6LZfHDZZKUs92febYZhYRcXddmzfzF2NvTkPNE",
+      "payer": "FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF",
+      "expected_message": "CrowdCode review payer link v1\nreviewer_wallet:0x0000000000000000000000000000000000000001\npayload_sha256:0aa4249e537b7fd25c2404afc450f271f76cf55342868032b2d7b5bbd1f19004",
+      "expected_signature": "2UMSxaqsryQMaHoxbBpUR4YegNejidY3B9VbZYVfWRaa3XhZ5CtDT8EqTiWo9jmCxoV465WxAXad34Xau5Bsoxtp"
     }
   ]
 }

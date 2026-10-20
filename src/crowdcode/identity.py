@@ -7,6 +7,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 
+from crowdcode.solana import is_solana_address
+
 
 PAYMENT_PROVIDERS = {"stripe", "stripe_payment_link", "mppx", "x402", "manual"}
 PAYMENT_PROVIDER_ALIASES = {
@@ -16,11 +18,13 @@ PAYMENT_PROVIDER_ALIASES = {
     "mpp": "mppx",
 }
 
-# Machine payment protocols settle to an EVM payee address. The payee, not
-# the protocol label, anchors a service's payment identity: one endpoint may
+# Machine payment protocols settle to an EVM payee address (x402 Base/Monad,
+# mppx Tempo) or a base58 Solana payee (x402 Solana). The payee, not the
+# protocol label, anchors a service's payment identity: one endpoint may
 # accept both mppx/Tempo and x402/Base payments to the same wallet, and the
 # on-chain check independently proves the transfer on whichever chain the
-# supplied protocol pins.
+# supplied protocol pins. A service holds at most one payee per address
+# family (EVM, Solana); see _machine_payment_alias_authorized.
 MACHINE_PAYMENT_PROVIDERS = frozenset({"mppx", "x402"})
 
 
@@ -192,6 +196,14 @@ def _is_evm_address(value: str | None) -> bool:
     return bool(value) and len(value) == 42 and value[:2].lower() == "0x"
 
 
+def _payee_family(value: str | None) -> str | None:
+    if _is_evm_address(value):
+        return "evm"
+    if is_solana_address(value):
+        return "solana"
+    return None
+
+
 def _same_payment_target(
     payment_provider: str | None,
     left: str | None,
@@ -212,11 +224,30 @@ def _fetch_all_by_machine_payment_target(
     conn: psycopg.Connection,
     payment_target_ref: str,
 ) -> list[dict[str, Any]]:
-    """Services registered for an EVM payee under any machine protocol.
+    """Services registered for a machine-payment payee under any protocol.
 
-    Matches the address case-insensitively: stored identifiers may be
-    checksummed while callers echo the lowercase on-chain form.
+    EVM addresses match case-insensitively: stored identifiers may be
+    checksummed while callers echo the lowercase on-chain form. Solana
+    addresses are case-sensitive base58 and match exactly.
     """
+    if is_solana_address(payment_target_ref):
+        return conn.execute(
+            """
+            select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
+                   s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
+                   s.created_from_review
+            from services s
+            left join service_identifiers si on si.service_id = s.id
+            where (si.identifier_type = 'payment_target'
+                   and si.identifier_value = any(%s))
+               or (s.payment_provider = any(%s) and s.payment_target_ref = %s)
+            """,
+            (
+                [payment_identifier(p, payment_target_ref) for p in sorted(MACHINE_PAYMENT_PROVIDERS)],
+                sorted(MACHINE_PAYMENT_PROVIDERS),
+                payment_target_ref.strip(),
+            ),
+        ).fetchall()
     if not _is_evm_address(payment_target_ref):
         return []
     candidates = [
@@ -266,13 +297,20 @@ def _machine_payment_alias_authorized(
     """Whether a supplied machine-payment pair names this service's payee.
 
     The protocol label may differ from the registration (mppx vs x402); the
-    EVM payee address may not. A pair naming any other payee is still a
-    conflict — resolution must never let a caller redirect verification to
-    an unregistered payment destination.
+    payee address may not. A pair naming any other payee of the same address
+    family is still a conflict — resolution must never let a caller redirect
+    verification to an unregistered payment destination.
+
+    A machine-payment service has one payee slot per address family: an
+    EVM-registered service paid on Solana (or vice versa) has no payee in the
+    other family yet, which — like an endpoint first seen in an unpaid
+    review — the first verified payment registers.
+    register_machine_payment_alias re-checks this under a row lock.
     """
     if supplied.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
         return False
-    if not _is_evm_address(supplied.payment_target_ref):
+    family = _payee_family(supplied.payment_target_ref)
+    if family is None:
         return False
     if service.get("payment_provider") in MACHINE_PAYMENT_PROVIDERS and _same_payment_target(
         supplied.payment_provider,
@@ -280,12 +318,32 @@ def _machine_payment_alias_authorized(
         service.get("payment_target_ref"),
     ):
         return True
-    return any(
+    if any(
         row["id"] == service["id"]
         for row in _fetch_all_by_machine_payment_target(
             conn, supplied.payment_target_ref
         )
-    )
+    ):
+        return True
+    if service.get("payment_provider") not in MACHINE_PAYMENT_PROVIDERS:
+        return False
+    if _payee_family(service.get("payment_target_ref")) == family:
+        return False  # the canonical payee already holds this family's slot
+    return family not in _service_payee_families(conn, service)
+
+
+def _service_payee_families(conn: psycopg.Connection, service: dict[str, Any]) -> set[str]:
+    """Address families of every machine-payment payee registered to a service."""
+    targets = [service.get("payment_target_ref")]
+    for row in conn.execute(
+        """select identifier_value from service_identifiers
+           where service_id = %s and identifier_type = 'payment_target'""",
+        (service["id"],),
+    ).fetchall():
+        provider, _, target = row["identifier_value"].partition(":")
+        if provider in MACHINE_PAYMENT_PROVIDERS:
+            targets.append(target)
+    return {family for family in map(_payee_family, targets) if family}
 
 
 def _identifier_belongs_to_service(
@@ -498,7 +556,7 @@ def register_machine_payment_alias(
     """
     if identity.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
         return
-    if not _is_evm_address(identity.payment_target_ref):
+    if _payee_family(identity.payment_target_ref) is None:
         return
     assert identity.payment_target_ref is not None
     # An endpoint first seen in an unpaid review has no claimed payment target.

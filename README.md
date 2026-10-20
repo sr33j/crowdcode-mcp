@@ -114,12 +114,17 @@ private keys are not accepted. Responses include `wallet_source`
 `CROWDCODE_WALLET_DIR` overrides the wallet directory. An existing-but-invalid
 wallet file is never overwritten.
 
+For x402 Solana reviews, `crowdcode-mcp` also reads (never creates)
+agentcash's Solana wallet, `~/.agentcash/solana-wallet.json`, to sign the
+`payer_signature` that links the Solana payment to your EVM reviewer wallet.
+
 `payment_proof` is optional: the settlement transaction hash is sufficient for
 on-chain verification. New x402/mppx reviews require a verified transaction on
-x402 Base, x402 Monad, or mppx Tempo; unsupported or unverifiable payments are
-rejected. A bare transaction hash is checked on Base; reference a Monad
-settlement as `x402:monad:<tx_hash>` (or send a `payment_proof` whose `network`
-is `eip155:143`).
+x402 Base, x402 Monad, x402 Solana, or mppx Tempo; unsupported or unverifiable
+payments are rejected. A bare transaction hash is checked on Base; reference a
+Monad settlement as `x402:monad:<tx_hash>` (or send a `payment_proof` whose
+`network` is `eip155:143`) and a Solana settlement as
+`x402:solana:<base58 signature>` (see [x402 on Solana](#x402-on-solana)).
 
 Every unique verified payment may be reviewed. One wallet's reviews for a
 service are combined into a capped UTC-day scoring bucket. Service requests
@@ -237,6 +242,55 @@ match with `expected_message`, and only then re-signs and retries
 **automatically once**. It never signs arbitrary backend-provided text.
 External signers should apply the same check before signing and retry with the
 returned identity fields.
+
+#### x402 on Solana
+
+Solana payers are base58 ed25519 keys, but the reviewer identity stays the
+EVM `reviewer_wallet`, so a Solana review carries two signatures. Fields and
+encodings (the contract for any integration, including hosted OpenCrowd
+agents paying from a CDP Solana account):
+
+| field | value |
+|---|---|
+| `payment_provider` | `"x402"` |
+| `payment_target_ref` | the service's Solana payee address (base58, the owner of the token account that received USDC — not the token account) |
+| `payment_reference` | `"x402:solana:<transaction signature>"`, base58 exactly as returned by the facilitator (case-sensitive, never lowercased) |
+| `reviewer_wallet`, `review_signature`, `signature_scheme` | unchanged: EIP-191 by the EVM reviewer wallet over the canonical `crowdcode.review.v1` payload, whose `payment_reference` is the string above |
+| `payer_signature` | base58 64-byte ed25519 signature by the Solana payer over the UTF-8 bytes of the payer link message |
+| `payer_wallet` | optional base58 payer address; when given it must be the transaction's payer |
+| `payment_proof` | optional x402 `payment-response` header (base64 JSON `{transaction, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer}`) |
+
+The payer link message is three lines joined by `\n`, no trailing newline:
+
+```
+CrowdCode review payer link v1
+reviewer_wallet:<reviewer_wallet, lowercased>
+payload_sha256:<lowercase hex sha256 of the exact canonical payload string the reviewer signed>
+```
+
+With Coinbase CDP: `cdp.solana.signMessage({ address: <payer>, message })`
+signs exactly these UTF-8 bytes and returns the base58 `signature` to send as
+`payer_signature` (verified against a live CDP account).
+
+The backend fetches the transaction (`getTransaction`, `jsonParsed`,
+`confirmed`) from `SOLANA_RPC_URL` (default
+`https://api.mainnet-beta.solana.com`), requires `meta.err == null`, and finds
+SPL `transfer`/`transferChecked` instructions of USDC
+(`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`) from a token account owned by
+the payer to one owned by `payment_target_ref`, capped by the payee's balance
+increase. Outcomes:
+
+- valid `payer_signature` from a payer of the transaction: `onchain_verified`
+  (verified purchase), amount recorded, and the signature reserves the
+  payment reference;
+- no `payer_signature`: the transfer is recorded as observed, the review is
+  admitted at `signature_only`, and it does **not** reserve the reference, so
+  the real payer can still claim it (one observation per reviewer wallet);
+- invalid `payer_signature`, failed transaction, wrong mint/payee/payer, or a
+  proof that does not match: rejected with nothing stored
+  (`payer_signature_invalid` responses include `expected_payer_message`);
+- transaction not yet visible or RPC down: `payment_rpc_unavailable`,
+  retryable.
 
 V1 does not call Stripe. The verification function is isolated in
 `src/crowdcode/payments.py` so real Stripe verification can replace it later.
