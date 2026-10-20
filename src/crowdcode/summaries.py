@@ -10,6 +10,7 @@ sanitized and truncated before storage.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -17,8 +18,11 @@ from typing import Any
 import httpx
 
 from crowdcode.db import connect
-from crowdcode.redaction import redact_texts
+from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
+from crowdcode.redaction import RedactionUnavailable, redact_texts
 from crowdcode.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 _REQUESTS_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -96,14 +100,31 @@ def fetch_recent_requests(limit: int = 100) -> list[dict[str, Any]]:
         )
 
     # Egress backstop before this text reaches OpenAI and the public
-    # frontend: redact pre-enforcement rows; drop everything if the redactor
-    # is configured but down (never leak on failure).
-    redacted = redact_texts([item["text"] for item in requests], fail_closed=False)
-    if redacted is None:
+    # frontend: redact pre-enforcement rows. A chunk the redactor cannot
+    # process is dropped (never leak on failure); if it cannot process any,
+    # raise so the cron keeps the last good summary instead of publishing an
+    # empty one.
+    if not requests:
         return []
+    redacted = redact_texts(
+        [item["text"] for item in requests],
+        fail_closed=False,
+        timeout=REDACTION_BATCH_TIMEOUT,
+        allow_partial=True,
+    )
+    if redacted is None:
+        raise RedactionUnavailable(
+            f"redactor unavailable for all {len(requests)} request(s)"
+        )
     for index, item in enumerate(requests):
         item["text"] = redacted[index] or ""
-    return [item for item in requests if item["text"]]
+    kept = [item for item in requests if item["text"]]
+    dropped = sum(1 for text in redacted if text is None)
+    if dropped:
+        logger.warning(
+            "request summary: redactor dropped %d of %d request(s)", dropped, len(requests)
+        )
+    return kept
 
 
 def fallback_project_ideas(requests: list[dict[str, Any]], reason: str) -> dict[str, Any]:

@@ -293,3 +293,71 @@ def test_reverification_rechecks_on_the_recorded_x402_network(monkeypatch):
     monkeypatch.setattr(cron, "recompute_service_score", lambda *_: None)
     cron.run_payment_reverification(NOW)
     assert calls == ["monad", None]
+
+
+# --- requested-services summary ---------------------------------------------
+
+import pytest  # noqa: E402
+
+from crowdcode import summaries  # noqa: E402
+from crowdcode.redaction import RedactionUnavailable  # noqa: E402
+
+
+def _request_rows(n):
+    return [
+        {"id": i, "created_at": NOW, "directory_match": "missing",
+         "service_description": f"need service {i}", "task_context": None}
+        for i in range(n)
+    ]
+
+
+def _patch_requests(monkeypatch, rows, redact):
+    conn = FakeConn(
+        {
+            "information_schema.columns": [
+                {"column_name": name}
+                for name in ("id", "created_at", "directory_match",
+                             "service_description", "task_context")
+            ],
+            "from service_requests": rows,
+        }
+    )
+    monkeypatch.setattr(summaries, "connect", lambda: _fake_connect(conn))
+    calls = []
+
+    def fake_redact(texts, **kwargs):
+        calls.append(kwargs)
+        return redact(texts)
+
+    monkeypatch.setattr(summaries, "redact_texts", fake_redact)
+    return calls
+
+
+def test_request_summary_input_uses_partial_batch_redaction(monkeypatch):
+    calls = _patch_requests(
+        monkeypatch,
+        _request_rows(3),
+        lambda texts: ["[R] " + texts[0], None, "[R] " + texts[2]],
+    )
+    requests = summaries.fetch_recent_requests()
+    assert [r["text"] for r in requests] == ["[R] need service 0", "[R] need service 2"]
+    assert calls == [{"fail_closed": False, "timeout": 60.0, "allow_partial": True}]
+
+
+def test_request_summary_keeps_the_last_cache_when_redaction_is_down(monkeypatch):
+    _patch_requests(monkeypatch, _request_rows(3), lambda texts: None)
+    with pytest.raises(RedactionUnavailable):
+        summaries.fetch_recent_requests()
+
+    conn = FakeConn({})
+    monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
+    monkeypatch.setattr(cron, "fetch_recent_requests", summaries.fetch_recent_requests)
+    with pytest.raises(RedactionUnavailable):
+        cron.run_request_summary(NOW)
+    assert conn.executed("app_cache") == []
+
+
+def test_request_summary_with_no_requests_skips_the_redactor(monkeypatch):
+    calls = _patch_requests(monkeypatch, [], lambda texts: None)
+    assert summaries.fetch_recent_requests() == []
+    assert calls == []

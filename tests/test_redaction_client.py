@@ -60,7 +60,7 @@ def test_redacts_and_preserves_none_positions(monkeypatch):
     monkeypatch.setattr(
         redaction.httpx,
         "post",
-        _fake_post({"texts": ["email [EMAIL_1]", ""]}),
+        _fake_post({"texts": ["email [EMAIL_1]"]}),
     )
     assert redact_texts(["email a@b.com", None], fail_closed=True) == [
         "email [EMAIL_1]",
@@ -114,3 +114,83 @@ def test_mismatched_batch_size_is_a_failure(monkeypatch):
     )
     with pytest.raises(RedactionUnavailable):
         redact_texts(["a", "b"], fail_closed=True)
+
+
+def _recording_post(calls, *, fail=lambda call, texts: False):
+    """Echo-redacting fake that records each chunk and can fail chosen calls."""
+
+    class Response:
+        def __init__(self, texts):
+            self.texts = texts
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"texts": [f"R({text})" for text in self.texts]}
+
+    def post(url, **kwargs):
+        texts = kwargs["json"]["texts"]
+        calls.append(texts)
+        if fail(len(calls), texts):
+            raise redaction.httpx.ReadTimeout("timed out")
+        return Response(texts)
+
+    return post
+
+
+def test_large_batches_are_sent_in_chunks(monkeypatch):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+    monkeypatch.setattr(redaction.httpx, "post", _recording_post(calls))
+    texts = [f"t{i}" for i in range(25)]
+    assert redact_texts(texts, fail_closed=False) == [f"R(t{i})" for i in range(25)]
+    assert [len(call) for call in calls] == [10, 10, 5]
+
+
+def test_none_and_empty_texts_are_not_sent(monkeypatch):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+    monkeypatch.setattr(redaction.httpx, "post", _recording_post(calls))
+    assert redact_texts([None, "", "a"], fail_closed=True) == [None, "", "R(a)"]
+    assert calls == [["a"]]
+    assert redact_texts([None, ""], fail_closed=True) == [None, ""]
+    assert calls == [["a"]]
+
+
+def test_a_timed_out_chunk_is_retried(monkeypatch):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+    monkeypatch.setattr(
+        redaction.httpx, "post", _recording_post(calls, fail=lambda n, _: n == 1)
+    )
+    assert redact_texts(["a"], fail_closed=True) == ["R(a)"]
+    assert len(calls) == 2
+
+
+def test_partial_mode_drops_only_the_failed_chunk(monkeypatch):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+    monkeypatch.setattr(
+        redaction.httpx,
+        "post",
+        _recording_post(calls, fail=lambda _, texts: "t12" in texts),
+    )
+    texts = [f"t{i}" for i in range(15)]
+    out = redact_texts(texts, fail_closed=False, allow_partial=True)
+    assert out == [f"R(t{i})" for i in range(10)] + [None] * 5
+    # Without allow_partial the whole batch is dropped.
+    assert redact_texts(texts, fail_closed=False) is None
+    with pytest.raises(RedactionUnavailable):
+        redact_texts(texts, fail_closed=True)
+
+
+def test_partial_mode_returns_none_when_every_chunk_fails(monkeypatch):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+    monkeypatch.setattr(
+        redaction.httpx, "post", _recording_post(calls, fail=lambda *_: True)
+    )
+    assert redact_texts(["a", "b"], fail_closed=False, allow_partial=True) is None
+    assert redact_texts(["a"], fail_closed=False, attempts=1) is None
+    assert len(calls) == 3

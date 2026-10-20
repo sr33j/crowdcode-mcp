@@ -35,6 +35,7 @@ from crowdcode.payments import (
     check_payment_reference_onchain,
     utc_now,
 )
+from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_enabled
 from crowdcode.reputation import ensure_user, recompute_service_score, sync_seed_wallets
 from crowdcode.scoring import (
@@ -400,7 +401,7 @@ def run_service_summaries(now: datetime) -> None:
             texts.append(review.get("reason"))
             texts.append(review.get("task_context"))
         try:
-            redacted = redact_texts(texts, fail_closed=True)
+            redacted = redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)
         except RedactionUnavailable:
             print("summaries: redactor unavailable; skipping remaining services")
             break
