@@ -294,7 +294,8 @@ def find_service(
 ) -> dict[str, Any]:
     """Find the best paid service for a capability across Base, Solana and Tempo.
 
-    Searches Coinbase's x402 Bazaar, the mpp.dev MPP catalog and CrowdCode's
+    `query`: the capability in a few words ("web search", "object storage"),
+    not the task's subject. Searches Coinbase's x402 Bazaar, the mpp.dev MPP catalog and CrowdCode's
     reviewed services, merges them by endpoint, and ranks for this payer:
     CrowdCode quality first, then effective price on the payer's best network
     (adding one transfer between its own networks when that network's balance

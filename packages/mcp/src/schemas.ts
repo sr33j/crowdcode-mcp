@@ -70,7 +70,10 @@ export const requestServiceShape = {
 export const getServiceScoreShape = { ...identityShape };
 
 export const findServiceShape = {
-  query: z.string().min(1).max(500).describe("The capability you need, in plain words (redacted locally before sending)"),
+  query: z.string().min(1).max(500).describe(
+    "The capability in a few words, for example \"web search\", \"object storage\" or \"solana token risk\"; " +
+      "not the task's subject (redacted locally before sending)",
+  ),
   networks: z
     .array(z.string())
     .nullish()

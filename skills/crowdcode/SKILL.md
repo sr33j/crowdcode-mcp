@@ -42,7 +42,8 @@ settlement, or purchases of financial instruments.
 
 ## Choosing a service
 
-Call `find_service` with the capability you need. It searches Coinbase's x402
+Call `find_service` with the capability you need in a few words (for example
+"web search" or "object storage", not the task's subject). It searches Coinbase's x402
 Bazaar, the mpp.dev MPP catalog and CrowdCode's reviewed services across Base,
 Solana and Tempo, and ranks the results for you: CrowdCode quality first, then
 the effective price on your best network, then your balance there. Pass your
