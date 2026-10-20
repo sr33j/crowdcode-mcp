@@ -1,5 +1,10 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.9.1 — 2026-10-20
+
+- `find_service` and the skill ask for the capability in a few words ("web search",
+  "object storage") rather than the task's subject, which matched irrelevant services.
+
 ## 0.9.0 — 2026-10-20
 
 - Add `find_service`: one search across Coinbase's x402 Bazaar, the mpp.dev MPP
