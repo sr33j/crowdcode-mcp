@@ -10,7 +10,7 @@ endpoint and ranked for a payer that holds USDC on several networks:
 
 Ranking, best first:
 
-1. Quality: the CrowdCode canonical score in half-point bands. A service with
+1. Quality: the CrowdCode canonical score in quarter-point bands. A service with
    no reviews sits at the scoring prior (3.0), so positive evidence ranks above
    unknown services and poor evidence below them.
 2. Effective price on the payer's best network: the quoted price, plus one
@@ -397,7 +397,8 @@ def quality(evidence: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def quality_band(q: dict[str, Any]) -> float:
-    return math.floor(float(q["score"]) * 2 + 0.5) / 2
+    # Quarter points: a clearly better score always wins; price only breaks near-ties.
+    return math.floor(float(q["score"]) * 4 + 0.5) / 4
 
 
 # --- Ranking -------------------------------------------------------------------
@@ -496,7 +497,7 @@ def parse_balances(value: Any) -> dict[str, float] | None:
 
 
 RANKING = (
-    "Ranked by CrowdCode quality (canonical score in half-point bands; unreviewed services sit at the 3.0 prior; "
+    "Ranked by CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at the 3.0 prior; "
     f"within a band, services with {ADOPTED_PAYERS}+ distinct payers in 30 days first), then effective price on your best network (plus ~${TRANSFER_COST_USD:.2f} for one transfer between your own "
     "networks when that network's balance is short), then your balance there. Catalog prices can be dynamic: "
     "inspect the endpoint for the live quote before paying."

@@ -174,7 +174,7 @@ search results, tagged with their `source`).
 
 Ranking, best first:
 
-1. CrowdCode quality: the canonical `score` in half-point bands (unreviewed
+1. CrowdCode quality: the canonical `score` in quarter-point bands (unreviewed
    services sit at the 3.0 prior); within a band, services with 3+ distinct
    payers in the last 30 days (Bazaar usage) first. Services rated below 2 with
    real evidence go last.
