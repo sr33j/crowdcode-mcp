@@ -228,3 +228,20 @@ def test_generic_request_words_do_not_hide_specific_catalog_matches():
                                                                 "currency": NETWORK_TOKENS["tempo"], "amount": "100000"}}]}
     result = find_services("look up drug information by drug name", catalogs=FakeCatalogs(mpp={"services": [drugs]}))
     assert [s["endpoint"] for s in result["services"]] == ["https://api.rxatlas.dev/v1/drugs"]
+
+
+def test_a_clearly_better_score_beats_a_cheaper_service():
+    catalogs = FakeCatalogs(cdp={"resources": [
+        resource("https://cheap.example/search", accept(BASE_NETWORK, 2000)),
+        resource("https://better.example/search", accept(BASE_NETWORK, 10000)),
+        resource("https://tie.example/search", accept(BASE_NETWORK, 9000)),
+    ]})
+    evidence = [
+        {"endpoint": "https://cheap.example/search", "service_id": "a", "score": 3.84, "n_eff": 1.7, "num_reviews": 1, "num_verified_reviews": 1},
+        {"endpoint": "https://better.example/search", "service_id": "b", "score": 4.249, "n_eff": 3.3, "num_reviews": 4, "num_verified_reviews": 3},
+        {"endpoint": "https://tie.example/search", "service_id": "c", "score": 4.18, "n_eff": 2.0, "num_reviews": 2, "num_verified_reviews": 2},
+    ]
+    result = find_services("search", catalogs=catalogs, conn_factory=conn_factory(evidence=evidence))
+    # 4.249 and 4.18 share the 4.25 band, where the cheaper one wins; 3.84 is a band below.
+    assert [s["endpoint"] for s in result["services"]] == [
+        "https://tie.example/search", "https://better.example/search", "https://cheap.example/search"]
