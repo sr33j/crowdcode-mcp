@@ -58,7 +58,7 @@ def test_evidence_payload_groups_and_caps_reviews(monkeypatch):
         }
     )
     monkeypatch.setattr(server, "connect", _fake_connect(conn))
-    monkeypatch.setattr(server, "redact_texts", lambda texts, fail_closed: texts)
+    monkeypatch.setattr(server, "redact_texts", lambda texts, fail_closed, **_: texts)
 
     payload = server._knowledge_evidence_payload(max_reviews=2)
 
@@ -83,7 +83,7 @@ def test_evidence_payload_drops_text_when_redactor_is_down(monkeypatch):
         }
     )
     monkeypatch.setattr(server, "connect", _fake_connect(conn))
-    monkeypatch.setattr(server, "redact_texts", lambda texts, fail_closed: None)
+    monkeypatch.setattr(server, "redact_texts", lambda texts, fail_closed, **_: None)
 
     payload = server._knowledge_evidence_payload(max_reviews=10)
 

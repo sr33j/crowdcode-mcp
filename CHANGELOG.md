@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- `/api/services` and `/api/services/{service_id}` report each service's
+  payment networks: `verified_networks` (networks with verified payments, with
+  a `verified_payments` count, most used first), `advertised_networks`
+  (networks pinned by registered payees: an MPP payee settles on Tempo, a
+  base58 x402 payee on Solana; an EVM x402 payee names no chain), and
+  `networks` (both, verified first). A verified review's network comes from
+  its recorded verification network, then its reference prefix
+  (`x402:<network>:`, `mppx:tempo:`), then the rail default (bare 0x hash:
+  x402 on Base, mppx on Tempo).
+- The backend calls the redaction sidecar in chunks of 10 texts, retrying
+  each chunk once. The cron's request and review summaries and the knowledge
+  export allow 60 s per chunk. Previously the request summary sent up to 100
+  texts in one 10 s call; after a sidecar restart cleared its memo the call
+  timed out, every request was dropped, and the website's request list became
+  empty. The request summary now drops only chunks the sidecar cannot process,
+  and when it cannot process any it fails the job and keeps the last
+  published summary.
+
 - Verify x402 payments settled on Solana mainnet. Reference them as
   `x402:solana:<base58 signature>` (case-sensitive; aliases `solana` and
   `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) with the Solana payee as

@@ -44,6 +44,8 @@ from crowdcode.rate_limit import (
     identity_id_from_wallet,
     rate_limit_payload,
 )
+from crowdcode.networks import EMPTY_NETWORKS, fetch_service_networks
+from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import (
     RedactionUnavailable,
     redact_texts,
@@ -1069,6 +1071,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             rows = conn.execute(sql).fetchall()
         else:
             rows = conn.execute(sql + " limit %s", (limit,)).fetchall()
+        networks = fetch_service_networks(conn)
 
     services = [
         {
@@ -1088,6 +1091,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "num_signature_only_reviews": row["num_signature_only_reviews"],
             # Deprecated alias of the canonical score (pre-scoring-v1 field).
             "rank_score": as_float(row["score"]),
+            **networks.get(row["service_id"], EMPTY_NETWORKS),
         }
         for row in rows
     ]
@@ -1157,6 +1161,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """,
             (service_id,),
         ).fetchall()
+        networks = fetch_service_networks(conn, service_id).get(service_id, EMPTY_NETWORKS)
 
     # Same egress backstop as get_service_score: re-redact free text on the
     # way out, dropping it if the redactor is down.
@@ -1187,6 +1192,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             "canonical_endpoint": service.get("canonical_endpoint"),
             "payment_provider": service.get("payment_provider"),
         },
+        **networks,
         "score": as_float(service["score"]),
         "n_eff": n_eff,
         "unproven": is_unproven(n_eff),
@@ -1243,7 +1249,9 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
     for review in kept:
         texts.append(review.get("reason"))
         texts.append(review.get("task_context"))
-    redacted = redact_texts(texts, fail_closed=False)
+    redacted = redact_texts(
+        texts, fail_closed=False, timeout=REDACTION_BATCH_TIMEOUT, allow_partial=True
+    )
     for index, review in enumerate(kept):
         if redacted is None:
             review["reason"] = None
@@ -1335,7 +1343,7 @@ async def ready(_: Request) -> JSONResponse:
             retryable=True,
         )
     try:
-        redact_texts(["readiness"], fail_closed=True, timeout=2.0)
+        redact_texts(["readiness"], fail_closed=True, timeout=2.0, attempts=1)
     except RedactionUnavailable:
         return _json_error(
             "redaction service is unavailable",
