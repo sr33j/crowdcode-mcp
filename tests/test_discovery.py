@@ -218,3 +218,13 @@ def test_evidence_and_directory_queries_against_postgres(db):  # noqa: F811
     assert set(evidence) == {"https://storage.example/upload"}
     row = evidence["https://storage.example/upload"]
     assert row["service_id"] == service["id"] and float(row["score"]) == 4.2 and row["num_reviews"] == 0
+
+
+def test_generic_request_words_do_not_hide_specific_catalog_matches():
+    drugs = {"name": "RxAtlas", "serviceUrl": "https://api.rxatlas.dev", "status": "active",
+             "description": "Search normalized US drug products with FDA enrichments.", "tags": ["drugs", "fda"],
+             "categories": ["data"], "endpoints": [{"method": "GET", "path": "/v1/drugs", "description": "Search drug products",
+                                                    "payment": {"method": "tempo", "intent": "charge",
+                                                                "currency": NETWORK_TOKENS["tempo"], "amount": "100000"}}]}
+    result = find_services("look up drug information by drug name", catalogs=FakeCatalogs(mpp={"services": [drugs]}))
+    assert [s["endpoint"] for s in result["services"]] == ["https://api.rxatlas.dev/v1/drugs"]

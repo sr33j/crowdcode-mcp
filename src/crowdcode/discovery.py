@@ -76,9 +76,12 @@ HTTP_TIMEOUT = 8.0
 MPP_CACHE_SECONDS = 600
 SEARCH_CACHE_SECONDS = 60
 
+# Generic request words; catalog matching keys on the subject ("drug", "storage").
 _STOPWORDS = frozenset(
-    "a an and api apis are as at be by data for from get how i in into is it of on or "
-    "service services that the this to tool use using via with".split()
+    "a an and any api apis are as at be best buy by call check current data details does find "
+    "fetch for from get give how i info information in into is it latest list look lookup me my "
+    "name names need of on or paid please query request return service services some that the "
+    "this to tool use using via want what which with".split()
 )
 
 
@@ -216,7 +219,7 @@ def cdp_candidates(payload: Any, networks: Iterable[str]) -> list[Candidate]:
     return out
 
 
-def mpp_candidates(catalog: Any, query: str, networks: Iterable[str], limit: int = SOURCE_LIMIT) -> list[Candidate]:
+def mpp_candidates(catalog: Any, query: str, networks: Iterable[str], limit: int = 2 * SOURCE_LIMIT) -> list[Candidate]:
     query_tokens = tokens(query)
     scored: list[tuple[float, Candidate]] = []
     for service in (catalog or {}).get("services") or []:
