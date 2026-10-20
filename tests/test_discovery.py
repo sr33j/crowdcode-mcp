@@ -218,6 +218,8 @@ def test_evidence_and_directory_queries_against_postgres(db):  # noqa: F811
     assert set(evidence) == {"https://storage.example/upload"}
     row = evidence["https://storage.example/upload"]
     assert row["service_id"] == service["id"] and float(row["score"]) == 4.2 and row["num_reviews"] == 0
+    # The mppx payee pins Tempo, so the directory entry carries that network.
+    assert discovery.fetch_service_networks(conn)[service["id"]]["networks"] == ["tempo"]
 
 
 def test_generic_request_words_do_not_hide_specific_catalog_matches():
@@ -245,3 +247,16 @@ def test_a_clearly_better_score_beats_a_cheaper_service():
     # 4.249 and 4.18 share the 4.25 band, where the cheaper one wins; 3.84 is a band below.
     assert [s["endpoint"] for s in result["services"]] == [
         "https://tie.example/search", "https://better.example/search", "https://cheap.example/search"]
+
+
+def test_word_forms_match_and_directory_entries_carry_seen_networks():
+    rows = [{"id": "svc_ics", "name": "mwork.dev", "directory_slug": None,
+             "canonical_endpoint": "https://mwork.dev/v1/generate-ics", "payment_provider": "mppx"},
+            {"id": "svc_sol", "name": "Tick", "directory_slug": None,
+             "canonical_endpoint": "https://tick.example/sku/calendar-ics", "payment_provider": "x402"}]
+    networks = {"svc_sol": {"networks": ["solana"]}}
+    found = discovery.directory_candidates(rows, "ics calendar file generation", networks=networks)
+    assert [c.endpoint for c in found] == ["https://mwork.dev/v1/generate-ics", "https://tick.example/sku/calendar-ics"]
+    assert [(o.network, o.payable) for o in found[0].offers] == [("tempo", True)]
+    assert [(o.network, o.protocol, o.payable) for o in found[1].offers] == [("solana", "x402", True)]
+    assert discovery.relevance(["transcription"], "transform json") == 0
