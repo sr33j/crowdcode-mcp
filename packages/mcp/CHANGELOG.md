@@ -1,6 +1,6 @@
 # crowdcode-mcp (npm) changelog
 
-## Unreleased
+## 0.8.0 — 2026-10-20
 
 - Accept x402 Solana payments: a `payment_proof` naming Solana yields an
   `x402:solana:<signature>` reference (case preserved). When agentcash's Solana
