@@ -55,6 +55,13 @@ def _fake_post(payload, *, status_ok=True):
     return post
 
 
+@pytest.fixture(autouse=True)
+def no_retry_sleep(monkeypatch):
+    slept = []
+    monkeypatch.setattr(redaction.time, "sleep", slept.append)
+    return slept
+
+
 def test_redacts_and_preserves_none_positions(monkeypatch):
     monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
     monkeypatch.setattr(
@@ -194,3 +201,29 @@ def test_partial_mode_returns_none_when_every_chunk_fails(monkeypatch):
     assert redact_texts(["a", "b"], fail_closed=False, allow_partial=True) is None
     assert redact_texts(["a"], fail_closed=False, attempts=1) is None
     assert len(calls) == 3
+
+
+def test_connection_errors_pause_before_retrying(monkeypatch, no_retry_sleep):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"]["texts"])
+        if len(calls) == 1:
+            raise redaction.httpx.ConnectError("connection refused")
+        return type("R", (), {"raise_for_status": lambda self: None,
+                              "json": lambda self: {"texts": ["ok"]}})()
+
+    monkeypatch.setattr(redaction.httpx, "post", post)
+    assert redact_texts(["a"], fail_closed=True) == ["ok"]
+    assert no_retry_sleep == [redaction.RETRY_DELAY]
+
+
+def test_timeouts_retry_without_pausing(monkeypatch, no_retry_sleep):
+    monkeypatch.setenv("REDACTOR_URL", "http://127.0.0.1:8090")
+    calls = []
+    monkeypatch.setattr(
+        redaction.httpx, "post", _recording_post(calls, fail=lambda n, _: n == 1)
+    )
+    assert redact_texts(["a"], fail_closed=True) == ["R(a)"]
+    assert no_retry_sleep == []
