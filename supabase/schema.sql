@@ -251,3 +251,41 @@ alter table deleted_review_keys enable row level security;
 alter table services add column if not exists review_revision bigint not null default 0;
 create index if not exists reviews_owner_id_idx
   on reviews (lower(reviewer_wallet), id desc);
+
+-- Hosted-only weighted reviews (docs/SCORING.md v3). Only a review backed by a
+-- hosted OpenCrowd gateway receipt and a platform-judge score carries ranking
+-- weight; everything else stays stored and readable as community evidence with
+-- weight exactly zero. See supabase/hosted-only-reviews.sql for the data
+-- migration and score replay that go with this DDL.
+alter table reviews
+  add column if not exists verified_source text not null default 'community'
+    check (verified_source in ('community', 'hosted_receipt')),
+  add column if not exists weight_exclusion text default 'community'
+    check (weight_exclusion is null or weight_exclusion in
+      ('community', 'self_dealing', 'dust_payment', 'unsigned_placeholder')),
+  add column if not exists owner_ref text,
+  add column if not exists payee_owner_ref text,
+  add column if not exists receipt_key_id text,
+  add column if not exists gateway_attestation jsonb;
+
+create index if not exists reviews_owner_service_idx
+  on reviews (owner_ref, service_id)
+  where owner_ref is not null and weight_exclusion is null;
+-- One vote per receipt: a replayed attestation cannot buy a second vote under
+-- a different review nonce.
+create unique index if not exists reviews_receipt_sha256_idx
+  on reviews ((gateway_attestation -> 'review' ->> 'receipt_sha256'))
+  where gateway_attestation is not null;
+
+-- Owner trust. Per owner, not per wallet: a wallet costs nothing to create and
+-- one hosted owner runs many of them. Seeds come only from
+-- CROWDCODE_SEED_OWNERS; no wallet registry grants trust.
+create table if not exists review_owners (
+  owner_ref text primary key,
+  created_at timestamptz not null default now(),
+  is_seed boolean not null default false,
+  raw_trust double precision not null default 0,
+  trust_updated_at timestamptz,
+  slashed_at timestamptz
+);
+alter table review_owners enable row level security;

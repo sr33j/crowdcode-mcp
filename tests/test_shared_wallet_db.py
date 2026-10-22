@@ -203,13 +203,20 @@ def test_unpaid_review_stored_once_visible_and_scored(review_backend):
     assert conn.execute('select count(*) as n from reviews').fetchone()['n'] == 1
     rows = _summary_input_reviews(conn, first['service_id'], {}, utc_now())
     assert len(rows) == 1 and not rows[0]['payment_verified']
-    conn.execute('update wallet_users set is_seed=true where wallet_address=%s', (account.address.lower(),))
+    # Making the reviewer's wallet a seed used to buy it weight. It no longer
+    # can: an unattested review is community evidence whoever signed it.
+    conn.execute('update wallet_users set is_seed=true, raw_trust=1 where wallet_address=%s', (account.address.lower(),))
     second = submit(ident, 'attempt_456', rating=3)
     assert second['accepted'], second
+    assert second['counts_towards_ranking'] is False
+    assert second['verified_source'] == 'community'
     score = server.get_service_score(api_endpoint=ident.api_endpoint)
     assert score['num_reviews'] == 2 and score['num_verified_reviews'] == 0
-    assert score['n_eff'] > 0
+    # Readable and counted as community evidence, with no ranking weight.
+    assert score['n_eff'] == 0.0
+    assert score['num_community_reviews'] == 2 and score['num_weighted_reviews'] == 0
     assert len(score['recent_reviews']) == 2
+    assert all(row['counts_towards_ranking'] is False for row in score['recent_reviews'])
     assert all(not row['payment_verified'] for row in score['recent_reviews'])
     assert score['recent_reviews'][0]['reason'] == 'Endpoint returned HTTP 500'
     # Reapplying the full schema does not fabricate payment evidence.

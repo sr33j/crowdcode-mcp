@@ -70,6 +70,10 @@ export function normalizeApiEndpoint(
     throw new Error("api_endpoint must include a host");
   }
   const scheme = (match[1] ?? "https").toLowerCase();
+  // Mirrors the backend: a service endpoint is callable over HTTP. Anything
+  // else is an injection vector once stored and rendered as a link.
+  if (scheme !== "http" && scheme !== "https")
+    throw new Error("api_endpoint must be an http or https URL");
   const authority = match[2] ?? "";
   const rawPath = match[3] ?? "";
 
