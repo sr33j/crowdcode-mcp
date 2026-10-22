@@ -11,12 +11,15 @@ import pytest
 
 from crowdcode.reputation import (
     apply_review_trust_update,
+    ensure_user,
     recompute_service_score,
-    sync_seed_wallets,
+    sync_seed_owners,
 )
 from crowdcode.scoring import ETA, KAPPA, MU0
 
 NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
+SEED_OWNER = "1" * 32
+HONEST_OWNER = "2" * 32
 SEED_WALLET = "0x" + "11" * 20
 HONEST_WALLET = "0x" + "22" * 20
 
@@ -54,23 +57,27 @@ class FakeConn:
         return [q for q in self.queries if fragment in q[0]]
 
 
-def _review_row(wallet, rating):
+def _review_row(owner, rating, *, exclusion=None):
+    """A weighted hosted review by default."""
     return {
-        "reviewer_wallet": wallet,
+        "reviewer_wallet": f"0xwallet-of-{owner[:8]}",
         "rating": rating,
         "payment_verified": True,
         "signature_verified": True,
+        "payment_verification_level": "response_attested",
         "created_at": NOW,
+        "owner_ref": owner,
+        "weight_exclusion": exclusion,
     }
 
 
 def test_recompute_stores_the_canonical_score():
     conn = FakeConn(
         {
-            "from reviews": [_review_row(SEED_WALLET, 5)],
-            "from wallet_users": [
+            "from reviews": [_review_row(SEED_OWNER, 5)],
+            "from review_owners": [
                 {
-                    "wallet_address": SEED_WALLET,
+                    "owner_ref": SEED_OWNER,
                     "raw_trust": 1.0,
                     "is_seed": True,
                     "slashed_at": None,
@@ -79,21 +86,21 @@ def test_recompute_stores_the_canonical_score():
         }
     )
     result = recompute_service_score(conn, "svc_1", NOW)
-    # seed weight 1.0 x verified 2.0 = 2.0
-    assert result.n_eff == 2.0
-    assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA)
+    # one trusted owner vote
+    assert result.n_eff == 1.0
+    assert result.score == (1.0 * 5 + KAPPA * MU0) / (1.0 + KAPPA)
 
     update = conn.executed("update services")[0]
     assert update[1] == (result.score, result.n_eff, NOW, "svc_1")
 
 
-def test_untrusted_reviews_leave_the_service_at_the_prior():
+def test_untrusted_owners_leave_the_service_at_the_prior():
     conn = FakeConn(
         {
-            "from reviews": [_review_row(HONEST_WALLET, 5)] * 20,
-            "from wallet_users": [
+            "from reviews": [_review_row(HONEST_OWNER, 5)] * 20,
+            "from review_owners": [
                 {
-                    "wallet_address": HONEST_WALLET,
+                    "owner_ref": HONEST_OWNER,
                     "raw_trust": 0.0,
                     "is_seed": False,
                     "slashed_at": None,
@@ -106,30 +113,46 @@ def test_untrusted_reviews_leave_the_service_at_the_prior():
     assert result.n_eff == 0.0
 
 
-def test_trust_update_uses_the_leave_one_out_consensus():
-    # The wallet's own 20 reviews are excluded, so the consensus it is scored
-    # against is the seed's alone (4.0 => p = 0.75); agreeing earns trust.
+def test_community_reviews_from_a_seed_owner_still_weigh_nothing():
+    """Trust is not a bypass: an owner's unattested review carries no weight
+    however trusted the owner is."""
     conn = FakeConn(
         {
-            "from wallet_users\n        where wallet_address": [
+            "from reviews": [_review_row(SEED_OWNER, 5, exclusion="community")] * 5,
+            "from review_owners": [
+                {"owner_ref": SEED_OWNER, "raw_trust": 1.0, "is_seed": True, "slashed_at": None}
+            ],
+        }
+    )
+    result = recompute_service_score(conn, "svc_1", NOW)
+    assert result.score == MU0
+    assert result.n_eff == 0.0
+
+
+def test_trust_update_uses_the_leave_one_out_consensus():
+    # The owner's own 20 reviews are excluded, so the consensus it is scored
+    # against is the seed's alone; agreeing with it earns trust.
+    conn = FakeConn(
+        {
+            "from review_owners\n        where owner_ref": [
                 {
-                    "user_id": 7,
+                    "owner_ref": HONEST_OWNER,
                     "raw_trust": 0.5,
                     "is_seed": False,
                     "slashed_at": None,
                 }
             ],
-            "from reviews": [_review_row(SEED_WALLET, 5)]
-            + [_review_row(HONEST_WALLET, 1)] * 20,
-            "from wallet_users": [
+            "from reviews": [_review_row(SEED_OWNER, 5)]
+            + [_review_row(HONEST_OWNER, 1)] * 20,
+            "from review_owners": [
                 {
-                    "wallet_address": SEED_WALLET,
+                    "owner_ref": SEED_OWNER,
                     "raw_trust": 1.0,
                     "is_seed": True,
                     "slashed_at": None,
                 },
                 {
-                    "wallet_address": HONEST_WALLET,
+                    "owner_ref": HONEST_OWNER,
                     "raw_trust": 0.5,
                     "is_seed": False,
                     "slashed_at": None,
@@ -137,66 +160,65 @@ def test_trust_update_uses_the_leave_one_out_consensus():
             ],
         }
     )
-    new_raw = apply_review_trust_update(conn, HONEST_WALLET, "svc_1", 5, NOW)
+    new_raw = apply_review_trust_update(conn, HONEST_OWNER, "svc_1", 5, NOW)
     assert new_raw > 0.5
     assert new_raw <= 0.5 + ETA
-    assert conn.executed("update wallet_users set raw_trust")[0][1] == (new_raw, NOW, 7)
+    assert conn.executed("update review_owners set raw_trust")[0][1] == (new_raw, NOW, HONEST_OWNER)
 
 
-def test_seeds_and_slashed_wallets_never_move():
+def test_seeds_and_slashed_owners_never_move():
     for row in (
-        {"user_id": 1, "raw_trust": 1.0, "is_seed": True, "slashed_at": None},
-        {"user_id": 2, "raw_trust": 0.4, "is_seed": False, "slashed_at": NOW},
+        {"owner_ref": SEED_OWNER, "raw_trust": 1.0, "is_seed": True, "slashed_at": None},
+        {"owner_ref": SEED_OWNER, "raw_trust": 0.4, "is_seed": False, "slashed_at": NOW},
     ):
-        conn = FakeConn({"from wallet_users\n        where wallet_address": [row]})
-        assert apply_review_trust_update(conn, SEED_WALLET, "svc_1", 5, NOW) is None
-        assert conn.executed("update wallet_users set raw_trust") == []
+        conn = FakeConn({"from review_owners\n        where owner_ref": [row]})
+        assert apply_review_trust_update(conn, SEED_OWNER, "svc_1", 5, NOW) is None
+        assert conn.executed("update review_owners set raw_trust") == []
 
 
-def test_unknown_wallet_produces_no_trust_update():
+def test_unknown_owner_produces_no_trust_update():
     conn = FakeConn({})
-    assert apply_review_trust_update(conn, HONEST_WALLET, "svc_1", 5, NOW) is None
+    assert apply_review_trust_update(conn, HONEST_OWNER, "svc_1", 5, NOW) is None
 
 
-def test_seed_sync_pins_listed_wallets_and_demotes_the_rest():
+def test_seed_sync_pins_listed_owners_and_demotes_the_rest():
     conn = FakeConn({})
-    sync_seed_wallets(conn, [SEED_WALLET.upper(), "", "  "])
-    inserts = conn.executed("insert into wallet_users")
+    sync_seed_owners(conn, [SEED_OWNER.upper(), "", "  "])
+    inserts = conn.executed("insert into review_owners")
     assert len(inserts) == 1
-    assert inserts[0][1] == (SEED_WALLET,)
+    assert inserts[0][1] == (SEED_OWNER,)
     demote = conn.executed("set is_seed = false")[0]
-    assert demote[1] == ([SEED_WALLET],)
+    assert demote[1] == ([SEED_OWNER],)
 
 
 def test_empty_seed_list_is_a_no_op_not_a_mass_demotion():
     conn = FakeConn({})
-    sync_seed_wallets(conn, [])
-    assert conn.executed("insert into wallet_users") == []
+    sync_seed_owners(conn, [])
+    assert conn.executed("insert into review_owners") == []
     assert conn.executed("set is_seed = false") == []
 
 
-def test_hosted_seeds_survive_explicit_seed_sync():
+def test_no_wallet_registry_can_grant_trust_any_more():
+    """The regression this change exists for: registering a hosted mainnet
+    wallet used to pin it at trust 1.0. A wallet now earns nothing, ever, and
+    the backend no longer reads the hosted registry at all."""
     conn = FakeConn({
         "to_regclass": [{"relation": "opencrowd_seed_wallets"}],
         "from opencrowd_seed_wallets": [{"wallet_address": HONEST_WALLET}],
+        "insert into wallet_users": [
+            {"user_id": 3, "wallet_address": HONEST_WALLET, "is_seed": False,
+             "raw_trust": 0.0, "slashed_at": None}
+        ],
     })
-    sync_seed_wallets(conn, [SEED_WALLET])
-    assert {q[1][0] for q in conn.executed("insert into wallet_users")} == {SEED_WALLET, HONEST_WALLET}
-    assert conn.executed("set is_seed = false")[0][1] == ([SEED_WALLET, HONEST_WALLET],)
-
-
-def test_hosted_seeds_sync_without_an_explicit_list():
-    conn = FakeConn({
-        "to_regclass": [{"relation": "opencrowd_seed_wallets"}],
-        "from opencrowd_seed_wallets": [{"wallet_address": HONEST_WALLET}],
-    })
-    sync_seed_wallets(conn, [])
-    assert conn.executed("insert into wallet_users")[0][1] == (HONEST_WALLET,)
-    assert conn.executed("set is_seed = false") == []
+    assert ensure_user(conn, HONEST_WALLET)["is_seed"] is False
+    assert conn.executed("opencrowd_seed_wallets") == []
+    assert conn.executed("to_regclass") == []
+    sync_seed_owners(conn, [SEED_OWNER])
+    assert {q[1][0] for q in conn.executed("insert into review_owners")} == {SEED_OWNER}
 
 
 def test_invalid_seed_configuration_fails_before_any_writes():
     conn = FakeConn({})
-    with pytest.raises(ValueError, match="comma-separated EVM"):
-        sync_seed_wallets(conn, [SEED_WALLET + "\nMPPX_TEMPO_TOKEN_ADDRESS=0x123"])
+    with pytest.raises(ValueError, match="hex owner references"):
+        sync_seed_owners(conn, [SEED_OWNER + "\nMPPX_TEMPO_TOKEN_ADDRESS=0x123"])
     assert conn.queries == []

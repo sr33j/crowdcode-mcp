@@ -29,6 +29,7 @@ from crowdcode.identity import (
     resolve_service,
 )
 from crowdcode.payments import (
+    LEVEL_RESPONSE_ATTESTED,
     REASON_HASH_RE,
     PaymentVerification,
     _normalize_evm_address,
@@ -53,10 +54,12 @@ from crowdcode.redaction import (
     redaction_enabled,
 )
 from crowdcode.review_management import authorize, review_replay_key, lock_review_writes
+from crowdcode.receipts import evaluate_attestation, published_keys
 from crowdcode.reputation import (
+    ensure_owner,
     ensure_user,
     recompute_service_score,
-    sync_seed_wallets,
+    sync_seed_owners,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +89,37 @@ mcp = FastMCP(
         allowed_origins=list(get_mcp_allowed_origins()),
     ),
 )
+
+# Reviews anybody may read. The legacy stripe/manual admission path accepted
+# unsigned placeholder rows (payments.verify_payment_reference): nothing
+# attributable stands behind them, so they are retained for continuity and
+# never published, counted, or summarized. Static SQL, interpolated by name.
+PUBLIC_REVIEWS = "(signature_verified or verified_source = 'hosted_receipt')"
+# The ranking-weighted subset: a verified hosted gateway receipt whose owner
+# was neither self-dealing nor paying dust (docs/SCORING.md §3.6).
+WEIGHTED_REVIEWS = "(weight_exclusion is null)"
+# Columns every public review listing exposes, so a reader can tell judged
+# hosted evidence from community reports.
+PUBLIC_REVIEW_COLUMNS = """rating, reason, task_context, payment_verified,
+                   payment_verification_level as verification_level,
+                   verified_source, (weight_exclusion is null) as counts_towards_ranking,
+                   created_at"""
+# The evidence counters every score payload carries.
+REVIEW_COUNTS = f"""
+              count(*) filter (where {PUBLIC_REVIEWS})::int as num_reviews,
+              count(*) filter (where {PUBLIC_REVIEWS} and payment_verified)::int as num_verified_reviews,
+              avg(rating) filter (where {PUBLIC_REVIEWS} and payment_verified) as verified_avg_rating,
+              count(*) filter (where {PUBLIC_REVIEWS} and payment_verification_level
+                in ('onchain_verified', 'response_attested'))::int
+                as num_onchain_verified_reviews,
+              count(*) filter (where {PUBLIC_REVIEWS} and payment_verification_level
+                in ('unverified', 'signature_only'))::int
+                as num_signature_only_reviews,
+              count(*) filter (where {WEIGHTED_REVIEWS})::int as num_weighted_reviews,
+              avg(rating) filter (where {WEIGHTED_REVIEWS}) as weighted_avg_rating,
+              count(*) filter (where {PUBLIC_REVIEWS} and not {WEIGHTED_REVIEWS})::int
+                as num_community_reviews"""
+
 
 def _json_ready(row: dict[str, Any]) -> dict[str, Any]:
     clean = dict(row)
@@ -348,18 +382,10 @@ def get_service_score(
         assert resolved.identity is not None
 
         score = conn.execute(
-            """
+            f"""
             select
-              avg(rating) as avg_rating,
-              count(*)::int as num_reviews,
-              count(*) filter (where payment_verified)::int as num_verified_reviews,
-              avg(rating) filter (where payment_verified) as verified_avg_rating,
-              count(*) filter (where payment_verification_level
-                in ('onchain_verified', 'response_attested'))::int
-                as num_onchain_verified_reviews,
-              count(*) filter (where payment_verification_level
-                in ('unverified', 'signature_only'))::int
-                as num_signature_only_reviews
+              avg(rating) filter (where {PUBLIC_REVIEWS}) as avg_rating,
+              {REVIEW_COUNTS}
             from reviews
             where service_id = %s
             """,
@@ -369,13 +395,15 @@ def get_service_score(
             "select score, n_eff, review_summary from services where id = %s",
             (service["id"],),
         ).fetchone()
+        # Weighted, judge-written reviews first: a client that reads only the
+        # first few sees evidence the ranking actually rests on, and never
+        # treats an unweighted community report as though it did.
         recent_reviews = conn.execute(
-            """
-            select rating, reason, task_context, payment_verified,
-                   payment_verification_level as verification_level, created_at
+            f"""
+            select {PUBLIC_REVIEW_COLUMNS}
             from reviews
-            where service_id = %s
-            order by created_at desc
+            where service_id = %s and {PUBLIC_REVIEWS}
+            order by {WEIGHTED_REVIEWS} desc, created_at desc
             limit 5
             """,
             (service["id"],),
@@ -422,6 +450,11 @@ def get_service_score(
         "num_verified_reviews": score["num_verified_reviews"],
         "num_onchain_verified_reviews": score["num_onchain_verified_reviews"],
         "num_signature_only_reviews": score["num_signature_only_reviews"],
+        # Weighted evidence is what the score is computed from; community
+        # reviews are readable context with no ranking weight.
+        "num_weighted_reviews": score["num_weighted_reviews"],
+        "num_community_reviews": score["num_community_reviews"],
+        "weighted_avg_rating": as_float(score["weighted_avg_rating"]),
         "verified_avg_rating": as_float(score["verified_avg_rating"]),
         # Deprecated alias of the canonical score, kept so pre-0.3.0 clients
         # silently upgrade instead of reading a dead formula.
@@ -476,6 +509,9 @@ def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
         "avg_rating": None,
         "num_reviews": 0,
         "num_verified_reviews": 0,
+        "num_weighted_reviews": 0,
+        "num_community_reviews": 0,
+        "weighted_avg_rating": None,
         "verified_avg_rating": None,
         "weighted_rating": None,
         "summary": None,
@@ -657,6 +693,7 @@ def review_service(
     signature_scheme: str = "eip191",
     payer_signature: str | None = None,
     payer_wallet: str | None = None,
+    gateway_attestation: str | dict | None = None,
 ) -> dict[str, Any]:
     """Review a service experience, whether or not payment occurred.
 
@@ -670,6 +707,12 @@ def review_service(
     Describe the observed outcome and distinguish provider faults from caller
     errors, insufficient funds, and uncertain failures. Do not invent a payment
     reference or blame the provider for a client-side failure.
+
+    Only reviews carrying a hosted OpenCrowd gateway attestation
+    (gateway_attestation, signed by the gateway that made the paid call and
+    containing the platform judge's score) count towards a service's ranking.
+    Every other review is accepted and published as community evidence with no
+    ranking weight; there is nothing to opt into and nothing to supply.
 
     When claiming payment, use the actual settlement reference and payee.
     x402 Base/Monad USDC and mppx Tempo claims require a verified on-chain transfer
@@ -794,6 +837,33 @@ def review_service(
                 )
             return failure
 
+        # The hosted gateway attestation decides ranking weight. It is checked
+        # after the payment claim and before anything is reserved: a forged or
+        # mismatched attestation is rejected outright rather than silently
+        # downgraded, exactly like a failing payment proof.
+        attested = None
+        weight_exclusion = "community"
+        if gateway_attestation is not None:
+            outcome = evaluate_attestation(
+                gateway_attestation,
+                api_endpoint=effective_identity.api_endpoint,
+                payment_target_ref=effective_identity.payment_target_ref,
+                payment_reference=payment_reference,
+                rating=rating,
+                reason=reason,
+                reviewer_wallet=verification.reviewer_wallet,
+                min_amount_atomic=get_settings().min_weighted_amount_atomic,
+            )
+            if not outcome.ok:
+                return {"accepted": False, "status": "rejected", "retryable": False,
+                        "error_code": "attestation_rejected", "reason": outcome.reason}
+            attested = outcome.attestation
+            weight_exclusion = outcome.weight_exclusion
+        elif not verification.signature_verified:
+            # The legacy unsigned admission path (stripe/manual placeholders).
+            # Stored for continuity, never published, never weighted.
+            weight_exclusion = "unsigned_placeholder"
+
         # Only a successfully verified payer may claim the globally unique
         # canonical transaction reference. This check intentionally runs
         # after signature/on-chain verification to prevent public tx-hash
@@ -885,6 +955,13 @@ def review_service(
                 user = ensure_user(conn, verification.reviewer_wallet)
                 user_id = user["user_id"]
 
+            # A verified hosted purchase is the signed-receipt tier the level
+            # column always reserved: `response_attested` binds the payment to
+            # the specific request and response, which nothing else does.
+            level = LEVEL_RESPONSE_ATTESTED if attested else verification.payment_verification_level
+            payment_verified = verification.payment_verified or attested is not None
+            if attested is not None:
+                ensure_owner(conn, attested.owner_ref)
             row = conn.execute(
                 """
                 insert into reviews (
@@ -894,9 +971,11 @@ def review_service(
                   reviewer_wallet, review_signature, signature_scheme,
                   signature_verified, redacted_at, user_id, amount,
                   payment_verification_level, payment_verification_metadata,
-                  payment_reference_canonical, review_nonce
+                  payment_reference_canonical, review_nonce,
+                  verified_source, weight_exclusion, owner_ref, payee_owner_ref,
+                  receipt_key_id, gateway_attestation
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
                 (
@@ -909,8 +988,8 @@ def review_service(
                     effective_identity.payment_provider,
                     effective_identity.payment_target_ref,
                     Jsonb(verification.metadata or {}),
-                    verification.payment_verified,
-                    utc_now() if verification.payment_verified else None,
+                    payment_verified,
+                    utc_now() if payment_verified else None,
                     verification.reviewer_wallet,
                     verification.review_signature,
                     verification.signature_scheme,
@@ -918,10 +997,16 @@ def review_service(
                     utc_now() if redaction_enabled() else None,
                     user_id,
                     verification.amount,
-                    verification.payment_verification_level,
+                    level,
                     Jsonb(verification.payment_verification_metadata or {}),
                     stored_canonical,
                     review_nonce,
+                    "hosted_receipt" if attested else "community",
+                    weight_exclusion,
+                    attested.owner_ref if attested else None,
+                    attested.payee_owner_ref if attested else None,
+                    attested.kid if attested else None,
+                    Jsonb(_attestation_record(gateway_attestation)) if attested else None,
                 ),
             ).fetchone()
 
@@ -955,11 +1040,21 @@ def review_service(
                 "reason": "payment_reference already used",
             }
 
-    return _review_accepted(service["id"], row["id"], verification, service_created)
+    return _review_accepted(service["id"], row["id"], verification, service_created,
+                            weight_exclusion, attested is not None)
+
+
+def _attestation_record(raw: Any) -> dict[str, Any]:
+    """The verified attestation, stored verbatim so any published score can be
+    re-derived — and re-verified — from the evidence it rests on."""
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return raw if isinstance(raw, dict) else {}
 
 
 def _review_accepted(service_id: str, review_id: int, verification: PaymentVerification,
-                     service_created: bool = False) -> dict[str, Any]:
+                     service_created: bool = False, weight_exclusion: str | None = "community",
+                     attested: bool = False) -> dict[str, Any]:
     return {
         "accepted": True,
         "reason": "review accepted",
@@ -967,10 +1062,16 @@ def _review_accepted(service_id: str, review_id: int, verification: PaymentVerif
         "service_created": service_created,
         "review_id": review_id,
         "verification": verification.reason,
-        "payment_verified": verification.payment_verified,
-        "payment_verification_level": verification.payment_verification_level,
+        "payment_verified": verification.payment_verified or attested,
+        "payment_verification_level": LEVEL_RESPONSE_ATTESTED if attested
+            else verification.payment_verification_level,
         "signature_verified": verification.signature_verified,
-        "verified_purchase": verification.payment_verified,
+        "verified_purchase": verification.payment_verified or attested,
+        # What the reviewer's own submission earned: weighted hosted evidence,
+        # or community evidence and why.
+        "verified_source": "hosted_receipt" if attested else "community",
+        "counts_towards_ranking": weight_exclusion is None,
+        "weight_exclusion": weight_exclusion,
     }
 
 
@@ -1080,19 +1181,22 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.score,
           s.n_eff,
           (s.review_summary is not null) as has_summary,
-          avg(r.rating)::float as avg_rating,
-          count(r.id)::int as num_reviews,
-          count(r.id) filter (where r.payment_verified)::int as num_verified_reviews,
-          count(r.id) filter (where r.payment_verification_level
+          avg(r.rating) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::float as avg_rating,
+          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::int as num_reviews,
+          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verified)::int as num_verified_reviews,
+          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verification_level
             in ('onchain_verified', 'response_attested'))::int
             as num_onchain_verified_reviews,
-          count(r.id) filter (where r.payment_verification_level
+          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verification_level
             in ('unverified', 'signature_only'))::int
-            as num_signature_only_reviews
+            as num_signature_only_reviews,
+          count(r.id) filter (where (r.weight_exclusion is null))::int as num_weighted_reviews,
+          avg(r.rating) filter (where (r.weight_exclusion is null))::float as weighted_avg_rating,
+          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and not (r.weight_exclusion is null))::int as num_community_reviews
         from services s
         left join reviews r on r.service_id = s.id
         group by s.id
-        order by s.score desc, s.n_eff desc, num_reviews desc, s.name asc
+        order by s.score desc, s.n_eff desc, num_weighted_reviews desc, num_reviews desc, s.name asc
         """
     with connect() as conn:
         if limit is None:
@@ -1117,6 +1221,9 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "num_verified_reviews": row["num_verified_reviews"],
             "num_onchain_verified_reviews": row["num_onchain_verified_reviews"],
             "num_signature_only_reviews": row["num_signature_only_reviews"],
+            "num_weighted_reviews": row["num_weighted_reviews"],
+            "num_community_reviews": row["num_community_reviews"],
+            "weighted_avg_rating": as_float(row["weighted_avg_rating"]),
             # Deprecated alias of the canonical score (pre-scoring-v1 field).
             "rank_score": as_float(row["score"]),
             **networks.get(row["service_id"], EMPTY_NETWORKS),
@@ -1154,38 +1261,39 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             }, 404
 
         counts = conn.execute(
-            """
-            select
-              count(*)::int as num_reviews,
-              count(*) filter (where payment_verified)::int as num_verified_reviews,
-              count(*) filter (where payment_verification_level
-                in ('onchain_verified', 'response_attested'))::int
-                as num_onchain_verified_reviews,
-              count(*) filter (where payment_verification_level
-                in ('unverified', 'signature_only'))::int
-                as num_signature_only_reviews
+            f"""
+            select {REVIEW_COUNTS}
             from reviews
             where service_id = %s
             """,
             (service_id,),
         ).fetchone()
         histogram_rows = conn.execute(
-            """
+            f"""
             select rating, count(*)::int as n
             from reviews
-            where service_id = %s
+            where service_id = %s and {PUBLIC_REVIEWS}
             group by rating
             """,
             (service_id,),
         ).fetchall()
-        recent_reviews = conn.execute(
-            """
-            select rating, reason, task_context, payment_verified,
-                   payment_verification_level as verification_level, created_at
+        weighted_histogram_rows = conn.execute(
+            f"""
+            select rating, count(*)::int as n
             from reviews
-            where service_id = %s
-            order by created_at desc
-            limit 5
+            where service_id = %s and {WEIGHTED_REVIEWS}
+            group by rating
+            """,
+            (service_id,),
+        ).fetchall()
+        # Up to 10 here (the website shows them grouped), weighted first.
+        recent_reviews = conn.execute(
+            f"""
+            select {PUBLIC_REVIEW_COLUMNS}
+            from reviews
+            where service_id = %s and {PUBLIC_REVIEWS}
+            order by {WEIGHTED_REVIEWS} desc, created_at desc
+            limit 10
             """,
             (service_id,),
         ).fetchall()
@@ -1209,6 +1317,9 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
     histogram = {str(rating): 0 for rating in range(1, 6)}
     for row in histogram_rows:
         histogram[str(row["rating"])] = row["n"]
+    weighted_histogram = {str(rating): 0 for rating in range(1, 6)}
+    for row in weighted_histogram_rows:
+        weighted_histogram[str(row["rating"])] = row["n"]
 
     n_eff = as_float(service["n_eff"]) or 0.0
     return {
@@ -1229,7 +1340,11 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "num_verified_reviews": counts["num_verified_reviews"],
         "num_onchain_verified_reviews": counts["num_onchain_verified_reviews"],
         "num_signature_only_reviews": counts["num_signature_only_reviews"],
+        "num_weighted_reviews": counts["num_weighted_reviews"],
+        "num_community_reviews": counts["num_community_reviews"],
+        "weighted_avg_rating": as_float(counts["weighted_avg_rating"]),
         "histogram": histogram,
+        "weighted_histogram": weighted_histogram,
         "summary": _redacted_summary(service.get("review_summary")),
         "recent_reviews": [_json_ready(row) for row in recent_reviews],
     }, 200
@@ -1255,12 +1370,14 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
             """
         ).fetchall()
         reviews = conn.execute(
-            """
+            f"""
             select service_id, rating, reason, task_context, payment_verified,
-                   payment_verification_level as verification_level, amount,
-                   created_at
+                   payment_verification_level as verification_level,
+                   verified_source, (weight_exclusion is null) as counts_towards_ranking,
+                   amount, created_at
             from reviews
-            order by service_id, created_at desc
+            where {PUBLIC_REVIEWS}
+            order by service_id, {WEIGHTED_REVIEWS} desc, created_at desc
             """
         ).fetchall()
 
@@ -1308,6 +1425,9 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
                 "num_verified_reviews": sum(
                     1 for r in service_reviews if r.get("payment_verified")
                 ),
+                "num_weighted_reviews": sum(
+                    1 for r in service_reviews if r.get("counts_towards_ranking")
+                ),
                 "summary": _redacted_summary(service.get("review_summary")),
                 "reviews": [_json_ready(r) for r in service_reviews],
             }
@@ -1349,6 +1469,24 @@ async def knowledge_evidence(request: Request) -> JSONResponse:
     except Exception:
         return _unexpected_json_error("knowledge_evidence")
     return JSONResponse(payload, headers={"Cache-Control": "private, max-age=300"})
+
+
+async def receipt_keys(_: Request) -> JSONResponse:
+    """The gateway receipt keys this deployment trusts (docs/SCORING.md §3.6).
+
+    Only reviews signed by one of these carry ranking weight, so publishing
+    them is what makes that claim checkable: anyone can take a published score,
+    pull the attestation it rests on, and verify the signature themselves.
+    Public keys only."""
+    try:
+        keys = published_keys()
+    except ValueError:
+        return _json_error("receipt keys are misconfigured", status_code=503,
+                           error_code="receipt_keys_unavailable", retryable=True)
+    return JSONResponse({"ok": True, "alg": "ed25519",
+                         "canonical_payload": "json.dumps(payload, sort_keys=True, separators=(\",\", \":\"))",
+                         "keys": keys},
+                        headers={"Cache-Control": "public, max-age=300"})
 
 
 async def health(_: Request) -> JSONResponse:
@@ -1435,27 +1573,28 @@ async def service_detail(request: Request) -> JSONResponse:
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
 
-def _sync_seed_wallets_at_startup() -> None:
-    """Best-effort seed sync (docs/SCORING.md §3.5): pin the operator wallets
-    from CROWDCODE_SEED_WALLETS at trust 1.0. Failures must not stop the
-    server — the cron run repeats the sync."""
+def _sync_seed_owners_at_startup() -> None:
+    """Best-effort seed sync (docs/SCORING.md §3.5): pin the root owners from
+    CROWDCODE_SEED_OWNERS at trust 1.0. Failures must not stop the server —
+    the cron run repeats the sync."""
     settings = get_settings()
     try:
         with connect() as conn:
-            sync_seed_wallets(conn, settings.seed_wallets)
+            sync_seed_owners(conn, settings.seed_owners)
             conn.commit()
     except Exception as exc:
-        print(f"seed wallet sync failed: {exc}")
+        print(f"seed owner sync failed: {exc}")
 
 
 def create_app() -> Starlette:
     settings = get_settings()
-    _sync_seed_wallets_at_startup()
+    _sync_seed_owners_at_startup()
     mcp_app = mcp.streamable_http_app()
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/ready", ready, methods=["GET"]),
+            Route("/api/receipt-keys", receipt_keys, methods=["GET"]),
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),

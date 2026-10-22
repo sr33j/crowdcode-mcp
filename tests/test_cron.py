@@ -13,12 +13,14 @@ NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
 SEED_WALLET = "0x" + "11" * 20
 HONEST_WALLET = "0x" + "22" * 20
 SYBIL_WALLET = "0x" + "33" * 20
+SEED_OWNER = "1" * 32
+HONEST_OWNER = "2" * 32
+SYBIL_OWNER = "3" * 32
 
 
-def _user_row(wallet, raw_trust, *, is_seed=False, slashed_at=None, user_id=1):
+def _owner_row(owner_ref, raw_trust, *, is_seed=False, slashed_at=None):
     return {
-        "user_id": user_id,
-        "wallet_address": wallet,
+        "owner_ref": owner_ref,
         "raw_trust": raw_trust,
         "is_seed": is_seed,
         "slashed_at": slashed_at,
@@ -30,50 +32,42 @@ def _fake_connect(conn):
     yield conn
 
 
-def test_sweep_applies_one_trust_event_per_wallet_service_utc_day(monkeypatch):
+def _sweep_review(review_id, owner, wallet, rating, *, minutes, exclusion=None, service="svc_1"):
+    return {
+        "id": review_id,
+        "service_id": service,
+        "reviewer_wallet": wallet,
+        "rating": rating,
+        "payment_verified": True,
+        "signature_verified": True,
+        "payment_verification_level": "response_attested",
+        "created_at": NOW - timedelta(minutes=minutes),
+        "user_id": review_id,
+        "owner_ref": owner,
+        "weight_exclusion": exclusion,
+    }
+
+
+def test_sweep_applies_one_trust_event_per_owner_and_service(monkeypatch):
     # The seed establishes a positive consensus. Two paid outcomes from the
-    # honest wallet on the same UTC day average to neutral (3), so the nightly
-    # replay must apply no trust change instead of treating them as two calls.
+    # honest owner — on different days, through different agent wallets —
+    # average to neutral (3), so the nightly replay must apply no trust change
+    # instead of treating them as two separate calls.
     reviews = [
-        {
-            "id": 1,
-            "service_id": "svc_1",
-            "reviewer_wallet": SEED_WALLET,
-            "rating": 5,
-            "payment_verified": True,
-            "signature_verified": True,
-            "created_at": NOW - timedelta(hours=2),
-            "user_id": 1,
-        },
-        {
-            "id": 2,
-            "service_id": "svc_1",
-            "reviewer_wallet": HONEST_WALLET,
-            "rating": 5,
-            "payment_verified": True,
-            "signature_verified": True,
-            "created_at": NOW - timedelta(hours=1),
-            "user_id": 2,
-        },
-        {
-            "id": 3,
-            "service_id": "svc_1",
-            "reviewer_wallet": HONEST_WALLET,
-            "rating": 1,
-            "payment_verified": True,
-            "signature_verified": True,
-            "created_at": NOW - timedelta(minutes=30),
-            "user_id": 2,
-        },
+        _sweep_review(1, SEED_OWNER, SEED_WALLET, 5, minutes=120),
+        _sweep_review(2, HONEST_OWNER, HONEST_WALLET, 5, minutes=60),
+        _sweep_review(3, HONEST_OWNER, "0x" + "44" * 20, 1, minutes=30),
     ]
-    users = [
-        _user_row(SEED_WALLET, 1.0, is_seed=True, user_id=1),
-        _user_row(HONEST_WALLET, 0.0, user_id=2),
+    owners = [
+        _owner_row(SEED_OWNER, 1.0, is_seed=True),
+        _owner_row(HONEST_OWNER, 0.0),
     ]
     conn = FakeConn(
         {
             "select id, service_id, reviewer_wallet": reviews,
-            "select user_id, wallet_address": users,
+            "insert into wallet_users": [{"user_id": 1}],
+            "insert into review_owners": [_owner_row(SEED_OWNER, 1.0, is_seed=True)],
+            "select owner_ref, raw_trust": owners,
             "select id, score, n_eff from services": [
                 {"id": "svc_1", "score": MU0, "n_eff": 0.0}
             ],
@@ -82,27 +76,60 @@ def test_sweep_applies_one_trust_event_per_wallet_service_utc_day(monkeypatch):
     monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
     cron.run_consistency_sweep(NOW)
 
-    swept = {q[1][2]: q[1][0] for q in conn.executed("update wallet_users set raw_trust")}
-    assert swept[2] == 0.0
+    swept = {q[1][2]: q[1][0] for q in conn.executed("update review_owners set raw_trust")}
+    assert swept[HONEST_OWNER] == 0.0
+    # Two owners voted, but only the seed has trust, so the score rests on
+    # exactly one vote. This is also the one-vote cap in action: the honest
+    # owner's two reviews, from two wallets on two days, are one event.
+    assert abs(conn.executed("set score = %s, n_eff")[0][1][1] - 1.0) < 0.01
+
+
+def test_sweep_ignores_community_reviews_entirely(monkeypatch):
+    reviews = [
+        _sweep_review(1, SEED_OWNER, SEED_WALLET, 5, minutes=120),
+        # 40 unattested five-star reviews, including some from the seed owner.
+        *[
+            _sweep_review(i + 2, SYBIL_OWNER, f"0x{i:040x}", 5, minutes=60, exclusion="community")
+            for i in range(20)
+        ],
+        *[
+            _sweep_review(i + 22, SEED_OWNER, f"0x{i + 100:040x}", 1, minutes=30, exclusion="community")
+            for i in range(20)
+        ],
+    ]
+    conn = FakeConn(
+        {
+            "select id, service_id, reviewer_wallet": reviews,
+            "insert into wallet_users": [{"user_id": 1}],
+            "insert into review_owners": [_owner_row(SEED_OWNER, 1.0, is_seed=True)],
+            "select owner_ref, raw_trust": [
+                _owner_row(SEED_OWNER, 1.0, is_seed=True),
+                _owner_row(SYBIL_OWNER, 0.0),
+            ],
+            "select id, score, n_eff from services": [
+                {"id": "svc_1", "score": MU0, "n_eff": 0.0}
+            ],
+        }
+    )
+    monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
+    cron.run_consistency_sweep(NOW)
+    score, n_eff = conn.executed("set score = %s, n_eff")[0][1][:2]
+    assert abs(n_eff - 1.0) < 0.01
+    assert abs(score - (5 + 2 * MU0) / 3) < 0.01
+    assert {q[1][0] for q in conn.executed("update review_owners set raw_trust")} == {0.0}
+    # Only owners behind weighted reviews are registered at all.
+    assert {q[1][0] for q in conn.executed("insert into review_owners")} == {SEED_OWNER}
 
 
 def test_sweep_backfills_user_ids(monkeypatch):
     conn = FakeConn(
         {
             "select id, service_id, reviewer_wallet": [
-                {
-                    "id": 9,
-                    "service_id": "svc_1",
-                    "reviewer_wallet": HONEST_WALLET,
-                    "rating": 5,
-                    "payment_verified": True,
-                    "signature_verified": True,
-                    "created_at": NOW,
-                    "user_id": None,
-                }
+                {**_sweep_review(9, HONEST_OWNER, HONEST_WALLET, 5, minutes=0), "user_id": None}
             ],
             "insert into wallet_users": [{"user_id": 4}],
-            "select user_id, wallet_address": [_user_row(HONEST_WALLET, 0.0, user_id=4)],
+            "insert into review_owners": [_owner_row(HONEST_OWNER, 0.0)],
+            "select owner_ref, raw_trust": [_owner_row(HONEST_OWNER, 0.0)],
             "select id, score, n_eff from services": [],
         }
     )
@@ -111,46 +138,60 @@ def test_sweep_backfills_user_ids(monkeypatch):
     assert conn.executed("update reviews set user_id")[0][1] == (4, 9)
     # A five-star review with no trusted evidence must not earn reputation
     # from the optimistic public prior during the production replay.
-    assert conn.executed("update wallet_users set raw_trust")[0][1][0] == 0.0
+    assert conn.executed("update review_owners set raw_trust")[0][1][0] == 0.0
 
 
-def _summary_row(wallet, *, verified, rating=5):
+def _summary_row(wallet, *, verified, rating=5, owner=None, exclusion="community"):
     return {
         "rating": rating,
         "reason": "worked",
         "task_context": None,
         "payment_verified": verified,
         "signature_verified": True,
+        "payment_verification_level": "response_attested" if exclusion is None else "signature_only",
         "reviewer_wallet": wallet,
+        "owner_ref": owner,
+        "weight_exclusion": exclusion,
+        "verified_source": "community" if exclusion else "hosted_receipt",
         "created_at": NOW,
     }
 
 
-def test_summary_input_prefers_trusted_reviews():
-    trusted = _summary_row(SEED_WALLET, verified=True)
+def test_summary_input_prefers_weighted_reviews():
+    """The narrative comes from judged hosted evidence when any exists: a
+    service's published summary must not be written by unweighted text."""
+    trusted = _summary_row(SEED_WALLET, verified=True, owner=SEED_OWNER, exclusion=None)
     conn = FakeConn(
         {"from reviews": [trusted, _summary_row(SYBIL_WALLET, verified=True)]}
     )
     trust = {
-        SEED_WALLET: TrustRow(raw_trust=1.0, is_seed=True),
-        SYBIL_WALLET: TrustRow(raw_trust=0.0),
+        SEED_OWNER: TrustRow(raw_trust=1.0, is_seed=True),
+        SYBIL_OWNER: TrustRow(raw_trust=0.0),
     }
     selected = cron._summary_input_reviews(conn, "svc_1", trust, NOW)
     assert selected == [trusted]
+
+
+def test_summary_input_ignores_weighted_reviews_from_untrusted_owners():
+    attested = _summary_row(SYBIL_WALLET, verified=True, owner=SYBIL_OWNER, exclusion=None)
+    conn = FakeConn({"from reviews": [attested]})
+    # A real receipt from an owner that has earned nothing still does not get
+    # to write the narrative; it falls back to the cold-start tier.
+    assert cron._summary_input_reviews(conn, "svc_1", {SYBIL_OWNER: TrustRow(raw_trust=0.0)}, NOW) == [attested]
 
 
 def test_summary_input_includes_authenticated_unpaid_reviews_at_cold_start():
     verified = _summary_row(SYBIL_WALLET, verified=True)
     unpaid = _summary_row(SYBIL_WALLET, verified=False)
     conn = FakeConn({"from reviews": [verified, unpaid]})
-    trust = {SYBIL_WALLET: TrustRow(raw_trust=0.0)}
+    trust = {SYBIL_OWNER: TrustRow(raw_trust=0.0)}
     assert cron._summary_input_reviews(conn, "svc_1", trust, NOW) == [verified, unpaid]
 
 
 def test_summary_input_is_empty_when_nothing_qualifies():
     unsigned = {**_summary_row(SYBIL_WALLET, verified=False), "signature_verified": False}
     conn = FakeConn({"from reviews": [unsigned]})
-    trust = {SYBIL_WALLET: TrustRow(raw_trust=0.0)}
+    trust = {SYBIL_OWNER: TrustRow(raw_trust=0.0)}
     assert cron._summary_input_reviews(conn, "svc_1", trust, NOW) == []
 
 

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.10.0 — 2026-10-22
+
+Scoring v3: only hosted, judged purchases carry ranking weight
+(`crowdcode-scoring-v3`, docs/SCORING.md §3.6). Apply
+`supabase/hosted-only-reviews.sql`, set `OPENCROWD_RECEIPT_KEYS` and
+`CROWDCODE_SEED_OWNERS`, deploy the backend and cron, then run
+`crowdcode.cron.run_consistency_sweep(utc_now())`. Most scores return to the
+3.0 prior with `n_eff` 0, displayed as "unproven", until hosted owners with
+earned trust review those services.
+
+- `review_service` accepts a `gateway_attestation`: a purchase receipt and a
+  review attestation, both signed with Ed25519 by a hosted OpenCrowd gateway,
+  binding `sha256` of the request and the response to the settlement, the
+  payee, the amount and the owner, and binding that receipt to a platform
+  judge's rating and published text. Only reviews carrying a valid one carry
+  ranking weight. Everything else — CLI wallets, crowdcode-mcp users, every row
+  written before this release — is still accepted, published and labelled as
+  community evidence with weight exactly zero. A forged, edited, stale, re-aimed
+  or replayed attestation rejects the review outright and stores nothing.
+- Weight is held per **owner**, not per wallet, in the new `review_owners`
+  table, and an owner gets **one vote per service** however many agents,
+  wallets, days or purchases produced it. `n_eff` is now literally the number of
+  trusted owner votes behind a score.
+- A review of a service the reviewer's own owner is paid by, and a review citing
+  a payment below `CROWDCODE_MIN_WEIGHTED_AMOUNT_ATOMIC` (default 1000 =
+  $0.001), verify and carry no weight (`weight_exclusion`).
+- Trust is no longer granted to hosted wallets. `supabase/opencrowd-wallets.sql`
+  and the `opencrowd_seed_wallets` bridge that pinned every registered mainnet
+  `agent_eoa` at 1.0 are removed; `CROWDCODE_SEED_OWNERS` replaces
+  `CROWDCODE_SEED_WALLETS` as the root of trust, and the backend no longer
+  reads the hosted schema at all.
+- Unsigned placeholder reviews (the legacy `stripe`/`manual` admission path) are
+  never published. They are retained for continuity and excluded from every
+  public output: counts, histograms, recent reviews, the knowledge export and
+  the nightly summarizer.
+- `api_endpoint` must be an `http` or `https` URL, in the backend and in the MCP
+  client's canonical identity module. `javascript://host/%0aalert(1)` parses
+  with a host and was previously storable and renderable as a service endpoint.
+- New public `GET /api/receipt-keys` lists the gateway receipt keys this
+  deployment verifies, so a published score can be checked against its evidence
+  by anyone. Score payloads gain `num_weighted_reviews`,
+  `num_community_reviews` and `weighted_avg_rating`; reviews gain
+  `verified_source` and `counts_towards_ranking`; service detail gains
+  `weighted_histogram`.
+
 ## Unreleased
 
 - `/api/services` and `/api/services/{service_id}` report each service's

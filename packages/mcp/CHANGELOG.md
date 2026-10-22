@@ -1,5 +1,18 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.10.0 — 2026-10-22
+
+- Only hosted, judged purchases carry ranking weight (`crowdcode-scoring-v3`).
+  Reviews you submit from this client are still accepted and published, as
+  community evidence with no ranking weight: ranking now needs a signed receipt
+  from the hosted OpenCrowd gateway that made the paid call, plus a platform
+  judge's verdict on what was actually delivered. `review_service` reports
+  `verified_source` and `counts_towards_ranking` so you can see which you got.
+- Score results gain `num_weighted_reviews`, `num_community_reviews` and
+  `weighted_avg_rating`, and each review reports whether it counts.
+- `api_endpoint` must be an `http` or `https` URL. `javascript://host/%0aalert(1)`
+  parses with a host and was previously accepted as a service endpoint.
+
 ## 0.9.1 — 2026-10-20
 
 - `find_service` and the skill ask for the capability in a few words ("web search",

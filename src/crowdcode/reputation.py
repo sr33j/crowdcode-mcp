@@ -1,8 +1,15 @@
-"""Database glue for the canonical scoring algorithm (docs/SCORING.md v1).
+"""Database glue for the canonical scoring algorithm (docs/SCORING.md v3).
 
 The write path (review_service) and the nightly consistency sweep both go
 through these helpers so trust and stored scores can never diverge from
 scoring.compute_score.
+
+Trust is held per **owner**, not per wallet. A hosted owner runs many agents
+with many wallets, and a wallet costs nothing to create, so `review_owners`
+holds the raw trust and `wallet_users` keeps only the reviewer identity it
+always did. Hosted mainnet wallets are no longer automatically trusted:
+`CROWDCODE_SEED_OWNERS` names the root of trust, and every other owner earns
+its weight from the accuracy of its judged reviews.
 """
 
 from __future__ import annotations
@@ -22,22 +29,16 @@ from crowdcode.scoring import (
     updated_raw_trust,
 )
 
+OWNER_REF_RE = re.compile(r"^[0-9a-f]{32}$")
+
 
 def ensure_user(conn: psycopg.Connection, wallet: str) -> dict[str, Any]:
-    """Get-or-create the users row for a normalized wallet address."""
-    # Only the operator-installed view can grant hosted trust. A client cannot
-    # claim to be OpenCrowd in its review payload to promote an arbitrary wallet.
-    if wallet in load_opencrowd_seed_wallets(conn):
-        return conn.execute(
-            """
-            insert into wallet_users (wallet_address, is_seed, raw_trust, trust_updated_at)
-            values (%s, true, 1.0, now())
-            on conflict (wallet_address) do update
-            set is_seed = true, raw_trust = 1.0, trust_updated_at = now()
-            returning user_id, wallet_address, is_seed, raw_trust, slashed_at
-            """,
-            (wallet,),
-        ).fetchone()
+    """Get-or-create the wallet_users row for a normalized wallet address.
+
+    A wallet carries no ranking weight of its own any more, so no wallet is
+    ever promoted here. Weight belongs to the owner named by a verified
+    gateway attestation (`ensure_owner`).
+    """
     row = conn.execute(
         """
         insert into wallet_users (wallet_address)
@@ -59,19 +60,41 @@ def ensure_user(conn: psycopg.Connection, wallet: str) -> dict[str, Any]:
     ).fetchone()
 
 
+def ensure_owner(conn: psycopg.Connection, owner_ref: str) -> dict[str, Any]:
+    """Get-or-create the review_owners row for a verified owner reference."""
+    if not OWNER_REF_RE.match(owner_ref):
+        raise ValueError("owner_ref must be a 32-character hex reference")
+    row = conn.execute(
+        """
+        insert into review_owners (owner_ref)
+        values (%s)
+        on conflict (owner_ref) do nothing
+        returning owner_ref, is_seed, raw_trust, slashed_at
+        """,
+        (owner_ref,),
+    ).fetchone()
+    if row is not None:
+        return row
+    return conn.execute(
+        "select owner_ref, is_seed, raw_trust, slashed_at from review_owners where owner_ref = %s",
+        (owner_ref,),
+    ).fetchone()
+
+
 def load_trust_map(
-    conn: psycopg.Connection, wallets: set[str] | None = None
+    conn: psycopg.Connection, owners: set[str] | None = None
 ) -> dict[str, TrustRow]:
-    if wallets is not None and not wallets:
+    """Owner trust, keyed by owner_ref — the key compute_score() expects."""
+    if owners is not None and not owners:
         return {}
-    sql = "select wallet_address, raw_trust, is_seed, slashed_at from wallet_users"
+    sql = "select owner_ref, raw_trust, is_seed, slashed_at from review_owners"
     params: tuple[Any, ...] = ()
-    if wallets is not None:
-        sql += " where wallet_address = any(%s)"
-        params = (list(wallets),)
+    if owners is not None:
+        sql += " where owner_ref = any(%s)"
+        params = (list(owners),)
     rows = conn.execute(sql, params).fetchall()
     return {
-        row["wallet_address"]: TrustRow(
+        row["owner_ref"]: TrustRow(
             raw_trust=float(row["raw_trust"]),
             is_seed=bool(row["is_seed"]),
             slashed=row["slashed_at"] is not None,
@@ -86,7 +109,7 @@ def load_service_reviews(
     rows = conn.execute(
         """
         select reviewer_wallet, rating, payment_verified, signature_verified,
-               payment_verification_level, created_at
+               payment_verification_level, created_at, owner_ref, weight_exclusion
         from reviews
         where service_id = %s
         """,
@@ -100,6 +123,8 @@ def load_service_reviews(
             signature_verified=bool(row["signature_verified"]),
             created_at=row["created_at"],
             payment_verification_level=row.get("payment_verification_level"),
+            owner_ref=row.get("owner_ref"),
+            weight_exclusion=row.get("weight_exclusion"),
         )
         for row in rows
     ]
@@ -111,7 +136,7 @@ def recompute_service_score(
     """Recompute and store the canonical (score, n_eff) for one service."""
     reviews = load_service_reviews(conn, service_id)
     trust_map = load_trust_map(
-        conn, {r.wallet for r in reviews if r.wallet is not None}
+        conn, {r.owner_ref for r in reviews if r.weighted and r.owner_ref}
     )
     result = compute_score(reviews, trust_map, now)
     conn.execute(
@@ -127,83 +152,69 @@ def recompute_service_score(
 
 def apply_review_trust_update(
     conn: psycopg.Connection,
-    wallet: str,
+    owner_ref: str,
     service_id: str,
     rating: int,
     now: datetime,
 ) -> float | None:
     """Apply the proper-scoring-rule trust update for one incoming review.
 
-    The update is computed against the leave-one-out consensus (this wallet's
-    own reviews excluded). Seeds and slashed wallets never move. Returns the
+    The update is computed against the leave-one-out consensus (this owner's
+    own reviews excluded). Seeds and slashed owners never move. Returns the
     new raw trust, or None when no update applies.
     """
-    user = conn.execute(
+    owner = conn.execute(
         """
-        select user_id, raw_trust, is_seed, slashed_at
-        from wallet_users
-        where wallet_address = %s
+        select owner_ref, raw_trust, is_seed, slashed_at
+        from review_owners
+        where owner_ref = %s
         for update
         """,
-        (wallet,),
+        (owner_ref,),
     ).fetchone()
-    if user is None or user["is_seed"] or user["slashed_at"] is not None:
+    if owner is None or owner["is_seed"] or owner["slashed_at"] is not None:
         return None
 
     reviews = load_service_reviews(conn, service_id)
     trust_map = load_trust_map(
-        conn, {r.wallet for r in reviews if r.wallet is not None} | {wallet}
+        conn, {r.owner_ref for r in reviews if r.weighted and r.owner_ref} | {owner_ref}
     )
-    loo = compute_trust_consensus(reviews, trust_map, now, exclude_wallet=wallet)
-    new_raw = updated_raw_trust(float(user["raw_trust"]), loo.score, rating)
-    if new_raw != float(user["raw_trust"]):
+    loo = compute_trust_consensus(reviews, trust_map, now, exclude_owner=owner_ref)
+    new_raw = updated_raw_trust(float(owner["raw_trust"]), loo.score, rating)
+    if new_raw != float(owner["raw_trust"]):
         conn.execute(
-            "update wallet_users set raw_trust = %s, trust_updated_at = %s where user_id = %s",
-            (new_raw, now, user["user_id"]),
+            "update review_owners set raw_trust = %s, trust_updated_at = %s where owner_ref = %s",
+            (new_raw, now, owner_ref),
         )
     return new_raw
 
 
-def load_opencrowd_seed_wallets(conn: psycopg.Connection) -> set[str]:
-    """Optional operator-owned bridge to the hosted agent wallet registry.
+def sync_seed_owners(conn: psycopg.Connection, owners: Iterable[str]) -> None:
+    """Pin the explicitly configured root owners at trust 1.0.
 
-    Standalone CrowdCode installations have no bridge and retain explicit seeds.
+    Without at least one seed, nothing is ever weighted: a fresh owner's trust
+    is 0, below theta, and the leave-one-out consensus of a service with no
+    weighted evidence sits at the prior, where the scoring rule pays exactly
+    zero. That is the EigenTrust seed-vector property, so the seed list is a
+    deliberate operator decision, never derived from the hosted wallet
+    registry. An empty list never demotes existing seeds.
     """
-    bridge = conn.execute(
-        "select to_regclass('opencrowd_seed_wallets') as relation"
-    ).fetchone()
-    if not bridge or bridge["relation"] is None:
-        return set()
-    return {
-        row["wallet_address"]
-        for row in conn.execute("select wallet_address from opencrowd_seed_wallets").fetchall()
-    }
-
-
-def sync_seed_wallets(conn: psycopg.Connection, wallets: Iterable[str]) -> None:
-    """Pin explicit operator and registered hosted wallets at trust 1.0.
-
-    Hosted seeds survive explicit-list reconciliation. An empty explicit list
-    never demotes existing seeds. Slashed wallets remain excluded by scoring.
-    """
-    explicit = {w.strip().lower() for w in wallets if w and w.strip()}
-    if any(re.fullmatch(r"0x[0-9a-f]{40}", wallet) is None for wallet in explicit):
-        raise ValueError("CROWDCODE_SEED_WALLETS must contain only comma-separated EVM addresses")
-    seeds = sorted(explicit | load_opencrowd_seed_wallets(conn))
+    seeds = sorted({owner.strip().lower() for owner in owners if owner and owner.strip()})
+    if any(OWNER_REF_RE.match(owner) is None for owner in seeds):
+        raise ValueError("CROWDCODE_SEED_OWNERS must contain only comma-separated 32-character hex owner references")
     if not seeds:
         return
-    for wallet in seeds:
+    for owner in seeds:
         conn.execute(
             """
-            insert into wallet_users (wallet_address, is_seed, raw_trust, trust_updated_at)
+            insert into review_owners (owner_ref, is_seed, raw_trust, trust_updated_at)
             values (%s, true, 1.0, now())
-            on conflict (wallet_address)
+            on conflict (owner_ref)
             do update set is_seed = true, raw_trust = 1.0, trust_updated_at = now()
             """,
-            (wallet,),
+            (owner,),
         )
-    if explicit:
-        conn.execute(
-            "update wallet_users set is_seed = false where is_seed and wallet_address != all(%s)",
-            (seeds,),
-        )
+    conn.execute(
+        "update review_owners set is_seed = false where is_seed and owner_ref != all(%s)",
+        (seeds,),
+    )

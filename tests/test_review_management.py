@@ -105,13 +105,14 @@ def test_delete_removes_content_replays_scores_and_rejects_old_submission(manage
     assert result["accepted"], result
     review_id, service_id = result["review_id"], result["service_id"]
     conn.execute("update services set review_summary = '{\"strengths\":[\"private old text\"]}', last_summarized_at=now()")
-    conn.execute("update wallet_users set raw_trust=9")
+    # Owner trust that has drifted (here, artificially) must be replayed too.
+    conn.execute("insert into review_owners(owner_ref,raw_trust) values(%s,9)", ("f" * 32,))
     deleted = server.delete_my_review(review_id=review_id, **proof("delete", review_id=review_id))
     assert deleted["deleted"], deleted
     assert conn.execute("select * from reviews where id=%s", (review_id,)).fetchone() is None
     service = conn.execute("select score,n_eff,review_summary,last_summarized_at,review_revision from services where id=%s", (service_id,)).fetchone()
     assert service == dict(score=3.0, n_eff=0.0, review_summary=None, last_summarized_at=None, review_revision=1)
-    assert conn.execute("select raw_trust from wallet_users").fetchone()["raw_trust"] == 0
+    assert conn.execute("select raw_trust from review_owners").fetchone()["raw_trust"] == 0
     keys = conn.execute("select * from deleted_review_keys").fetchall()
     assert keys == [{"replay_key": review_replay_key(OWNER.address, None, "delete_123")}]
     _, retry = submit("delete_123")

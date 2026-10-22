@@ -37,9 +37,13 @@ class Settings:
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
     openai_base_url: str = "https://api.openai.com/v1"
-    # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5). Synced into
-    # the users table at startup and at each cron run.
-    seed_wallets: tuple[str, ...] = ()
+    # Owner references pinned at trust 1.0 (docs/SCORING.md §3.5): the root of
+    # trust. Synced into review_owners at startup and at each cron run.
+    # Without at least one, no review is ever weighted.
+    seed_owners: tuple[str, ...] = ()
+    # Smallest payment a weighted review may cite, in USDC base units. Dust
+    # payments buy a vote for nothing; 1000 = $0.001.
+    min_weighted_amount_atomic: int = 1000
     # Bearer token for GET /api/knowledge/evidence (full review evidence export
     # consumed by the OpenCrowd knowledge-tree generator). Unset disables it.
     knowledge_export_token: str | None = None
@@ -110,9 +114,12 @@ def get_settings() -> Settings:
             "https://api.openai.com/v1",
         ).strip()
         or "https://api.openai.com/v1",
-        seed_wallets=tuple(
-            wallet.lower()
-            for wallet in _csv(os.environ.get("CROWDCODE_SEED_WALLETS", ""))
+        seed_owners=tuple(
+            owner.lower()
+            for owner in _csv(os.environ.get("CROWDCODE_SEED_OWNERS", ""))
+        ),
+        min_weighted_amount_atomic=int(
+            os.environ.get("CROWDCODE_MIN_WEIGHTED_AMOUNT_ATOMIC", "1000")
         ),
         knowledge_export_token=os.environ.get("CROWDCODE_KNOWLEDGE_EXPORT_TOKEN", "").strip()
         or None,

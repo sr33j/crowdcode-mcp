@@ -7,10 +7,10 @@ rest; the process exits nonzero if any job failed:
    because the RPC was unreachable at submit time are re-checked and upgraded
    to onchain_verified when the transfer now verifies (a network flake must
    not permanently cost the verified multiplier).
-2. Consistency sweep — recompute all reviewer trust and service scores from
-   scratch by replaying one wallet/service/UTC-day event at a time, log drift,
-   and write the authoritative values. The first run after applying the schema
-   DDL doubles as the data migration that backfills users and stored scores.
+2. Consistency sweep — recompute all owner trust and service scores from
+   scratch by replaying one owner/service event at a time, log drift, and
+   write the authoritative values. The first run after applying the schema
+   DDL doubles as the data migration that backfills owners and stored scores.
 3. Per-service review summaries (LLM), watermarked on last_summarized_at.
 4. Requested-services summary (LLM), written to app_cache for the website.
 """
@@ -21,7 +21,7 @@ import json
 import logging
 import sys
 import traceback
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -37,11 +37,11 @@ from crowdcode.payments import (
 )
 from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_enabled
-from crowdcode.reputation import ensure_user, recompute_service_score, sync_seed_wallets
+from crowdcode.reputation import ensure_owner, ensure_user, recompute_service_score, sync_seed_owners
 from crowdcode.scoring import (
     ReviewRow,
     TrustRow,
-    aggregate_daily_reviews,
+    aggregate_owner_reviews,
     compute_score,
     compute_trust_consensus,
     review_weight,
@@ -172,7 +172,7 @@ def replay_scores(conn: Any, now: datetime) -> None:
         """
         select id, service_id, reviewer_wallet, rating, payment_verified,
                signature_verified, payment_verification_level,
-               created_at, user_id
+               created_at, user_id, owner_ref, weight_exclusion
         from reviews
         order by created_at asc, id asc
         """
@@ -196,89 +196,92 @@ def replay_scores(conn: Any, now: datetime) -> None:
     if backfilled:
         logging.getLogger(__name__).info(f"sweep: backfilled user_id on {backfilled} review(s)")
 
-    users = conn.execute(
-        "select user_id, wallet_address, raw_trust, is_seed, slashed_at from wallet_users"
+    # Every owner named by a weighted review exists in review_owners (idempotent).
+    for row in rows:
+        if row["owner_ref"] and row["weight_exclusion"] is None:
+            ensure_owner(conn, row["owner_ref"])
+
+    owners = conn.execute(
+        "select owner_ref, raw_trust, is_seed, slashed_at from review_owners"
     ).fetchall()
     pinned = {
-        u["wallet_address"]: TrustRow(
-            raw_trust=float(u["raw_trust"]),
-            is_seed=bool(u["is_seed"]),
-            slashed=u["slashed_at"] is not None,
+        o["owner_ref"]: TrustRow(
+            raw_trust=float(o["raw_trust"]),
+            is_seed=bool(o["is_seed"]),
+            slashed=o["slashed_at"] is not None,
         )
-        for u in users
+        for o in owners
     }
 
-    # Replay: recompute every non-seed wallet's raw trust from scratch.
-    # Multiple paid outcomes by one wallet for one service on one UTC day
-    # form a single trust event, matching the scoring influence cap.
+    # Replay: recompute every non-seed owner's raw trust from scratch. One
+    # owner's weighted reviews of one service form a single trust event,
+    # matching the one-vote-per-owner scoring cap.
     raw: dict[str, float] = {}
     trust: dict[str, TrustRow] = {}
-    for wallet, row in pinned.items():
+    for owner_ref, row in pinned.items():
         if row.is_seed or row.slashed:
-            trust[wallet] = row
+            trust[owner_ref] = row
         else:
-            raw[wallet] = 0.0
-            trust[wallet] = TrustRow(raw_trust=0.0)
+            raw[owner_ref] = 0.0
+            trust[owner_ref] = TrustRow(raw_trust=0.0)
 
-    events: dict[tuple[str, str, object], list[ReviewRow]] = {}
-    event_order: dict[tuple[str, str, object], tuple[datetime, int]] = {}
+    events: dict[tuple[str, str], list[ReviewRow]] = {}
+    event_order: dict[tuple[str, str], tuple[datetime, int]] = {}
+    per_service: dict[str, list[ReviewRow]] = {}
     for row in rows:
-        wallet = row["reviewer_wallet"]
         review = ReviewRow(
-            wallet=wallet,
+            wallet=row["reviewer_wallet"],
             rating=int(row["rating"]),
             payment_verified=bool(row["payment_verified"]),
             signature_verified=bool(row["signature_verified"]),
             created_at=row["created_at"],
             payment_verification_level=row.get("payment_verification_level"),
+            owner_ref=row.get("owner_ref"),
+            weight_exclusion=row.get("weight_exclusion"),
         )
-        if wallet is None:
+        # Unweighted reviews still belong to the service's stored history, but
+        # they create no trust event and move no score.
+        if not review.weighted:
+            per_service.setdefault(row["service_id"], []).append(review)
             continue
-        key = (
-            row["service_id"],
-            wallet,
-            row["created_at"].replace(tzinfo=UTC).date()
-            if row["created_at"].tzinfo is None
-            else row["created_at"].astimezone(UTC).date(),
-        )
+        key = (row["service_id"], review.owner_ref)
         events.setdefault(key, []).append(review)
         event_order[key] = max(
             event_order.get(key, (row["created_at"], int(row["id"]))),
             (row["created_at"], int(row["id"])),
         )
 
-    per_service: dict[str, list[ReviewRow]] = {}
     for key in sorted(events, key=lambda item: event_order[item]):
-        service_id, wallet, _ = key
+        service_id, owner_ref = key
         event_reviews = events[key]
         event_at = event_order[key][0]
-        bucket = aggregate_daily_reviews(event_reviews, event_at)[0]
-        if wallet in raw:
+        bucket = aggregate_owner_reviews(event_reviews, event_at)[0]
+        if owner_ref in raw:
             loo = compute_trust_consensus(
                 per_service.get(service_id, []),
                 trust,
                 event_at,
-                exclude_wallet=wallet,
+                exclude_owner=owner_ref,
             )
-            raw[wallet] = updated_raw_trust(
-                raw[wallet], loo.score, bucket.rating
+            raw[owner_ref] = updated_raw_trust(
+                raw[owner_ref], loo.score, bucket.rating
             )
-            trust[wallet] = TrustRow(raw_trust=raw[wallet])
+            trust[owner_ref] = TrustRow(raw_trust=raw[owner_ref])
         per_service.setdefault(service_id, []).extend(event_reviews)
 
-    for user in users:
-        wallet = user["wallet_address"]
-        if wallet not in raw:
+    for owner in owners:
+        owner_ref = owner["owner_ref"]
+        if owner_ref not in raw:
             continue
-        stored = float(user["raw_trust"])
-        if abs(raw[wallet] - stored) > DRIFT_TOLERANCE:
+        stored = float(owner["raw_trust"])
+        if abs(raw[owner_ref] - stored) > DRIFT_TOLERANCE:
             logging.getLogger(__name__).info(
-                f"sweep: trust drift user_id={user['user_id']} "
-                f"stored={stored:.4f} recomputed={raw[wallet]:.4f}"
+                f"sweep: trust drift owner={owner_ref} "
+                f"stored={stored:.4f} recomputed={raw[owner_ref]:.4f}"
             )
         conn.execute(
-            "update wallet_users set raw_trust = %s, trust_updated_at = %s where user_id = %s",
-            (raw[wallet], now, user["user_id"]),
+            "update review_owners set raw_trust = %s, trust_updated_at = %s where owner_ref = %s",
+            (raw[owner_ref], now, owner_ref),
         )
 
     # Recompute every service's stored score with decay at `now` — this is
@@ -304,18 +307,22 @@ def replay_scores(conn: Any, now: datetime) -> None:
 def _summary_input_reviews(
     conn: Any, service_id: str, trust: dict[str, TrustRow], now: datetime
 ) -> list[dict[str, Any]]:
-    """Trust-weighted summarizer input (docs/SCORING.md §8.2): wallets below
+    """Trust-weighted summarizer input (docs/SCORING.md §8.2): owners below
     theta don't get to write the narrative. Cold-start fallback: with no
-    weighted reviews yet, fall back to authenticated reviews, including unpaid
-    experiences. Payment status is preserved in the summarizer input."""
+    weighted reviews yet, fall back to authenticated community reviews, which
+    is all a service has before any trusted owner has bought from it. Unsigned
+    placeholder rows never appear — they are not publishable. Payment status is
+    preserved in the summarizer input."""
     rows = conn.execute(
         """
         select rating, reason, task_context, payment_verified,
                signature_verified, payment_verification_level,
-               reviewer_wallet, created_at
+               reviewer_wallet, owner_ref, weight_exclusion, verified_source,
+               created_at
         from reviews
         where service_id = %s
-        order by created_at desc
+          and (signature_verified or verified_source = 'hosted_receipt')
+        order by (weight_exclusion is null) desc, created_at desc
         limit %s
         """,
         (service_id, SUMMARY_MAX_REVIEWS),
@@ -323,8 +330,7 @@ def _summary_input_reviews(
     weighted = [
         row
         for row in rows
-        if row["reviewer_wallet"]
-        and review_weight(
+        if review_weight(
             ReviewRow(
                 wallet=row["reviewer_wallet"],
                 rating=int(row["rating"]),
@@ -332,8 +338,10 @@ def _summary_input_reviews(
                 signature_verified=bool(row["signature_verified"]),
                 created_at=row["created_at"],
                 payment_verification_level=row.get("payment_verification_level"),
+                owner_ref=row.get("owner_ref"),
+                weight_exclusion=row.get("weight_exclusion"),
             ),
-            trust.get(row["reviewer_wallet"]),
+            trust.get(row["owner_ref"]),
             now,
         )
         > 0
@@ -353,6 +361,7 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
             where exists (
               select 1 from reviews r
               where r.service_id = s.id
+                and (r.signature_verified or r.verified_source = 'hosted_receipt')
                 and (s.last_summarized_at is null
                      or r.created_at > s.last_summarized_at)
             )
@@ -362,16 +371,16 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
         if not pending:
             return []
 
-        users = conn.execute(
-            "select wallet_address, raw_trust, is_seed, slashed_at from wallet_users"
+        owners = conn.execute(
+            "select owner_ref, raw_trust, is_seed, slashed_at from review_owners"
         ).fetchall()
         trust = {
-            u["wallet_address"]: TrustRow(
-                raw_trust=float(u["raw_trust"]),
-                is_seed=bool(u["is_seed"]),
-                slashed=u["slashed_at"] is not None,
+            o["owner_ref"]: TrustRow(
+                raw_trust=float(o["raw_trust"]),
+                is_seed=bool(o["is_seed"]),
+                slashed=o["slashed_at"] is not None,
             )
-            for u in users
+            for o in owners
         }
         return [
             (service["id"], service["name"], _summary_input_reviews(
@@ -480,9 +489,9 @@ def main() -> None:
 
     try:
         with connect() as conn:
-            sync_seed_wallets(conn, settings.seed_wallets)
+            sync_seed_owners(conn, settings.seed_owners)
             conn.commit()
-        print("seeds: synced explicit operator and registered OpenCrowd wallets")
+        print(f"seeds: synced {len(settings.seed_owners)} explicit root owner(s)")
     except Exception:
         traceback.print_exc()
         failed = True

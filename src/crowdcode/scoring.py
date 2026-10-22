@@ -1,4 +1,4 @@
-"""Canonical scoring & reputation math (docs/SCORING.md v2).
+"""Canonical scoring & reputation math (docs/SCORING.md v3).
 
 Every published score — the MCP get_service_score tool, /api/services,
 /api/services/top, /api/services/{id} — comes from compute_score() here, either
@@ -7,17 +7,25 @@ path and the nightly consistency sweep refresh with it. There is deliberately
 no second implementation of the formula (a SQL twin would drift).
 
 All functions are pure: rows in, numbers out, no database imports.
+
+v3 narrows what counts. Only a review backed by a hosted OpenCrowd gateway
+receipt and a platform-judge score carries ranking weight (``ReviewRow.weight_
+exclusion is None``); every other review — CLI wallets, crowdcode-mcp users,
+legacy rows — is still stored, read and displayed, as community evidence with
+weight exactly zero. Weight is held by the reviewing **owner**, not the wallet:
+one owner runs many hosted agents with many wallets, so trust and the one-vote
+cap are keyed on ``owner_ref``.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
-ALGORITHM = "crowdcode-scoring-v2"
+ALGORITHM = "crowdcode-scoring-v3"
 
 # Score prior (Bayesian shrinkage): kappa pseudo-reviews at the prior mean.
 KAPPA = 2.0
@@ -26,29 +34,22 @@ MU0 = 3.0
 # must not let fresh wallets earn trust without evidence from trusted wallets.
 TRUST_MU0 = 3.0
 
-# Reviewer trust. raw trust lives in [TRUST_FLOOR, TRUST_CAP]; effective
-# weight is 0 below THETA (the round-bad-actors-to-zero mechanism) and never
-# exceeds TRUST_CAP. Seeds are pinned at 1.0.
+# Owner trust. raw trust lives in [TRUST_FLOOR, TRUST_CAP]; effective weight
+# is 0 below THETA (the round-bad-actors-to-zero mechanism) and never exceeds
+# TRUST_CAP. Seeds are pinned at 1.0. Trust is held per owner, not per wallet:
+# an owner spinning up fresh hosted agents gains no influence from doing so.
 ETA = 0.02
 THETA = 0.1
 TRUST_CAP = 1.0
 TRUST_FLOOR = -5.0
 P_CLAMP = (0.05, 0.95)
 
-# Review weight multipliers, keyed by payment_verification_level. Proof-based
-# and tx-hash-only verification weigh the same on purpose: both prove exactly
-# one fact (an on-chain transfer from reviewer wallet to service payee in the
-# pinned token) — the proof header is unsigned client JSON and adds nothing.
-# response_attested is reserved for future signed receipts; it inherits the
-# verified weight until it actually proves more.
-PROOF_VERIFIED = 2.0
-PROOF_SIGNED = 1.0
-LEVEL_MULTIPLIERS = {
-    "unverified": PROOF_SIGNED,
-    "signature_only": PROOF_SIGNED,
-    "onchain_verified": PROOF_VERIFIED,
-    "response_attested": PROOF_VERIFIED,
-}
+# Weighted reviews all weigh the same. In v2 the multiplier priced how much a
+# payment claim proved (1x signed, 2x on-chain); in v3 a review either clears
+# the hosted-receipt gate or carries no weight at all, so there is nothing left
+# to price. Keeping the multiplier at 1.0 also makes n_eff readable: it is the
+# number of trusted owner votes behind a score.
+WEIGHTED_MULTIPLIER = 1.0
 DECAY_HALF_LIFE_DAYS = 180.0
 
 # Display threshold: below this effective evidence a resource is "unproven at
@@ -71,9 +72,18 @@ class ReviewRow:
     payment_verified: bool
     signature_verified: bool
     created_at: datetime
-    # None on rows predating the level column; proof_multiplier falls back to
-    # the payment_verified boolean for those.
+    # None on rows predating the level column. 'response_attested' is the
+    # hosted gateway receipt level; nothing else can be weighted.
     payment_verification_level: str | None = None
+    # The hosted owner behind the review, from its verified attestation.
+    owner_ref: str | None = None
+    # None when the review carries ranking weight; otherwise why it does not
+    # ('community', 'self_dealing', 'dust_payment', 'unsigned_placeholder').
+    weight_exclusion: str | None = "community"
+
+    @property
+    def weighted(self) -> bool:
+        return self.weight_exclusion is None and self.owner_ref is not None
 
 
 @dataclass(frozen=True)
@@ -90,23 +100,26 @@ class ScoreResult:
 
 
 @dataclass(frozen=True)
-class DailyReviewBucket:
-    """One wallet's aggregate opinion of one service on one UTC day.
+class OwnerReviewBucket:
+    """One owner's single aggregate opinion of one service.
 
-    Every paid outcome remains stored, but a burst of calls cannot create more
-    scoring influence than the strongest individual review in the bucket.
+    v2 capped influence per wallet per UTC day; v3 caps it per owner outright —
+    one vote per owner per service, however many agents, wallets, days or calls
+    produced it. Every purchase remains stored and readable; the rating is the
+    decay-weighted mean of that owner's weighted reviews and the evidence is
+    capped at the strongest single one, so buying a service a hundred times
+    sharpens the owner's one vote instead of multiplying it.
     """
 
-    wallet: str
-    day: date
+    owner_ref: str
     rating: float
     evidence: float
     created_at: datetime
 
 
 def effective_weight(trust: TrustRow | None) -> float:
-    """Wallet weight: seeds pinned to 1.0; slashed, unknown, and sub-theta
-    wallets contribute exactly zero (n small residual trusts must never
+    """Owner weight: seeds pinned to 1.0; slashed, unknown, and sub-theta
+    owners contribute exactly zero (n small residual trusts must never
     aggregate into influence)."""
     if trust is None or trust.slashed:
         return 0.0
@@ -125,56 +138,58 @@ def decay_factor(created_at: datetime, now: datetime) -> float:
 
 
 def proof_multiplier(review: ReviewRow) -> float:
-    level = review.payment_verification_level
-    if level in LEVEL_MULTIPLIERS:
-        return LEVEL_MULTIPLIERS[level]
-    return PROOF_VERIFIED if review.payment_verified else PROOF_SIGNED
+    """Weight multiplier for one review: constant for weighted ones, zero
+    otherwise. Community reviews are evidence a reader can see, never
+    evidence the ranking moves on."""
+    return WEIGHTED_MULTIPLIER if review.weighted else 0.0
 
 
 def review_weight(
     review: ReviewRow, trust: TrustRow | None, now: datetime
 ) -> float:
+    if not review.weighted:
+        return 0.0
     weight = effective_weight(trust)
     if weight == 0.0:
         return 0.0
-    return weight * proof_multiplier(review) * decay_factor(review.created_at, now)
+    return weight * WEIGHTED_MULTIPLIER * decay_factor(review.created_at, now)
 
 
-def aggregate_daily_reviews(
+def aggregate_owner_reviews(
     reviews: Iterable[ReviewRow], now: datetime
-) -> list[DailyReviewBucket]:
-    """Aggregate reviews by wallet and UTC day.
+) -> list[OwnerReviewBucket]:
+    """Collapse every weighted review into one bucket per owner.
 
-    Ratings are weighted by the same proof and decay factors used for scoring.
-    The bucket's evidence is capped at the strongest individual review's
-    proof-and-decay weight, so additional paid calls improve the estimate of
-    that day's outcome without multiplying the wallet's influence.
+    The rating is the decay-weighted mean of that owner's weighted reviews and
+    the evidence is capped at the strongest single one, so repeated purchases
+    sharpen one vote rather than stacking several. Unweighted reviews are
+    dropped here, which is why community evidence can never reach a score.
     """
 
-    grouped: dict[tuple[str, date], list[tuple[ReviewRow, float]]] = {}
+    grouped: dict[str, list[tuple[ReviewRow, float]]] = {}
     for review in reviews:
-        if review.wallet is None:
+        if not review.weighted:
             continue
-        day = review.created_at.astimezone(UTC).date()
-        evidence = proof_multiplier(review) * decay_factor(review.created_at, now)
-        grouped.setdefault((review.wallet, day), []).append((review, evidence))
+        assert review.owner_ref is not None
+        grouped.setdefault(review.owner_ref, []).append(
+            (review, WEIGHTED_MULTIPLIER * decay_factor(review.created_at, now))
+        )
 
-    buckets: list[DailyReviewBucket] = []
-    for (wallet, day), items in grouped.items():
+    buckets: list[OwnerReviewBucket] = []
+    for owner_ref, items in grouped.items():
         total = sum(evidence for _, evidence in items)
         if total <= 0:
             continue
         buckets.append(
-            DailyReviewBucket(
-                wallet=wallet,
-                day=day,
+            OwnerReviewBucket(
+                owner_ref=owner_ref,
                 rating=sum(review.rating * evidence for review, evidence in items)
                 / total,
                 evidence=max(evidence for _, evidence in items),
                 created_at=max(review.created_at for review, _ in items),
             )
         )
-    return sorted(buckets, key=lambda bucket: (bucket.created_at, bucket.wallet))
+    return sorted(buckets, key=lambda bucket: (bucket.created_at, bucket.owner_ref))
 
 
 def compute_score(
@@ -182,13 +197,14 @@ def compute_score(
     trust_map: Mapping[str, TrustRow],
     now: datetime,
     *,
-    exclude_wallet: str | None = None,
+    exclude_owner: str | None = None,
     prior_mean: float = MU0,
 ) -> ScoreResult:
     """score = (sum(w*r) + kappa*mu0) / (sum(w) + kappa); n_eff = sum(w).
 
-    exclude_wallet omits a wallet's own reviews. Reputation callers use
-    compute_trust_consensus() to also select the neutral internal prior.
+    `trust_map` is keyed by owner_ref. exclude_owner omits one owner's own
+    reviews; reputation callers use compute_trust_consensus(), which also
+    selects the neutral internal prior.
     """
     num = KAPPA * prior_mean
     den = KAPPA
@@ -196,13 +212,10 @@ def compute_score(
     eligible = [
         review
         for review in reviews
-        if review.wallet is not None
-        and (exclude_wallet is None or review.wallet != exclude_wallet)
+        if review.weighted and (exclude_owner is None or review.owner_ref != exclude_owner)
     ]
-    for bucket in aggregate_daily_reviews(eligible, now):
-        if exclude_wallet is not None and bucket.wallet == exclude_wallet:
-            continue
-        weight = effective_weight(trust_map.get(bucket.wallet)) * bucket.evidence
+    for bucket in aggregate_owner_reviews(eligible, now):
+        weight = effective_weight(trust_map.get(bucket.owner_ref)) * bucket.evidence
         if weight == 0.0:
             continue
         num += weight * bucket.rating
@@ -216,12 +229,12 @@ def compute_trust_consensus(
     trust_map: Mapping[str, TrustRow],
     now: datetime,
     *,
-    exclude_wallet: str,
+    exclude_owner: str,
 ) -> ScoreResult:
     """Leave-one-out evidence for reputation, retaining the neutral v1 prior."""
     return compute_score(
         reviews, trust_map, now,
-        exclude_wallet=exclude_wallet, prior_mean=TRUST_MU0,
+        exclude_owner=exclude_owner, prior_mean=TRUST_MU0,
     )
 
 

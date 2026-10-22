@@ -67,6 +67,14 @@ def normalize_payment_provider(value: str | None) -> str | None:
     return provider
 
 
+# A service endpoint is something an agent can call over HTTP. Anything else
+# is not a service and, rendered as a link on the site or handed to a client,
+# is an injection vector: `javascript://host/%0aalert(1)` parses with a netloc
+# and would otherwise have been stored and linked verbatim. Rejected on the way
+# in, and the site refuses to link a non-http(s) href on the way out.
+ENDPOINT_SCHEMES = frozenset({"http", "https"})
+
+
 def normalize_api_endpoint(value: str | None) -> str | None:
     cleaned = clean_optional(value)
     if cleaned is None:
@@ -78,6 +86,8 @@ def normalize_api_endpoint(value: str | None) -> str | None:
         raise ValueError("api_endpoint must include a host")
 
     scheme = (parsed.scheme or "https").lower()
+    if scheme not in ENDPOINT_SCHEMES:
+        raise ValueError("api_endpoint must be an http or https URL")
     host = parsed.hostname.lower() if parsed.hostname else ""
     if not host:
         raise ValueError("api_endpoint must include a host")

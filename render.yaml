@@ -37,9 +37,18 @@ services:
       # Missing REDACTOR_URL rejects writes instead of storing raw text.
       - key: REDACTION_REQUIRED
         value: "1"
-      # Operator wallets pinned at trust 1.0 (docs/SCORING.md §3.5).
-      - key: CROWDCODE_SEED_WALLETS
+      # Root owner references pinned at trust 1.0 (docs/SCORING.md §3.5).
+      # Without at least one, no review is ever weighted.
+      - key: CROWDCODE_SEED_OWNERS
         sync: false
+      # Published OpenCrowd gateway receipt keys, "<kid>:<base64url ed25519>",
+      # comma separated (docs/SCORING.md §3.6). Only reviews signed by one of
+      # these carry ranking weight; GET /api/receipt-keys publishes them.
+      - key: OPENCROWD_RECEIPT_KEYS
+        sync: false
+      # Smallest payment a weighted review may cite, in USDC base units.
+      - key: CROWDCODE_MIN_WEIGHTED_AMOUNT_ATOMIC
+        value: "1000"
       # Token pin for mppx/Tempo payment verification (docs/SCORING.md §3.4).
       # Without it, mppx verification fails closed and stores nothing.
       - key: MPPX_TEMPO_TOKEN_ADDRESS
@@ -70,7 +79,7 @@ services:
         value: gpt-5-mini
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
-      - key: CROWDCODE_SEED_WALLETS
+      - key: CROWDCODE_SEED_OWNERS
         sync: false
       - key: REDACTOR_URL
         sync: false
