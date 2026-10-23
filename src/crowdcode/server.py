@@ -97,12 +97,15 @@ mcp = FastMCP(
 PUBLIC_REVIEWS = "(signature_verified or verified_source = 'hosted_receipt')"
 # The ranking-weighted subset: a verified hosted gateway receipt whose owner
 # was neither self-dealing nor paying dust (docs/SCORING.md §3.6).
-WEIGHTED_REVIEWS = "(weight_exclusion is null)"
+WEIGHTED_REVIEWS = "(weight_basis = 'hosted' and weight_exclusion is null)"
+# The pre-cutover corpus, which keeps the weight it earned under v2 (§3.7).
+LEGACY_REVIEWS = "(weight_basis = 'legacy')"
 # Columns every public review listing exposes, so a reader can tell judged
 # hosted evidence from community reports.
-PUBLIC_REVIEW_COLUMNS = """rating, reason, task_context, payment_verified,
+PUBLIC_REVIEW_COLUMNS = f"""rating, reason, task_context, payment_verified,
                    payment_verification_level as verification_level,
-                   verified_source, (weight_exclusion is null) as counts_towards_ranking,
+                   verified_source, weight_basis,
+                   ({WEIGHTED_REVIEWS} or {LEGACY_REVIEWS}) as counts_towards_ranking,
                    created_at"""
 # The evidence counters every score payload carries.
 REVIEW_COUNTS = f"""
@@ -117,8 +120,9 @@ REVIEW_COUNTS = f"""
                 as num_signature_only_reviews,
               count(*) filter (where {WEIGHTED_REVIEWS})::int as num_weighted_reviews,
               avg(rating) filter (where {WEIGHTED_REVIEWS}) as weighted_avg_rating,
-              count(*) filter (where {PUBLIC_REVIEWS} and not {WEIGHTED_REVIEWS})::int
-                as num_community_reviews"""
+              count(*) filter (where {LEGACY_REVIEWS})::int as num_legacy_reviews,
+              count(*) filter (where {PUBLIC_REVIEWS} and not {WEIGHTED_REVIEWS}
+                and not {LEGACY_REVIEWS})::int as num_community_reviews"""
 
 
 def _json_ready(row: dict[str, Any]) -> dict[str, Any]:
@@ -392,7 +396,7 @@ def get_service_score(
             (service["id"],),
         ).fetchone()
         stored = conn.execute(
-            "select score, n_eff, review_summary from services where id = %s",
+            "select score, n_eff, n_eff_legacy, n_eff_hosted, review_summary from services where id = %s",
             (service["id"],),
         ).fetchone()
         # Weighted, judge-written reviews first: a client that reads only the
@@ -453,8 +457,13 @@ def get_service_score(
         # Weighted evidence is what the score is computed from; community
         # reviews are readable context with no ranking weight.
         "num_weighted_reviews": score["num_weighted_reviews"],
+        "num_legacy_reviews": score["num_legacy_reviews"],
         "num_community_reviews": score["num_community_reviews"],
         "weighted_avg_rating": as_float(score["weighted_avg_rating"]),
+        # The two eras behind n_eff: frozen pre-cutover evidence, and trusted
+        # owner votes from judged hosted purchases.
+        "n_eff_legacy": as_float(stored["n_eff_legacy"]) if stored else 0.0,
+        "n_eff_hosted": as_float(stored["n_eff_hosted"]) if stored else 0.0,
         "verified_avg_rating": as_float(score["verified_avg_rating"]),
         # Deprecated alias of the canonical score, kept so pre-0.3.0 clients
         # silently upgrade instead of reading a dead formula.
@@ -510,8 +519,11 @@ def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
         "num_reviews": 0,
         "num_verified_reviews": 0,
         "num_weighted_reviews": 0,
+        "num_legacy_reviews": 0,
         "num_community_reviews": 0,
         "weighted_avg_rating": None,
+        "n_eff_legacy": 0,
+        "n_eff_hosted": 0,
         "verified_avg_rating": None,
         "weighted_rating": None,
         "summary": None,
@@ -973,9 +985,9 @@ def review_service(
                   payment_verification_level, payment_verification_metadata,
                   payment_reference_canonical, review_nonce,
                   verified_source, weight_exclusion, owner_ref, payee_owner_ref,
-                  receipt_key_id, gateway_attestation
+                  receipt_key_id, gateway_attestation, weight_basis
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
                 (
@@ -1007,6 +1019,9 @@ def review_service(
                     attested.payee_owner_ref if attested else None,
                     attested.kid if attested else None,
                     Jsonb(_attestation_record(gateway_attestation)) if attested else None,
+                    # Only the pre-cutover backfill writes 'legacy'; a review
+                    # submitted now is weighed by the hosted rules or not at all.
+                    "hosted" if (attested and weight_exclusion is None) else "none",
                 ),
             ).fetchone()
 
@@ -1180,6 +1195,8 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.payment_provider,
           s.score,
           s.n_eff,
+          s.n_eff_legacy,
+          s.n_eff_hosted,
           (s.review_summary is not null) as has_summary,
           avg(r.rating) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::float as avg_rating,
           count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::int as num_reviews,
@@ -1190,9 +1207,10 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verification_level
             in ('unverified', 'signature_only'))::int
             as num_signature_only_reviews,
-          count(r.id) filter (where (r.weight_exclusion is null))::int as num_weighted_reviews,
-          avg(r.rating) filter (where (r.weight_exclusion is null))::float as weighted_avg_rating,
-          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and not (r.weight_exclusion is null))::int as num_community_reviews
+          count(r.id) filter (where (r.weight_basis = 'hosted' and r.weight_exclusion is null))::int as num_weighted_reviews,
+          avg(r.rating) filter (where (r.weight_basis = 'hosted' and r.weight_exclusion is null))::float as weighted_avg_rating,
+          count(r.id) filter (where (r.weight_basis = 'legacy'))::int as num_legacy_reviews,
+          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and not (r.weight_basis = 'hosted' and r.weight_exclusion is null) and not (r.weight_basis = 'legacy'))::int as num_community_reviews
         from services s
         left join reviews r on r.service_id = s.id
         group by s.id
@@ -1222,8 +1240,11 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "num_onchain_verified_reviews": row["num_onchain_verified_reviews"],
             "num_signature_only_reviews": row["num_signature_only_reviews"],
             "num_weighted_reviews": row["num_weighted_reviews"],
+            "num_legacy_reviews": row["num_legacy_reviews"],
             "num_community_reviews": row["num_community_reviews"],
             "weighted_avg_rating": as_float(row["weighted_avg_rating"]),
+            "n_eff_legacy": as_float(row["n_eff_legacy"]) or 0.0,
+            "n_eff_hosted": as_float(row["n_eff_hosted"]) or 0.0,
             # Deprecated alias of the canonical score (pre-scoring-v1 field).
             "rank_score": as_float(row["score"]),
             **networks.get(row["service_id"], EMPTY_NETWORKS),
@@ -1245,7 +1266,8 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         service = conn.execute(
             """
             select id, name, directory_slug, canonical_endpoint,
-                   payment_provider, score, n_eff, review_summary
+                   payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
+                   review_summary
             from services
             where id = %s
             """,
@@ -1281,7 +1303,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             f"""
             select rating, count(*)::int as n
             from reviews
-            where service_id = %s and {WEIGHTED_REVIEWS}
+            where service_id = %s and ({WEIGHTED_REVIEWS} or {LEGACY_REVIEWS})
             group by rating
             """,
             (service_id,),
@@ -1341,8 +1363,11 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "num_onchain_verified_reviews": counts["num_onchain_verified_reviews"],
         "num_signature_only_reviews": counts["num_signature_only_reviews"],
         "num_weighted_reviews": counts["num_weighted_reviews"],
+        "num_legacy_reviews": counts["num_legacy_reviews"],
         "num_community_reviews": counts["num_community_reviews"],
         "weighted_avg_rating": as_float(counts["weighted_avg_rating"]),
+        "n_eff_legacy": as_float(service["n_eff_legacy"]) or 0.0,
+        "n_eff_hosted": as_float(service["n_eff_hosted"]) or 0.0,
         "histogram": histogram,
         "weighted_histogram": weighted_histogram,
         "summary": _redacted_summary(service.get("review_summary")),
@@ -1364,7 +1389,8 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
         services = conn.execute(
             """
             select id, name, directory_slug, canonical_endpoint,
-                   payment_provider, score, n_eff, review_summary
+                   payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
+                   review_summary
             from services
             order by score desc, n_eff desc, name asc
             """
@@ -1373,7 +1399,8 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
             f"""
             select service_id, rating, reason, task_context, payment_verified,
                    payment_verification_level as verification_level,
-                   verified_source, (weight_exclusion is null) as counts_towards_ranking,
+                   verified_source, weight_basis,
+                   ({WEIGHTED_REVIEWS} or {LEGACY_REVIEWS}) as counts_towards_ranking,
                    amount, created_at
             from reviews
             where {PUBLIC_REVIEWS}
@@ -1426,7 +1453,10 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
                     1 for r in service_reviews if r.get("payment_verified")
                 ),
                 "num_weighted_reviews": sum(
-                    1 for r in service_reviews if r.get("counts_towards_ranking")
+                    1 for r in service_reviews if r.get("weight_basis") == "hosted"
+                ),
+                "num_legacy_reviews": sum(
+                    1 for r in service_reviews if r.get("weight_basis") == "legacy"
                 ),
                 "summary": _redacted_summary(service.get("review_summary")),
                 "reviews": [_json_ready(r) for r in service_reviews],

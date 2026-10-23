@@ -1,5 +1,16 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.11.0 — 2026-10-23
+
+- Service scores earned before October 2026 are back. 0.10.0 narrowed ranking
+  weight to hosted, judged purchases and applied that retroactively, which sent
+  every score to the 3.0 prior; reviews from before the change now keep the
+  weight the earlier rules gave them and fade on the usual 180-day half-life.
+  Reviews written from here on still need a hosted gateway receipt and a judge
+  verdict to count.
+- Score results report the two eras separately: `n_eff_legacy`, `n_eff_hosted`
+  and `num_legacy_reviews`, and each review carries a `weight_basis`.
+
 ## 0.10.0 — 2026-10-22
 
 - Only hosted, judged purchases carry ranking weight (`crowdcode-scoring-v3`).

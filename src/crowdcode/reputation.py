@@ -1,15 +1,21 @@
-"""Database glue for the canonical scoring algorithm (docs/SCORING.md v3).
+"""Database glue for the canonical scoring algorithm (docs/SCORING.md v3.1).
 
 The write path (review_service) and the nightly consistency sweep both go
 through these helpers so trust and stored scores can never diverge from
 scoring.compute_score.
 
-Trust is held per **owner**, not per wallet. A hosted owner runs many agents
-with many wallets, and a wallet costs nothing to create, so `review_owners`
-holds the raw trust and `wallet_users` keeps only the reviewer identity it
-always did. Hosted mainnet wallets are no longer automatically trusted:
-`CROWDCODE_SEED_OWNERS` names the root of trust, and every other owner earns
-its weight from the accuracy of its judged reviews.
+Trust earned from the cutover on is held per **owner**, not per wallet. A
+hosted owner runs many agents with many wallets, and a wallet costs nothing to
+create, so `review_owners` holds that raw trust. Hosted mainnet wallets are no
+longer automatically trusted: `CROWDCODE_SEED_OWNERS` names the root of trust,
+and every other owner earns its weight from the accuracy of its judged reviews.
+
+`wallet_users` keeps the wallet trust that was already earned before the
+cutover, and it is **frozen** there: `load_legacy_trust` reads it, nothing
+writes it. That is what lets pre-cutover scores stand unchanged without
+reopening the wallet-trust loop — a wallet cannot earn, lose, or be granted
+trust any more, so the frozen snapshot can only ever weigh the finite set of
+reviews that already cited it.
 """
 
 from __future__ import annotations
@@ -81,6 +87,32 @@ def ensure_owner(conn: psycopg.Connection, owner_ref: str) -> dict[str, Any]:
     ).fetchone()
 
 
+def load_legacy_trust(
+    conn: psycopg.Connection, wallets: set[str] | None = None
+) -> dict[str, TrustRow]:
+    """The frozen pre-cutover wallet trust, keyed by wallet address.
+
+    Read-only by construction: no code path writes `wallet_users.raw_trust` or
+    `is_seed` any more, so this snapshot is fixed and can only weigh reviews
+    that already existed when it was taken.
+    """
+    if wallets is not None and not wallets:
+        return {}
+    sql = "select wallet_address, raw_trust, is_seed, slashed_at from wallet_users"
+    params: tuple[Any, ...] = ()
+    if wallets is not None:
+        sql += " where wallet_address = any(%s)"
+        params = (list(wallets),)
+    return {
+        row["wallet_address"]: TrustRow(
+            raw_trust=float(row["raw_trust"]),
+            is_seed=bool(row["is_seed"]),
+            slashed=row["slashed_at"] is not None,
+        )
+        for row in conn.execute(sql, params).fetchall()
+    }
+
+
 def load_trust_map(
     conn: psycopg.Connection, owners: set[str] | None = None
 ) -> dict[str, TrustRow]:
@@ -109,7 +141,8 @@ def load_service_reviews(
     rows = conn.execute(
         """
         select reviewer_wallet, rating, payment_verified, signature_verified,
-               payment_verification_level, created_at, owner_ref, weight_exclusion
+               payment_verification_level, created_at, owner_ref,
+               weight_exclusion, weight_basis
         from reviews
         where service_id = %s
         """,
@@ -125,6 +158,7 @@ def load_service_reviews(
             payment_verification_level=row.get("payment_verification_level"),
             owner_ref=row.get("owner_ref"),
             weight_exclusion=row.get("weight_exclusion"),
+            weight_basis=row.get("weight_basis") or "none",
         )
         for row in rows
     ]
@@ -138,14 +172,19 @@ def recompute_service_score(
     trust_map = load_trust_map(
         conn, {r.owner_ref for r in reviews if r.weighted and r.owner_ref}
     )
-    result = compute_score(reviews, trust_map, now)
+    legacy_trust = load_legacy_trust(
+        conn, {r.wallet for r in reviews if r.legacy and r.wallet}
+    )
+    result = compute_score(reviews, trust_map, now, legacy_trust=legacy_trust)
     conn.execute(
         """
         update services
-        set score = %s, n_eff = %s, score_updated_at = %s
+        set score = %s, n_eff = %s, n_eff_legacy = %s, n_eff_hosted = %s,
+            score_updated_at = %s
         where id = %s
         """,
-        (result.score, result.n_eff, now, service_id),
+        (result.score, result.n_eff, result.n_eff_legacy, result.n_eff_hosted,
+         now, service_id),
     )
     return result
 
@@ -179,7 +218,12 @@ def apply_review_trust_update(
     trust_map = load_trust_map(
         conn, {r.owner_ref for r in reviews if r.weighted and r.owner_ref} | {owner_ref}
     )
-    loo = compute_trust_consensus(reviews, trust_map, now, exclude_owner=owner_ref)
+    legacy_trust = load_legacy_trust(
+        conn, {r.wallet for r in reviews if r.legacy and r.wallet}
+    )
+    loo = compute_trust_consensus(
+        reviews, trust_map, now, exclude_owner=owner_ref, legacy_trust=legacy_trust
+    )
     new_raw = updated_raw_trust(float(owner["raw_trust"]), loo.score, rating)
     if new_raw != float(owner["raw_trust"]):
         conn.execute(

@@ -289,3 +289,27 @@ create table if not exists review_owners (
   slashed_at timestamptz
 );
 alter table review_owners enable row level security;
+
+-- Pre-cutover reviews keep the weight they earned (docs/SCORING.md v3.1 §3.7).
+-- `weight_basis` records which era's rules weigh a row: 'legacy' for the
+-- frozen pre-cutover corpus, 'hosted' for a verified judged purchase, 'none'
+-- for everything else. Only the backfill in supabase/legacy-grandfather.sql
+-- ever writes 'legacy'.
+alter table reviews
+  add column if not exists weight_basis text not null default 'none'
+    check (weight_basis in ('legacy', 'hosted', 'none'));
+alter table services
+  add column if not exists n_eff_legacy double precision not null default 0,
+  add column if not exists n_eff_hosted double precision not null default 0;
+create index if not exists reviews_legacy_bucket_idx
+  on reviews (service_id, reviewer_wallet, created_at)
+  where weight_basis = 'legacy';
+
+-- The wallet trust snapshot behind legacy rows, frozen at the cutover. No code
+-- path writes wallet_users.raw_trust or is_seed any more; this table records
+-- which wallets the snapshot trusted so the restore is reproducible.
+create table if not exists legacy_seed_wallets (
+  wallet_address text primary key,
+  frozen_at timestamptz not null default now()
+);
+alter table legacy_seed_wallets enable row level security;

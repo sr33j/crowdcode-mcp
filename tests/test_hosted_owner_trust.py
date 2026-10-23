@@ -29,10 +29,11 @@ def review(conn, service_id, owner_ref, rating, *, exclusion=None, at=NOW, walle
     conn.execute(
         """insert into reviews(service_id,rating,reason,reviewer_wallet,signature_verified,
              payment_verified,payment_verification_level,owner_ref,weight_exclusion,
-             verified_source,created_at)
-           values(%s,%s,'judged',%s,true,true,'response_attested',%s,%s,%s,%s)""",
+             verified_source,created_at,weight_basis)
+           values(%s,%s,'judged',%s,true,true,'response_attested',%s,%s,%s,%s,%s)""",
         (service_id, rating, wallet or f"0xagent{owner_ref[:6]}", owner_ref, exclusion,
-         "community" if exclusion else "hosted_receipt", at),
+         "community" if exclusion else "hosted_receipt", at,
+         "none" if exclusion else "hosted"),
     )
 
 
@@ -94,3 +95,96 @@ def test_slashing_still_overrides_a_seed_owner(db):
     conn.execute("update review_owners set slashed_at=now() where owner_ref=%s", (SEED_OWNER,))
     sync_seed_owners(conn, [SEED_OWNER])
     assert effective_weight(load_trust_map(conn)[SEED_OWNER]) == 0.0
+
+
+# --- grandfathered pre-cutover scores (v3.1) ------------------------------
+
+
+def legacy_review(conn, service_id, wallet, rating, *, at=NOW, level="onchain_verified"):
+    """A review as it was stored before the cutover: a wallet, no owner."""
+    conn.execute(
+        """insert into reviews(service_id,rating,reason,reviewer_wallet,signature_verified,
+             payment_verified,payment_verification_level,verified_source,created_at,weight_basis)
+           values(%s,%s,'worked',%s,true,true,%s,'community',%s,'legacy')""",
+        (service_id, rating, wallet, level, at),
+    )
+
+
+def test_a_pre_cutover_score_survives_the_sweep(db):
+    """The regression this exists for: recomputing must not send a service
+    that was scored before the cutover back to the prior."""
+    conn, _, _ = db
+    svc = service(conn)
+    conn.execute(
+        "insert into wallet_users(wallet_address,is_seed,raw_trust) values(%s,true,1.0)",
+        (HOSTED_WALLET,),
+    )
+    legacy_review(conn, svc, HOSTED_WALLET, 5)
+    replay_scores(conn, NOW)
+    row = conn.execute(
+        "select score, n_eff, n_eff_legacy, n_eff_hosted from services where id=%s", (svc,)
+    ).fetchone()
+    # seed 1.0 x onchain 2.0, shrunk by the kappa=2 prior: v2's exact number.
+    assert row["n_eff_legacy"] == 2.0
+    assert row["n_eff_hosted"] == 0.0
+    assert abs(row["score"] - 4.0) < 1e-9
+
+
+def test_the_frozen_wallet_snapshot_is_never_written_again(db):
+    """Legacy scores are stable because the trust behind them cannot move:
+    the sweep reads wallet_users and never updates it."""
+    conn, _, _ = db
+    svc = service(conn)
+    conn.execute(
+        "insert into wallet_users(wallet_address,is_seed,raw_trust) values(%s,true,1.0)",
+        (HOSTED_WALLET,),
+    )
+    for day in range(30):
+        legacy_review(conn, svc, HOSTED_WALLET, 5, at=NOW - timedelta(days=day))
+    replay_scores(conn, NOW)
+    first = conn.execute("select score from services where id=%s", (svc,)).fetchone()["score"]
+    trust = conn.execute(
+        "select raw_trust, is_seed from wallet_users where wallet_address=%s", (HOSTED_WALLET,)
+    ).fetchone()
+    assert trust == {"raw_trust": 1.0, "is_seed": True}
+    # Replaying again is a no-op: nothing about the legacy era moves.
+    replay_scores(conn, NOW)
+    assert conn.execute("select score from services where id=%s", (svc,)).fetchone()["score"] == first
+
+
+def test_legacy_evidence_lets_a_new_owner_earn_trust(db):
+    """A new owner has to be able to earn trust somewhere. Almost every
+    service in the directory was scored by wallets, so the old consensus is
+    what a judged review can now agree or disagree with."""
+    conn, _, _ = db
+    svc = service(conn)
+    conn.execute(
+        "insert into wallet_users(wallet_address,is_seed,raw_trust) values(%s,true,1.0)",
+        (HOSTED_WALLET,),
+    )
+    for day in range(40):
+        legacy_review(conn, svc, HOSTED_WALLET, 5, at=NOW - timedelta(days=60 - day))
+        review(conn, svc, OTHER_OWNER, 5, at=NOW - timedelta(days=60 - day) + timedelta(hours=1))
+    replay_scores(conn, NOW)
+    # No seed owner exists at all here; the trust came from the old corpus.
+    assert load_trust_map(conn)[OTHER_OWNER].raw_trust > 0
+
+
+def test_a_post_cutover_review_can_never_claim_the_legacy_rules(db):
+    """The cutover is enforced by weight_basis, and the write path only ever
+    writes 'hosted' or 'none'."""
+    conn, _, _ = db
+    svc = service(conn)
+    conn.execute(
+        "insert into wallet_users(wallet_address,is_seed,raw_trust) values(%s,true,1.0)",
+        (HOSTED_WALLET,),
+    )
+    # An unattested review today, from the very wallet the snapshot trusts.
+    review(conn, svc, OTHER_OWNER, 5, exclusion="community", wallet=HOSTED_WALLET)
+    replay_scores(conn, NOW)
+    row = conn.execute("select score, n_eff from services where id=%s", (svc,)).fetchone()
+    assert row["n_eff"] == 0.0
+    assert row["score"] == 3.0
+    assert conn.execute(
+        "select count(*) as n from reviews where weight_basis='legacy'"
+    ).fetchone()["n"] == 0

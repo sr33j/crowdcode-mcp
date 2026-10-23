@@ -108,6 +108,7 @@ def _run():
                         payment_verification_level="response_attested",
                         owner_ref=name,
                         weight_exclusion=None,
+                        weight_basis="hosted",
                     )
                 )
         for name, kind in REVIEWERS:
