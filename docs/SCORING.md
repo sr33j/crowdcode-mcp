@@ -1,38 +1,51 @@
-# CrowdCode Scoring & Reputation — Design Doc (v3)
+# CrowdCode Scoring & Reputation — Design Doc (v3.1)
 
-Status: **implemented (`crowdcode-scoring-v3`); deployment requires a score replay**
-Updated: 2026-10-22
+Status: **implemented (`crowdcode-scoring-v3.1`); deployment requires a score replay**
+Updated: 2026-10-23
 Regression simulation: `tests/test_scoring_sim.py` (deterministic, seed=42).
 Admission and manipulation scenarios: `tests/test_hosted_attestation.py`.
 The figures and sweep results in §6 are historical v1 evidence from
 `docs/scoring/sim_scoring3.py`, using a public prior of 3.0.
 
-**What v3 changed.** Only a review backed by a hosted OpenCrowd gateway receipt
-and a platform-judge score carries ranking weight (§3.6). Everything else — CLI
-wallets, crowdcode-mcp users, every row written before v3 — is still accepted,
-stored and published, as **community evidence with weight exactly zero**. Weight
-is held per **owner**, not per wallet, and an owner gets **one vote per
-service**. The `opencrowd_seed_wallets` bridge that pinned every registered
-hosted mainnet wallet at trust 1.0 is **removed**: `CROWDCODE_SEED_OWNERS` is
-the root of trust and every other owner earns its weight.
+**What v3 changed.** A review written **from the cutover on** carries ranking
+weight only if it is backed by a hosted OpenCrowd gateway receipt and a
+platform-judge score (§3.6). Everything else — CLI wallets, crowdcode-mcp users
+— is still accepted, stored and published, as **community evidence with weight
+exactly zero**. That weight is held per **owner**, not per wallet, and an owner
+gets **one vote per service**. The `opencrowd_seed_wallets` bridge that pinned
+every registered hosted mainnet wallet at trust 1.0 is **removed**:
+`CROWDCODE_SEED_OWNERS` is the root of trust and every other owner earns its
+weight.
+
+**What v3.1 added.** Reviews that already existed at the cutover keep the weight
+they had (§3.7). Applying v3's rule retroactively sent every score in the
+directory back to the prior — nothing written before the cutover has a receipt,
+because receipts did not exist yet — which threw away months of real evidence to
+fix a forward-looking problem. The pre-cutover corpus is now weighed by v2's
+rules against a **frozen** wallet-trust snapshot, decaying on the same 180-day
+half-life it always did, while everything written since is weighed by v3's. A
+published score is the sum of the two eras, and `n_eff_legacy` / `n_eff_hosted`
+report each separately.
 
 The public service prior is **3.0**, with strength 2. Reputation's internal
 leave-one-out consensus retains its separate **3.0** prior.
 
-Because `n_eff` is now the number of trusted owner votes rather than accumulated
-proof-and-decay units, the κ = 2 prior is no longer negligible: a perfect service
-publishes 3.67 on one trusted vote, 4.00 on two, 4.33 on four. The shrinkage is
-correct — one owner's opinion is weak evidence — and it is why `n_eff`, the
-judged count and the community count are published next to every score.
+Because a hosted review contributes exactly 1 rather than up to 2 accumulated
+proof-and-decay units, the κ = 2 prior is no longer negligible for a service
+whose evidence is all post-cutover: a perfect service publishes 3.67 on one
+trusted vote, 4.00 on two, 4.33 on four. The shrinkage is correct — one owner's
+opinion is weak evidence — and it is why `n_eff`, split into its archived and
+judged halves, is published next to every score alongside the judged and
+community counts.
 
 For deployment, pause backend review writes and the cron, apply
-`supabase/hosted-only-reviews.sql` (after `scoring-prior-three.sql`), set
-`OPENCROWD_RECEIPT_KEYS` and `CROWDCODE_SEED_OWNERS`, deploy the updated backend
-and cron to both services, and run
-`crowdcode.cron.run_consistency_sweep(utc_now())` before resuming service. The
-replay refreshes every stored score from review history; changing the schema
-alone does not. Expect most scores to return to the prior and display as
-"unproven" until hosted owners with earned trust review those services.
+`supabase/hosted-only-reviews.sql` then `supabase/legacy-grandfather.sql` (after
+`scoring-prior-three.sql`), set `OPENCROWD_RECEIPT_KEYS` and
+`CROWDCODE_SEED_OWNERS`, deploy the updated backend and cron to both services,
+and run `crowdcode.cron.run_consistency_sweep(utc_now())` before resuming
+service. The replay refreshes every stored score from review history; changing
+the schema alone does not. Pre-cutover scores reproduce to within the time decay
+accrued since.
 
 ---
 
@@ -296,6 +309,63 @@ Receipts expire for *new* submissions after 30 days and attestations after 30
 minutes, so a cache of receipts cannot be replayed into a burst of fresh
 evidence. The receipt hash is a unique index, alongside the payment reference.
 
+### 3.7 The cutover, and what came before it
+
+v3's rule is forward-looking: a review needs a receipt and a judge verdict.
+Nothing written before 2026-10-22T15:30Z can satisfy it, because receipts did
+not exist. Applying it retroactively sent all 334 scored services back to the
+3.0 prior and discarded 811 reviews' worth of evidence, including 739 payments
+verified on-chain, to close a hole those reviews had not exploited.
+
+So the corpus is **grandfathered**. `reviews.weight_basis` records which era's
+rules weigh a row:
+
+| basis | weighed by | trust from |
+|---|---|---|
+| `legacy` | v2: proof multiplier (1x signed, 2x on-chain) in a wallet/service/UTC-day bucket | the **frozen** `wallet_users` snapshot |
+| `hosted` | v3: one vote per owner per service, multiplier 1 (§3.6) | `review_owners`, earned |
+| `none` | nothing | — |
+
+`compute_score` sums both eras into one score and reports `n_eff_legacy` and
+`n_eff_hosted` separately, because the eras are on different scales and a single
+`n_eff` would not be readable.
+
+Three properties keep this from reopening what v3 closed:
+
+1. **No new row can become legacy.** `weight_basis` is assigned once, by the
+   backfill in `supabase/legacy-grandfather.sql`, keyed on a fixed cutover
+   timestamp. The write path can only ever produce `hosted` or `none`.
+2. **The wallet trust behind legacy rows is frozen.** After the migration no
+   code path writes `wallet_users.raw_trust` or `is_seed`; `load_legacy_trust`
+   only reads. A wallet cannot earn, lose, or be granted trust, so the snapshot
+   can only ever weigh the finite set of reviews that already cited it. The
+   wallet-trust loop v3 closed stays closed.
+3. **The corpus is finite and decaying.** Legacy evidence fades on the same
+   180-day half-life it always had, so the old scores stand today and give way
+   to judged evidence on their original schedule, rather than being preserved
+   forever.
+
+The leave-one-out consensus that governs owner trust (§3.3) **does** read legacy
+evidence. A new owner has to be able to earn trust somewhere, and before the
+cutover almost every service was scored by wallets rather than owners; without
+the old consensus to agree or disagree with, trust could only ever be earned on
+the handful of services a seed owner had personally bought from. The residual —
+an owner whose own pre-cutover wallet reviews moved a consensus can earn a
+little trust by agreeing with them — is bounded by the frozen corpus and by the
+per-event cap of about 0.0185 raw trust, and is accepted alongside the
+earn-then-pump residual in §7.
+
+**Recovering the snapshot.** `hosted-only-reviews.sql` demoted every seed with
+`set is_seed = false, raw_trust = 0`, and v2 pinned seeds at exactly 1.0, so the
+values are recoverable. The seed list is reconstructed from the hosted registry
+the retired view selected, plus the explicit operator seeds recovered from the
+demotion's own signature: a demoted seed sits at raw_trust exactly 0, and a
+wallet that has authored reviews and is not a seed cannot, because every rating
+of 1 or 5 against a moved consensus shifts it off zero. The result is
+materialised into `legacy_seed_wallets` — a frozen table, never a live registry
+query — and was verified against the scores captured immediately before the
+cutover: all 15 reproduce to within 0.003, every residual being time decay.
+
 ## 4. Why these mechanics (the math, briefly)
 
 - **Bayesian shrinkage (κ, μ₀)** — with few reviews the score stays near the
@@ -486,7 +556,9 @@ canonical scoring function in `src/crowdcode/scoring.py`.
   already carries an unrelated `public.users` table from another app.)
 - `reviews` gains `verified_source`, `weight_exclusion`, `owner_ref`,
   `payee_owner_ref`, `receipt_key_id` and `gateway_attestation` (§3.6), with a
-  unique index on the attestation's `receipt_sha256`.
+  unique index on the attestation's `receipt_sha256`, plus `weight_basis` (§3.7).
+- `services` gains `n_eff_legacy` and `n_eff_hosted`; `legacy_seed_wallets`
+  holds the frozen pre-cutover trust snapshot (§3.7).
 - `review_owners.is_seed`: root owners pinned at 1.0, synced from
   `CROWDCODE_SEED_OWNERS` at startup and on each cron run.
 - `reviews.amount` extracted from `payment_proof` **after** the token-pinning

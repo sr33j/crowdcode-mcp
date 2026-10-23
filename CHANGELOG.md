@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.11.0 — 2026-10-23
+
+Keep the pre-cutover scores (`crowdcode-scoring-v3.1`, docs/SCORING.md §3.7).
+Apply `supabase/legacy-grandfather.sql` after `hosted-only-reviews.sql`, deploy
+the backend and cron, then run
+`crowdcode.cron.run_consistency_sweep(utc_now())`.
+
+0.10.0 applied the hosted-receipt rule retroactively. Nothing written before it
+has a receipt, because receipts did not exist, so every one of 334 scored
+services fell back to the 3.0 prior and 811 reviews — 739 with an
+on-chain-verified payment — stopped counting. That discarded months of real
+evidence to fix a forward-looking problem.
+
+- `reviews.weight_basis` records which era's rules weigh a row. Reviews that
+  already existed at the cutover are `legacy` and keep the weight v2 gave them:
+  the proof multiplier (1x signed, 2x on-chain) in a wallet/service/UTC-day
+  bucket, against a wallet-trust snapshot frozen at the cutover. Everything
+  written since is `hosted` or `none`. A score is the sum of both eras.
+- `n_eff` is published split: `n_eff_legacy` and `n_eff_hosted`, on `services`
+  and in every score payload, because the two eras are on different scales.
+  Score payloads also gain `num_legacy_reviews`, and each review reports its
+  `weight_basis`.
+- The wallet trust behind legacy rows is **frozen**. No code path writes
+  `wallet_users.raw_trust` or `is_seed` any more; `load_legacy_trust` only
+  reads. A wallet cannot earn, lose or be granted trust, so the snapshot can
+  only ever weigh the finite set of reviews that already cited it — the
+  wallet-trust loop 0.10.0 closed stays closed. The corpus also keeps decaying
+  on its original 180-day half-life.
+- No new review can reach the legacy rules: `weight_basis` is assigned once by
+  the backfill, keyed on a fixed cutover timestamp, and the write path only
+  ever produces `hosted` or `none`.
+- The leave-one-out consensus behind owner trust now reads legacy evidence, so
+  a new owner can earn trust by agreeing or disagreeing with the existing
+  directory rather than only on services a seed owner happened to buy from.
+- The nightly summarizer accepts whichever era weighs a review.
+
 ## 0.10.0 — 2026-10-22
 
 Scoring v3: only hosted, judged purchases carry ranking weight

@@ -57,10 +57,10 @@ class FakeConn:
         return [q for q in self.queries if fragment in q[0]]
 
 
-def _review_row(owner, rating, *, exclusion=None):
+def _review_row(owner, rating, *, exclusion=None, basis="hosted", wallet=None):
     """A weighted hosted review by default."""
     return {
-        "reviewer_wallet": f"0xwallet-of-{owner[:8]}",
+        "reviewer_wallet": wallet or f"0xwallet-of-{owner[:8] if owner else 'x'}",
         "rating": rating,
         "payment_verified": True,
         "signature_verified": True,
@@ -68,6 +68,22 @@ def _review_row(owner, rating, *, exclusion=None):
         "created_at": NOW,
         "owner_ref": owner,
         "weight_exclusion": exclusion,
+        "weight_basis": basis,
+    }
+
+
+def _legacy_row(wallet, rating, *, level="onchain_verified"):
+    """A pre-cutover review, weighed by the frozen wallet snapshot."""
+    return {
+        "reviewer_wallet": wallet,
+        "rating": rating,
+        "payment_verified": True,
+        "signature_verified": True,
+        "payment_verification_level": level,
+        "created_at": NOW,
+        "owner_ref": None,
+        "weight_exclusion": "community",
+        "weight_basis": "legacy",
     }
 
 
@@ -91,7 +107,7 @@ def test_recompute_stores_the_canonical_score():
     assert result.score == (1.0 * 5 + KAPPA * MU0) / (1.0 + KAPPA)
 
     update = conn.executed("update services")[0]
-    assert update[1] == (result.score, result.n_eff, NOW, "svc_1")
+    assert update[1] == (result.score, result.n_eff, 0.0, result.n_eff, NOW, "svc_1")
 
 
 def test_untrusted_owners_leave_the_service_at_the_prior():
@@ -111,6 +127,25 @@ def test_untrusted_owners_leave_the_service_at_the_prior():
     result = recompute_service_score(conn, "svc_1", NOW)
     assert result.score == MU0
     assert result.n_eff == 0.0
+
+
+def test_recompute_restores_a_pre_cutover_score_from_frozen_wallet_trust():
+    """The grandfathering regression: a service whose only evidence predates
+    the cutover still scores, out of wallet_users rather than review_owners."""
+    conn = FakeConn(
+        {
+            "from reviews": [_legacy_row(SEED_WALLET, 5)],
+            "from wallet_users": [
+                {"wallet_address": SEED_WALLET, "raw_trust": 1.0, "is_seed": True, "slashed_at": None}
+            ],
+            "from review_owners": [],
+        }
+    )
+    result = recompute_service_score(conn, "svc_1", NOW)
+    # seed 1.0 x onchain 2.0 — v2's number, unchanged.
+    assert result.n_eff_legacy == 2.0
+    assert result.n_eff_hosted == 0.0
+    assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA) == 4.0
 
 
 def test_community_reviews_from_a_seed_owner_still_weigh_nothing():

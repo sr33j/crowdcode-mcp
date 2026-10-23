@@ -37,7 +37,13 @@ from crowdcode.payments import (
 )
 from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_enabled
-from crowdcode.reputation import ensure_owner, ensure_user, recompute_service_score, sync_seed_owners
+from crowdcode.reputation import (
+    ensure_owner,
+    ensure_user,
+    load_legacy_trust,
+    recompute_service_score,
+    sync_seed_owners,
+)
 from crowdcode.scoring import (
     ReviewRow,
     TrustRow,
@@ -172,7 +178,7 @@ def replay_scores(conn: Any, now: datetime) -> None:
         """
         select id, service_id, reviewer_wallet, rating, payment_verified,
                signature_verified, payment_verification_level,
-               created_at, user_id, owner_ref, weight_exclusion
+               created_at, user_id, owner_ref, weight_exclusion, weight_basis
         from reviews
         order by created_at asc, id asc
         """
@@ -200,6 +206,10 @@ def replay_scores(conn: Any, now: datetime) -> None:
     for row in rows:
         if row["owner_ref"] and row["weight_exclusion"] is None:
             ensure_owner(conn, row["owner_ref"])
+
+    # The frozen pre-cutover wallet trust. The sweep reads it and never writes
+    # it: legacy scores have to reproduce, so the snapshot cannot move.
+    legacy_trust = load_legacy_trust(conn)
 
     owners = conn.execute(
         "select owner_ref, raw_trust, is_seed, slashed_at from review_owners"
@@ -238,9 +248,12 @@ def replay_scores(conn: Any, now: datetime) -> None:
             payment_verification_level=row.get("payment_verification_level"),
             owner_ref=row.get("owner_ref"),
             weight_exclusion=row.get("weight_exclusion"),
+            weight_basis=row.get("weight_basis") or "none",
         )
-        # Unweighted reviews still belong to the service's stored history, but
-        # they create no trust event and move no score.
+        # Legacy rows and unweighted rows alike belong to the service's stored
+        # history but create no trust event. Legacy rows still carry their
+        # frozen weight into every score computed below; unweighted ones carry
+        # nothing.
         if not review.weighted:
             per_service.setdefault(row["service_id"], []).append(review)
             continue
@@ -262,6 +275,7 @@ def replay_scores(conn: Any, now: datetime) -> None:
                 trust,
                 event_at,
                 exclude_owner=owner_ref,
+                legacy_trust=legacy_trust,
             )
             raw[owner_ref] = updated_raw_trust(
                 raw[owner_ref], loo.score, bucket.rating
@@ -288,7 +302,9 @@ def replay_scores(conn: Any, now: datetime) -> None:
     # also what keeps decay staleness bounded between reviews.
     services = conn.execute("select id, score, n_eff from services").fetchall()
     for service in services:
-        result = compute_score(per_service.get(service["id"], []), trust, now)
+        result = compute_score(
+            per_service.get(service["id"], []), trust, now, legacy_trust=legacy_trust
+        )
         if abs(result.score - float(service["score"])) > DRIFT_TOLERANCE:
             logging.getLogger(__name__).info(
                 f"sweep: score drift service={service['id']} "
@@ -297,28 +313,35 @@ def replay_scores(conn: Any, now: datetime) -> None:
         conn.execute(
             """
             update services
-            set score = %s, n_eff = %s, score_updated_at = %s
+            set score = %s, n_eff = %s, n_eff_legacy = %s, n_eff_hosted = %s,
+                score_updated_at = %s
             where id = %s
             """,
-            (result.score, result.n_eff, now, service["id"]),
+            (result.score, result.n_eff, result.n_eff_legacy, result.n_eff_hosted,
+             now, service["id"]),
         )
 
 
 def _summary_input_reviews(
-    conn: Any, service_id: str, trust: dict[str, TrustRow], now: datetime
+    conn: Any,
+    service_id: str,
+    trust: dict[str, TrustRow],
+    now: datetime,
+    legacy_trust: dict[str, TrustRow] | None = None,
 ) -> list[dict[str, Any]]:
-    """Trust-weighted summarizer input (docs/SCORING.md §8.2): owners below
-    theta don't get to write the narrative. Cold-start fallback: with no
-    weighted reviews yet, fall back to authenticated community reviews, which
-    is all a service has before any trusted owner has bought from it. Unsigned
-    placeholder rows never appear — they are not publishable. Payment status is
-    preserved in the summarizer input."""
+    """Trust-weighted summarizer input (docs/SCORING.md §8.2): reviews that
+    carry no weight don't get to write the narrative. A review qualifies under
+    whichever era weighs it — a trusted owner's judged purchase, or a
+    pre-cutover review from a wallet the frozen snapshot trusted. Cold-start
+    fallback: with neither, fall back to authenticated community reviews.
+    Unsigned placeholder rows never appear — they are not publishable. Payment
+    status is preserved in the summarizer input."""
     rows = conn.execute(
         """
         select rating, reason, task_context, payment_verified,
                signature_verified, payment_verification_level,
-               reviewer_wallet, owner_ref, weight_exclusion, verified_source,
-               created_at
+               reviewer_wallet, owner_ref, weight_exclusion, weight_basis,
+               verified_source, created_at
         from reviews
         where service_id = %s
           and (signature_verified or verified_source = 'hosted_receipt')
@@ -327,25 +350,27 @@ def _summary_input_reviews(
         """,
         (service_id, SUMMARY_MAX_REVIEWS),
     ).fetchall()
-    weighted = [
-        row
-        for row in rows
-        if review_weight(
-            ReviewRow(
-                wallet=row["reviewer_wallet"],
-                rating=int(row["rating"]),
-                payment_verified=bool(row["payment_verified"]),
-                signature_verified=bool(row["signature_verified"]),
-                created_at=row["created_at"],
-                payment_verification_level=row.get("payment_verification_level"),
-                owner_ref=row.get("owner_ref"),
-                weight_exclusion=row.get("weight_exclusion"),
-            ),
-            trust.get(row["owner_ref"]),
-            now,
+
+    def carries_weight(row: dict[str, Any]) -> bool:
+        review = ReviewRow(
+            wallet=row["reviewer_wallet"],
+            rating=int(row["rating"]),
+            payment_verified=bool(row["payment_verified"]),
+            signature_verified=bool(row["signature_verified"]),
+            created_at=row["created_at"],
+            payment_verification_level=row.get("payment_verification_level"),
+            owner_ref=row.get("owner_ref"),
+            weight_exclusion=row.get("weight_exclusion"),
+            weight_basis=row.get("weight_basis") or "none",
         )
-        > 0
-    ]
+        holder = (
+            (legacy_trust or {}).get(review.wallet)
+            if review.legacy
+            else trust.get(row["owner_ref"])
+        )
+        return review_weight(review, holder, now) > 0
+
+    weighted = [row for row in rows if carries_weight(row)]
     return weighted or [row for row in rows if row["payment_verified"] or row["signature_verified"]]
 
 
@@ -371,6 +396,7 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
         if not pending:
             return []
 
+        legacy_trust = load_legacy_trust(conn)
         owners = conn.execute(
             "select owner_ref, raw_trust, is_seed, slashed_at from review_owners"
         ).fetchall()
@@ -384,7 +410,7 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
         }
         return [
             (service["id"], service["name"], _summary_input_reviews(
-                conn, service["id"], trust, now
+                conn, service["id"], trust, now, legacy_trust
             ), service["review_revision"])
             for service in pending
         ]

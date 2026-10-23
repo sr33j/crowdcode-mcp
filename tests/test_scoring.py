@@ -1,4 +1,4 @@
-"""Exact-value tests for the canonical scoring math (docs/SCORING.md v3)."""
+"""Exact-value tests for the canonical scoring math (docs/SCORING.md v3.1)."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from crowdcode.scoring import (
     WEIGHTED_MULTIPLIER,
     ReviewRow,
     TrustRow,
+    aggregate_legacy_reviews,
     aggregate_owner_reviews,
     compute_score,
     compute_trust_consensus,
@@ -33,7 +34,7 @@ SEED = TrustRow(raw_trust=1.0, is_seed=True)
 
 
 def review(owner, rating, *, verified=True, age_days=0.0, level="response_attested",
-           exclusion=None, wallet=None):
+           exclusion=None, wallet=None, basis="hosted"):
     """A weighted hosted review by default; `exclusion` makes it community."""
     return ReviewRow(
         wallet=wallet or f"0xwallet-of-{owner}",
@@ -44,6 +45,22 @@ def review(owner, rating, *, verified=True, age_days=0.0, level="response_attest
         payment_verification_level=level,
         owner_ref=owner,
         weight_exclusion=exclusion,
+        weight_basis=basis,
+    )
+
+
+def legacy(wallet, rating, *, verified=True, age_days=0.0, level=None):
+    """A review from before the cutover, weighed by v2's rules."""
+    return ReviewRow(
+        wallet=wallet,
+        rating=rating,
+        payment_verified=verified,
+        signature_verified=True,
+        created_at=NOW - timedelta(days=age_days),
+        payment_verification_level=level,
+        owner_ref=None,
+        weight_exclusion="community",
+        weight_basis="legacy",
     )
 
 
@@ -63,7 +80,11 @@ def test_only_attested_hosted_reviews_carry_weight():
     legacy = review("owner", 5, level="onchain_verified", exclusion="community")
     assert proof_multiplier(legacy) == 0.0
     # A row with no owner cannot be weighted even if nothing excluded it.
-    assert ReviewRow("0xw", 5, True, True, NOW, "response_attested", None, None).weighted is False
+    assert ReviewRow("0xw", 5, True, True, NOW, "response_attested", None, None, "hosted").weighted is False
+    # And a post-cutover row is never weighed by the legacy rules, whatever
+    # else it carries: weight_basis is what decides, and the write path can
+    # only ever produce 'hosted' or 'none'.
+    assert review("owner", 5, exclusion="community").legacy is False
 
 
 def test_no_reviews_sits_at_the_prior():
@@ -90,7 +111,7 @@ def test_one_owner_gets_one_vote_per_service_however_many_calls():
         review("seed", 1, wallet="0xagent-a"),
         review("seed", 5, wallet="0xagent-b"),
         ReviewRow("0xagent-c", 5, True, True,
-                  datetime(2026, 7, 24, 23, 59, tzinfo=UTC), "response_attested", "seed", None),
+                  datetime(2026, 7, 24, 23, 59, tzinfo=UTC), "response_attested", "seed", None, "hosted"),
     ]
     buckets = aggregate_owner_reviews(reviews, NOW)
     assert len(buckets) == 1
@@ -154,6 +175,85 @@ def test_many_zero_trust_owners_cannot_move_the_score():
 
 def test_weight_is_capped_even_when_raw_trust_exceeds_the_cap():
     assert effective_weight(TrustRow(raw_trust=42.0)) == TRUST_CAP
+
+
+# --- the pre-cutover corpus (v3.1 grandfathering) -------------------------
+
+
+def test_legacy_reviews_keep_the_weight_v2_gave_them():
+    """The whole point: a score earned before the cutover still stands.
+    weight = seed 1.0 x onchain 2.0 x fresh 1.0, exactly as v2 computed it."""
+    trust = {"0xseed": SEED}
+    result = compute_score([legacy("0xseed", 5, level="onchain_verified")], {}, NOW,
+                           legacy_trust=trust)
+    assert result.n_eff_legacy == 2.0
+    assert result.n_eff_hosted == 0.0
+    assert result.n_eff == 2.0
+    assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA) == 4.0
+
+
+def test_legacy_keeps_v2s_proof_pricing_and_daily_cap():
+    from crowdcode.scoring import legacy_multiplier
+
+    assert legacy_multiplier(legacy("0x1", 5, level="unverified")) == 1.0
+    assert legacy_multiplier(legacy("0x1", 5, level="signature_only")) == 1.0
+    assert legacy_multiplier(legacy("0x1", 5, level="onchain_verified")) == 2.0
+    # Rows predating the level column fall back to the boolean, as v2 did.
+    assert legacy_multiplier(legacy("0x1", 5, verified=True, level=None)) == 2.0
+    assert legacy_multiplier(legacy("0x1", 5, verified=False, level=None)) == 1.0
+    # One wallet, one UTC day, one bucket; evidence capped at the strongest.
+    buckets = aggregate_legacy_reviews([legacy("0xseed", 1), legacy("0xseed", 5)], NOW)
+    assert len(buckets) == 1
+    assert buckets[0].rating == 3.0
+    assert buckets[0].evidence == 2.0
+    # A second UTC day is a second bucket, exactly as it was.
+    two_days = [
+        ReviewRow("0xseed", 5, True, True, datetime(2026, 7, 24, 23, 59, tzinfo=UTC),
+                  None, None, "community", "legacy"),
+        ReviewRow("0xseed", 5, True, True, datetime(2026, 7, 25, 0, 1, tzinfo=UTC),
+                  None, None, "community", "legacy"),
+    ]
+    assert len(aggregate_legacy_reviews(two_days, NOW)) == 2
+    assert math.isclose(
+        compute_score(two_days, {}, NOW, legacy_trust={"0xseed": SEED}).n_eff,
+        3.9923057743167902,
+    )
+
+
+def test_legacy_decays_on_its_original_schedule():
+    """Grandfathering freezes the weight, not the clock: the old evidence
+    fades at the same half-life it always did."""
+    aged = compute_score([legacy("0xseed", 5, age_days=180, level="onchain_verified")],
+                         {}, NOW, legacy_trust={"0xseed": SEED})
+    assert aged.n_eff_legacy == 1.0
+
+
+def test_the_two_eras_sum_into_one_score():
+    result = compute_score(
+        [legacy("0xseed", 5, level="onchain_verified"), review("owner", 1)],
+        {"owner": SEED}, NOW, legacy_trust={"0xseed": SEED},
+    )
+    assert result.n_eff_legacy == 2.0
+    assert result.n_eff_hosted == 1.0
+    assert result.n_eff == 3.0
+    assert result.score == (2.0 * 5 + 1.0 * 1 + KAPPA * MU0) / (3.0 + KAPPA)
+
+
+def test_a_legacy_wallet_with_no_frozen_trust_weighs_nothing():
+    """Only the wallets the snapshot trusted keep weight; an untrusted
+    pre-cutover wallet weighed nothing under v2 and still does."""
+    assert compute_score([legacy("0xstranger", 5)], {}, NOW, legacy_trust={}).n_eff == 0.0
+    # And omitting the snapshot entirely scores the hosted era alone.
+    assert compute_score([legacy("0xseed", 5)], {}, NOW).n_eff == 0.0
+
+
+def test_no_new_review_can_reach_the_legacy_rules():
+    """The cutover is enforced by weight_basis, which the write path never
+    sets to 'legacy'. A post-cutover review from a wallet the frozen snapshot
+    trusts is still just community evidence."""
+    fresh = review("owner", 5, exclusion="community", wallet="0xseed", basis="none")
+    assert fresh.legacy is False and fresh.weighted is False
+    assert compute_score([fresh], {"owner": SEED}, NOW, legacy_trust={"0xseed": SEED}).n_eff == 0.0
 
 
 def test_leave_one_out_excludes_only_that_owners_reviews():

@@ -45,6 +45,7 @@ def _sweep_review(review_id, owner, wallet, rating, *, minutes, exclusion=None, 
         "user_id": review_id,
         "owner_ref": owner,
         "weight_exclusion": exclusion,
+        "weight_basis": "none" if exclusion else "hosted",
     }
 
 
@@ -152,6 +153,7 @@ def _summary_row(wallet, *, verified, rating=5, owner=None, exclusion="community
         "reviewer_wallet": wallet,
         "owner_ref": owner,
         "weight_exclusion": exclusion,
+        "weight_basis": "none" if exclusion else "hosted",
         "verified_source": "community" if exclusion else "hosted_receipt",
         "created_at": NOW,
     }
