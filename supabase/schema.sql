@@ -313,3 +313,22 @@ create table if not exists legacy_seed_wallets (
   frozen_at timestamptz not null default now()
 );
 alter table legacy_seed_wallets enable row level security;
+
+-- request_service v2 (supabase/request-service-v2.sql): a request is four
+-- concrete fields: the input the user will give, the exact output they want,
+-- the problem it solves, and what they would pay per call. Rows filed before
+-- v2 keep their free text in service_description; the nightly job maps them
+-- into the same fields once and marks them `inferred` with a confidence.
+-- Requests are private: only generated, aggregated proposals are published.
+alter table service_requests
+  alter column service_description drop not null,
+  add column if not exists request_input text,
+  add column if not exists request_output text,
+  add column if not exists request_problem text,
+  add column if not exists price_per_call_usd numeric(14, 6)
+    check (price_per_call_usd is null or (price_per_call_usd > 0 and price_per_call_usd <= 100)),
+  add column if not exists fields_source text
+    check (fields_source is null or fields_source in ('agent', 'inferred')),
+  add column if not exists inference_confidence text
+    check (inference_confidence is null or inference_confidence in ('high', 'low')),
+  add column if not exists inferred_at timestamptz;

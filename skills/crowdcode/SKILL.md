@@ -66,7 +66,8 @@ the live price before paying.
 3. Compare the canonical `score` and use `n_eff` as evidence strength.
    `unproven: true` means insufficient trusted evidence, not a bad service;
    fall back to directory metadata, price, and the active spend policy.
-4. Read `summary` when present for reported strengths, failures, and caveats.
+4. Read `summary` when present: pros, cons, and things to watch out for,
+   generated from reviews. Individual reviews are private and never returned.
 5. Tell the user what will be spent when the surrounding workflow does not
    already provide a clear spending disclosure.
 
@@ -136,28 +137,35 @@ turns. A request can describe a missing capability or a specific improvement to
 an existing service. It does not require actual payment, a funded wallet, or
 spending authority; reporting demand never authorizes a purchase.
 
-For each distinct worthwhile gap, call `request_service` with:
+For each distinct worthwhile gap, call `request_service` with four fields,
+written concretely enough that a developer could start building from them:
 
-- `service_description`: a concrete reusable paid offering. State the exact
-  input, output or state change, acceptance criteria, and why the result would
-  justify payment. Describe what someone buys, not "better tools" or "help".
-- `task_context`: the real task and observed obstacle, what was attempted,
-  and why the available alternative fell short. Generalize private details.
+- `input`: the clear input the user will give the service: format, size,
+  fields. "A document" is too vague; "scanned annual-report PDFs up to 200
+  pages" is not.
+- `output`: the exact output they want back, specific enough to check.
+- `problem`: what it solves: what failed, cost too much, or was impossible.
+- `price_per_call`: what you would pay per call in USD, as a number. It is
+  your honest estimate of what the outcome is worth, not a budget the user
+  approved.
 
-Example: "Accept a scanned annual-report PDF and return reconciled financial
-tables as CSV, with source-page citations and uncertain cells flagged. Totals
-must reconcile or be explicitly marked unresolved. Charge per processed report;
-the value is avoiding manual table reconstruction and verification."
-Context: "While comparing annual reports, ordinary OCR dropped columns and
-misaligned totals, requiring manual checks."
+Describe a reusable service, not your task: no names, URLs, IDs, or private
+details. Example: input "scanned annual-report PDFs, up to 200 pages"; output
+"one CSV per financial table, with source-page citations and uncertain cells
+flagged"; problem "ordinary OCR drops columns and misaligns totals, forcing
+manual reconstruction"; price_per_call 0.5.
+
+Requests stay private. CrowdCode publishes only aggregated proposals: similar
+requests are generalized, reviewed for whether people would actually pay, and
+shown with their demand and median price. Vague or unrealistic requests are
+not shown.
 
 A request for improved web search must name the failure and paid improvement,
 such as licensed full-text retrieval with verifiable page citations when normal
 search only returned snippets. Do not request generic web search that already
 worked well, local Python execution, more context, or an ordinary agent mistake
-without a concrete service that would prevent it. Do not fabricate a failure,
-user budget, price, or willingness to pay a specific amount. Include a price
-only if grounded in the conversation, and distinguish an estimate from authority.
+without a concrete service that would prevent it. Do not fabricate a failure
+or claim the user agreed to pay; `price_per_call` is an estimate, not authority.
 
 If everything worked well at reasonable cost, submit nothing. Submit each
 distinct gap once per task; don't duplicate earlier requests after follow-ups,

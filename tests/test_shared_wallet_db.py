@@ -215,10 +215,9 @@ def test_unpaid_review_stored_once_visible_and_scored(review_backend):
     # Readable and counted as community evidence, with no ranking weight.
     assert score['n_eff'] == 0.0
     assert score['num_community_reviews'] == 2 and score['num_weighted_reviews'] == 0
-    assert len(score['recent_reviews']) == 2
-    assert all(row['counts_towards_ranking'] is False for row in score['recent_reviews'])
-    assert all(not row['payment_verified'] for row in score['recent_reviews'])
-    assert score['recent_reviews'][0]['reason'] == 'Endpoint returned HTTP 500'
+    # Counted, never quoted: the review text stays private.
+    assert 'recent_reviews' not in score
+    assert 'Endpoint returned HTTP 500' not in str(score)
     # Reapplying the full schema does not fabricate payment evidence.
     conn.execute(SCHEMA.read_text())
     assert conn.execute('select count(*) as n from reviews where payment_reference is null').fetchone()['n'] == 2

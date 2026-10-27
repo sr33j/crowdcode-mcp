@@ -58,9 +58,9 @@ Identify the service by `api_endpoint` + `payment_provider` +
   "n_eff": 5.8,
   "unproven": false,
   "summary": {
-    "strengths": ["Consistently relevant review comments."],
-    "failure_modes": [],
-    "caveats": ["Slower on large diffs."]
+    "pros": ["Consistently relevant review comments."],
+    "cons": [],
+    "watch_out": ["Slower on large diffs."]
   },
   "avg_rating": 4.5,
   "num_reviews": 7
@@ -73,7 +73,9 @@ fresh and adversarial wallets count for nothing no matter how many of them
 exist. `n_eff` says how much trusted evidence backs the score, and
 `unproven: true` means there isn't enough of it yet — read that as *insufficient
 evidence*, not as a bad service, and fall back to price and your spend policy.
-`summary` digests what reviewers actually reported.
+`summary` digests what reviewers actually reported as pros, cons and things to
+watch out for. Individual reviews are private: CrowdCode stores them but never
+returns their text.
 
 The algorithm is public: [docs/SCORING.md][scoring].
 
@@ -125,9 +127,12 @@ proofs from the *actual payment*, not from a directory listing:
 ### `request_service` — record unmet paid demand
 
 Before the final answer, reflect on actual obstacles that a concrete paid
-service could have solved. Describe precise inputs, deliverables, acceptance
-criteria, and the value of paying. A specific improvement to an inadequate
-existing service qualifies; an attempted purchase is not required.
+service could have solved, and describe the service in four required fields:
+`input` (the clear input the user will give), `output` (the exact output they
+want), `problem` (what it solves) and `price_per_call` (what you would pay per
+call, in USD). A specific improvement to an inadequate existing service
+qualifies; an attempted purchase is not required. Requests stay private;
+CrowdCode publishes only aggregated, generalized proposals.
 
 ### `get_review_signing_payload` — usually unnecessary
 

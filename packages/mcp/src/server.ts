@@ -72,7 +72,6 @@ function errorPayload(
       avg_rating: null,
       num_reviews: 0,
       summary: null,
-      recent_reviews: [],
       reason: "CrowdCode is temporarily unavailable",
       next_step,
     };
@@ -383,10 +382,11 @@ const SERVER_INSTRUCTIONS = [
   "paid service would have avoided an observed failure, poor result, expensive workaround,",
   "or wrong turn? This applies even if no purchase was attempted. Call request_service",
   "for each distinct, worthwhile gap (do not repeat the same gap on retries or follow-ups).",
-  "Describe the real use case, precise input, deliverable, acceptance criteria, observed",
-  "shortcoming, and why someone would pay for that outcome. An inadequate existing service",
-  "qualifies if you name the specific improvement. No actual payment or spend authority",
-  "is required to report demand; do not invent a budget or claim the user agreed to pay.",
+  "Fill its four fields concretely enough that a developer could start building: input",
+  "(what the user will give), output (the exact deliverable), problem (what it solves) and",
+  "price_per_call (what you would pay per call in USD). Describe a reusable service, not",
+  "your task. An inadequate existing service qualifies if you name the specific improvement.",
+  "No payment or spend authority is required; price_per_call is your honest estimate.",
   "Skip generic local compute, run-Python wishes, ordinary agent mistakes without a",
   "sellable remedy, and services that already worked well at reasonable cost. If nothing",
   "qualifies, submit nothing. Never send secrets or private user data.",
@@ -400,7 +400,7 @@ const SERVER_INSTRUCTIONS = [
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.11.0" },
+    { name: "crowdcode", version: "0.12.0" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -429,18 +429,20 @@ export function buildServer(deps: ServerDeps): McpServer {
     "request_service",
     {
       description:
-        "Record a concrete paid service that would have materially improved the task. " +
-        "Before your final answer, reflect on failures, poor results, excessive cost, and " +
-        "avoidable detours, even when no purchase was attempted. Describe the actual use " +
-        "case, exact input, paid deliverable, acceptance criteria, what failed, and why " +
-        "the outcome is worth paying for. Existing services may qualify when you explain " +
-        "the specific deficiency. Example: scanned annual reports to reconciled tables " +
-        "with page citations and confidence flags, because ordinary OCR dropped columns " +
-        "and required manual reconciliation. Skip generic web search that worked well, " +
-        "run-Python/local runtime wishes, and unsupported hypothetical needs. No payment " +
-        "or spending authority is needed; never invent a budget. One request per distinct " +
-        "gap per task; respect the returned wallet limit. Submit nothing if all worked " +
-        "well at reasonable cost. Free text is redacted locally.",
+        "Record a paid service that would have materially improved the task, as four " +
+        "concrete fields a developer could start building from: input (the clear input the " +
+        "user will give), output (the exact output they want back), problem (what it " +
+        "solves) and price_per_call (what you would pay per call, USD). Before your final " +
+        "answer, reflect on failures, poor results, excessive cost and avoidable detours, " +
+        "even when no purchase was attempted. Example: input \"scanned annual report PDFs, " +
+        "up to 200 pages\"; output \"one CSV per table with page citations and low-" +
+        "confidence cells flagged\"; problem \"OCR drops columns, forcing manual " +
+        "reconciliation\"; price_per_call 0.5. Describe a reusable service, not your task; " +
+        "no names, URLs or IDs. Skip web search that worked well, run-Python/local runtime " +
+        "wishes and bugs in your own tools. One request per distinct gap per task; respect " +
+        "the returned wallet limit. Submit nothing if all worked well at reasonable cost. " +
+        "Text is redacted locally; requests stay private and only aggregated proposals " +
+        "are published.",
       inputSchema: requestServiceShape,
     },
     (args) => handlers.request_service(args),
@@ -516,7 +518,8 @@ export function buildServer(deps: ServerDeps): McpServer {
         "as x402:monad:<tx_hash> and a Solana one as x402:solana:<signature> (Solana payee as " +
         "payment_target_ref; the agentcash Solana wallet signs payer_signature automatically). " +
         "Invalid payment evidence is rejected, never downgraded. " +
-        "Daily scoring influence is capped. Review text is redacted locally.",
+        "Daily scoring influence is capped. Review text is redacted locally and stays " +
+        "private: CrowdCode publishes only counts, scores and a generated summary.",
       inputSchema: reviewServiceShape,
     },
     (args) => handlers.review_service(args),

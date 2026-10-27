@@ -817,20 +817,23 @@ def test_backend_exception_is_stable_and_does_not_leak_details(monkeypatch):
     assert result["correlation_id"]
 
 
-def test_project_ideas_public_payload_reads_cron_cache_only(monkeypatch):
+def test_service_proposals_public_payload_reads_cron_cache_only(monkeypatch):
     from crowdcode import server as server_mod
 
     cached = {
         "ok": True,
+        "version": 2,
         "source": "cron",
         "cached": True,
         "stale": False,
-        "ideas": [{"title": "Cached"}],
+        "generated_at": 1,
+        "source_request_count": 3,
+        "proposals": [{"title": "Cached", "problem": "A real problem", "demand": {"requests": 3}}],
     }
-    monkeypatch.setattr(
-        server_mod,
-        "_cron_project_ideas_payload",
-        lambda _ttl: cached,
-    )
+    monkeypatch.setattr(server_mod, "_cached_proposals", lambda _ttl: cached)
 
-    assert server_mod._project_ideas_payload() is cached
+    assert server_mod._service_proposals_payload() is cached
+    # The pre-v2 endpoint is derived from the proposals and carries no examples.
+    ideas = server_mod._project_ideas_payload()
+    assert ideas["ideas"] == [{"title": "Cached", "summary": "A real problem",
+                               "request_count": 3, "tags": []}]

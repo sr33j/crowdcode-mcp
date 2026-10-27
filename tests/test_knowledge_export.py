@@ -33,63 +33,67 @@ def _service(service_id, name, score, n_eff):
     }
 
 
-def _review(service_id, rating, reason, amount=0.01):
+def _counts(service_id, num_reviews, **extra):
     return {
         "service_id": service_id,
-        "rating": rating,
-        "reason": reason,
-        "task_context": "geocode an address",
-        "payment_verified": True,
-        "verification_level": "onchain_verified",
-        "amount": amount,
-        "created_at": NOW,
+        "num_reviews": num_reviews,
+        "num_verified_reviews": num_reviews,
+        "num_weighted_reviews": 0,
+        "num_legacy_reviews": num_reviews,
+        "r1": 0, "r2": 0, "r3": 0, "r4": 0, "r5": num_reviews,
+        "median_paid_amount": 0.01,
+        **extra,
     }
 
 
-def test_evidence_payload_groups_and_caps_reviews(monkeypatch):
+def test_evidence_payload_carries_counts_and_summaries_not_reviews(monkeypatch):
+    summary = {"version": 2, "pros": ["Fast geocoding"], "cons": [], "watch_out": [],
+               "n_reviews": 3, "through_date": "2026-09-13", "generated_at": "x"}
     conn = FakeConn(
         {
-            "from services": [_service("svc_a", "Exa", 4.2, 12.0), _service("svc_b", "New", 3.0, 0.1)],
-            "from reviews": [
-                _review("svc_a", 5, "worked"),
-                _review("svc_a", 4, "ok"),
-                _review("svc_a", 1, "failed"),
+            "from services": [
+                {**_service("svc_a", "Exa", 4.2, 12.0), "review_summary": summary},
+                _service("svc_b", "New", 3.0, 0.1),
             ],
+            "from reviews": [_counts("svc_a", 3)],
         }
     )
     monkeypatch.setattr(server, "connect", _fake_connect(conn))
     monkeypatch.setattr(server, "redact_texts", lambda texts, fail_closed, **_: texts)
 
-    payload = server._knowledge_evidence_payload(max_reviews=2)
+    payload = server._knowledge_evidence_payload()
 
     assert payload["ok"] is True
-    assert payload["stats"] == {"num_services": 2, "total_reviews": 2}
+    assert payload["stats"] == {"num_services": 2, "total_reviews": 3}
     exa, new = payload["services"]
     assert exa["service_id"] == "svc_a"
-    assert exa["num_reviews"] == 2  # capped
-    assert exa["unproven"] is False
-    assert [r["rating"] for r in exa["reviews"]] == [5, 4]
-    assert exa["reviews"][0]["amount"] == 0.01
-    assert "service_id" not in exa["reviews"][0]
+    assert exa["num_reviews"] == 3
+    assert exa["histogram"]["5"] == 3
+    assert exa["median_paid_amount"] == 0.01
+    assert exa["summary"]["pros"] == ["Fast geocoding"]
+    assert "reviews" not in exa
+    # The export never selects review text at all.
+    review_sql = " ".join(sql for sql, _ in conn.executed("from reviews"))
+    assert "reason" not in review_sql and "task_context" not in review_sql
     assert new["unproven"] is True
-    assert new["reviews"] == []
+    assert new["num_reviews"] == 0
+    assert new["summary"] is None
 
 
-def test_evidence_payload_drops_text_when_redactor_is_down(monkeypatch):
+def test_evidence_payload_drops_summaries_when_redactor_is_down(monkeypatch):
+    summary = {"version": 2, "pros": ["Fast"], "cons": [], "watch_out": []}
     conn = FakeConn(
         {
-            "from services": [_service("svc_a", "Exa", 4.2, 12.0)],
-            "from reviews": [_review("svc_a", 5, "worked")],
+            "from services": [{**_service("svc_a", "Exa", 4.2, 12.0), "review_summary": summary}],
+            "from reviews": [_counts("svc_a", 1)],
         }
     )
     monkeypatch.setattr(server, "connect", _fake_connect(conn))
     monkeypatch.setattr(server, "redact_texts", lambda texts, fail_closed, **_: None)
 
-    payload = server._knowledge_evidence_payload(max_reviews=10)
+    payload = server._knowledge_evidence_payload()
 
-    review = payload["services"][0]["reviews"][0]
-    assert review["reason"] is None
-    assert review["task_context"] is None
+    assert payload["services"][0]["summary"] is None
 
 
 def _request(headers: dict[str, str], query: str = "") -> Request:
@@ -117,17 +121,12 @@ def test_endpoint_rejects_wrong_token(monkeypatch):
 
 def test_endpoint_returns_payload_with_token(monkeypatch):
     monkeypatch.setattr(server, "get_settings", lambda: type("S", (), {"knowledge_export_token": "secret"})())
-    seen = {}
 
-    def fake_payload(max_reviews):
-        seen["max_reviews"] = max_reviews
+    def fake_payload():
         return {"ok": True, "services": [], "stats": {"num_services": 0, "total_reviews": 0}}
 
     monkeypatch.setattr(server, "_knowledge_evidence_payload", fake_payload)
     response = asyncio.run(
-        server.knowledge_evidence(
-            _request({"authorization": "Bearer secret"}, query="max_reviews=9999")
-        )
+        server.knowledge_evidence(_request({"authorization": "Bearer secret"}))
     )
     assert response.status_code == 200
-    assert seen["max_reviews"] == server.KNOWLEDGE_EXPORT_MAX_REVIEWS

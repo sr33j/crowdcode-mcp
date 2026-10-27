@@ -229,7 +229,9 @@ def test_an_attested_hosted_review_is_the_only_kind_that_scores(hosted):
     assert score["num_community_reviews"] == 0
     assert score["n_eff"] == pytest.approx(1.0, abs=0.001)
     assert score["unproven"] is False
-    assert score["recent_reviews"][0]["counts_towards_ranking"] is True
+    # The judge's text is stored, never returned.
+    assert "recent_reviews" not in score
+    assert JUDGE_TEXT not in json.dumps(score)
 
 
 # --- manipulation attempts ------------------------------------------------
@@ -463,14 +465,12 @@ def test_unsigned_placeholder_reviews_are_never_published(hosted):
 
     score = server_mod.get_service_score(api_endpoint=ENDPOINT)
     assert score["num_reviews"] == 0
-    assert score["recent_reviews"] == []
     detail, status = server_mod._service_detail_payload(accepted["service_id"])
     assert status == 200
     assert detail["num_reviews"] == 0
-    assert detail["recent_reviews"] == []
     assert detail["histogram"] == {str(n): 0 for n in range(1, 6)}
-    export = server_mod._knowledge_evidence_payload(50)
-    assert all(service["reviews"] == [] for service in export["services"])
+    export = server_mod._knowledge_evidence_payload()
+    assert all(service["num_reviews"] == 0 for service in export["services"])
     assert "buy immediately" not in json.dumps(
         [score, detail, export, server_mod._top_services_payload(None)]
     )

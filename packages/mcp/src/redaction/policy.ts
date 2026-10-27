@@ -13,7 +13,7 @@ import type { RedactionEngine } from "@crowdcode/redaction";
 
 export const REDACTION_POLICY: Record<string, readonly string[]> = {
   find_service: ["query"],
-  request_service: ["service_description", "task_context"],
+  request_service: ["input", "output", "problem"],
   review_service: ["reason", "task_context"],
 };
 
