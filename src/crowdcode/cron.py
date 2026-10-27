@@ -12,7 +12,9 @@ rest; the process exits nonzero if any job failed:
    write the authoritative values. The first run after applying the schema
    DDL doubles as the data migration that backfills owners and stored scores.
 3. Per-service review summaries (LLM), watermarked on last_summarized_at.
-4. Requested-services summary (LLM), written to app_cache for the website.
+   Summaries written under an older SUMMARY_VERSION are regenerated.
+4. Service proposals (LLM): service requests mapped and grouped into the
+   proposals the website publishes (crowdcode.proposals), in app_cache.
 """
 
 from __future__ import annotations
@@ -54,12 +56,8 @@ from crowdcode.scoring import (
     updated_raw_trust,
 )
 from crowdcode.settings import get_settings
-from crowdcode.summaries import (
-    BATCH_TIMEOUT,
-    fetch_recent_requests,
-    summarize_project_ideas,
-    summarize_service_reviews,
-)
+from crowdcode import proposals
+from crowdcode.summaries import SUMMARY_VERSION, summarize_service_reviews
 
 DRIFT_TOLERANCE = 0.01
 SUMMARY_MAX_REVIEWS = 50
@@ -388,10 +386,12 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
               where r.service_id = s.id
                 and (r.signature_verified or r.verified_source = 'hosted_receipt')
                 and (s.last_summarized_at is null
-                     or r.created_at > s.last_summarized_at)
+                     or r.created_at > s.last_summarized_at
+                     or coalesce(s.review_summary->>'version', '1') <> %s)
             )
             order by s.id
-            """
+            """,
+            (str(SUMMARY_VERSION),),
         ).fetchall()
         if not pending:
             return []
@@ -464,6 +464,7 @@ def run_service_summaries(now: datetime) -> None:
         )
         stored = {
             **summary,
+            "version": SUMMARY_VERSION,
             "n_reviews": len(clean_reviews),
             "through_date": through[:10] if through else None,
             "model": settings.openai_model,
@@ -483,24 +484,30 @@ def run_service_summaries(now: datetime) -> None:
     print(f"summaries: {summarized}/{len(inputs)} service(s) summarized")
 
 
-def run_request_summary(now: datetime) -> None:
-    requests = fetch_recent_requests(limit=100)
-    payload = summarize_project_ideas(requests, timeout=BATCH_TIMEOUT)
+def run_service_proposals(now: datetime) -> None:
+    payload = proposals.generate(now, connect)
+    if payload is None:
+        print("proposals: skipped; keeping the last payload")
+        return
     with connect() as conn:
         conn.execute(
             """
             insert into app_cache (key, payload, generated_at)
-            values ('project_ideas', %s::jsonb, %s)
+            values (%s, %s::jsonb, %s)
             on conflict (key)
             do update set payload = excluded.payload,
                           generated_at = excluded.generated_at
             """,
-            (_as_json(payload), now),
+            (proposals.CACHE_KEY, _as_json(payload), now),
         )
+        # The pre-v2 cache carried example request text; it is never served
+        # again and must not linger.
+        conn.execute("delete from app_cache where key = 'project_ideas'")
         conn.commit()
     print(
-        f"request summary: {payload.get('source')} over "
-        f"{payload.get('source_request_count', 0)} request(s)"
+        f"proposals: {len(payload['proposals'])} listed from "
+        f"{payload['source_request_count']} request(s), "
+        f"{payload['hidden_request_count']} hidden"
     )
 
 
@@ -526,7 +533,7 @@ def main() -> None:
         run_payment_reverification,
         run_consistency_sweep,
         run_service_summaries,
-        run_request_summary,
+        run_service_proposals,
     ):
         try:
             job(now)

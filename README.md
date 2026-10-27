@@ -68,8 +68,8 @@ unredacted.
 
 ### Privacy: what leaves your machine
 
-With `crowdcode-mcp`, the free-text fields (`service_description`,
-`task_context`, `reason`) are rewritten locally before any network call:
+With `crowdcode-mcp`, the free-text fields (`input`, `output`, `problem`,
+`reason`, `task_context`) are rewritten locally before any network call:
 PII becomes stable placeholders (`[EMAIL_1]`, `[GIVEN_NAME_1]`) via
 [Rampart](https://github.com/nationaldesignstudio/rampart), and credentials
 (API keys, bearer tokens, JWTs, private keys, connection strings) become
@@ -135,30 +135,46 @@ carry `next_step` — the literal command, link, or retry that fixes them.
 
 ## Tools
 
-### `request_service(service_description, task_context?, requester_wallet?)`
+### `request_service(input, output, problem, price_per_call, requester_wallet?)`
 
 Captures concrete paid-service demand after a real task reveals a missing
-capability or a specific deficiency in an existing service:
+capability or a specific deficiency in an existing service. All four fields
+are required and validated, and should be concrete enough that a developer
+could start building from them:
+
+- `input`: the clear input the user will give (20–600 characters).
+- `output`: the exact output they want back (20–600 characters).
+- `problem`: what problem it solves (20–800 characters).
+- `price_per_call`: what they would pay per call, in USD (more than 0, at
+  most 100).
 
 ```json
 {
   "accepted": true,
   "request_id": 123,
-  "directory_match": "missing"
+  "recorded": {
+    "input": "scanned annual-report PDFs, up to 200 pages",
+    "output": "one CSV per financial table with page citations and uncertain cells flagged",
+    "problem": "ordinary OCR drops columns, forcing manual reconstruction",
+    "price_per_call": 0.5
+  },
+  "requests_remaining_today": 4,
+  "published_as": "aggregated proposals only; this request stays private"
 }
 ```
 
-`service_description` is required. `task_context` is optional.
-`requester_wallet` is required by the backend but attached automatically from
-your local wallet, which can be created unfunded unless auto-creation is
-disabled. The hosted backend still requires an identity. Successful responses include `requests_remaining_today`. New requests
-default to `directory_match = "missing"`.
+A vague or missing field is rejected with `error_code: "invalid_request_fields"`
+and a `reason` that says what to fix. `requester_wallet` is required by the
+backend but attached automatically from your local wallet, which can be created
+unfunded unless auto-creation is disabled.
 
-The description should name a specific reusable service capability, including
-the expected input and output or state change. It should be broad enough to
-represent demand from multiple users, not just the current user's one-off task.
-For example, prefer "Accepts a GitHub repository URL and failing CI logs, then
-opens a pull request with a focused fix" over "fix my CI."
+Requests are private. The nightly job groups them into generalized service
+proposals, has a model review each one as a product (would anyone actually pay
+per call? could a developer start building it from input and output alone?),
+and publishes only the proposals that pass, with their demand and the median
+and spread of `price_per_call`. Requests filed before v2 are mapped into the
+same fields and marked low confidence. `GET /api/service-proposals` serves the
+result; raw request text is never published.
 
 ### `find_service(query, networks?, balances?, candidates?, limit?)`
 
@@ -192,8 +208,11 @@ quote before paying. The query is redacted locally and is not stored.
 
 ### `get_service_score(service_id?, api_endpoint?, payment_provider?, payment_target_ref?, directory_slug?)`
 
-Returns the canonical trust-weighted score (see `docs/SCORING.md`) plus raw
-rating stats and an AI-generated review summary when one exists:
+Returns the canonical trust-weighted score (see `docs/SCORING.md`) plus rating
+stats and an AI-generated review summary when one exists. Reviews themselves
+are private: no review text is returned here, on the website, or by any public
+API; the summary of pros, cons and things to watch out for is the only
+published form of their content.
 
 ```json
 {
@@ -208,13 +227,12 @@ rating stats and an AI-generated review summary when one exists:
   "avg_rating": 4.5,
   "num_reviews": 2,
   "summary": {
-    "strengths": ["Consistently relevant review comments."],
-    "failure_modes": [],
-    "caveats": ["Slower on large diffs."],
+    "pros": ["Consistently relevant review comments."],
+    "cons": [],
+    "watch_out": ["Slower on large diffs."],
     "n_reviews": 2,
     "through_date": "2026-07-25"
-  },
-  "recent_reviews": []
+  }
 }
 ```
 

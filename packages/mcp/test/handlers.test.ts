@@ -48,18 +48,21 @@ describe("tool handlers", () => {
     const handlers = createToolHandlers({ engine, upstream });
 
     const result = await handlers.request_service({
-      service_description:
-        "OCR service; my email is jane@corp.com and key sk-abcdefghij0123456789",
-      task_context: "billing at jane@corp.com",
+      input: "Scanned invoice PDFs; my email is jane@corp.com and key sk-abcdefghij0123456789",
+      output: "One CSV per invoice table, sent to jane@corp.com",
+      problem: "OCR drops columns and billing has to reconcile by hand",
+      price_per_call: 0.5,
     });
     const payload = JSON.parse(result.content[0]!.text);
 
     const sent = upstream.calls[0]!.args;
-    expect(sent.service_description).not.toContain("jane@corp.com");
-    expect(sent.service_description).not.toContain("sk-abcdefghij0123456789");
-    expect(sent.service_description).toContain("[EMAIL_1]");
-    expect(sent.service_description).toContain("[API_KEY_1]");
-    expect(sent.task_context).toContain("[EMAIL_");
+    expect(sent.input).not.toContain("jane@corp.com");
+    expect(sent.input).not.toContain("sk-abcdefghij0123456789");
+    expect(sent.input).toContain("[EMAIL_1]");
+    expect(sent.input).toContain("[API_KEY_1]");
+    expect(sent.output).toContain("[EMAIL_");
+    expect(sent.problem).toBe("OCR drops columns and billing has to reconcile by hand");
+    expect(sent.price_per_call).toBe(0.5);
     expect(payload.accepted).toBe(true);
     expect(payload._redaction.entities_removed).toBeGreaterThanOrEqual(3);
     expect(payload._redaction.model_active).toBe(false);
@@ -134,7 +137,7 @@ describe("tool handlers", () => {
     };
     const handlers = createToolHandlers({ engine, upstream });
     const payload = JSON.parse(
-      (await handlers.request_service({ service_description: "x" })).content[0]!
+      (await handlers.request_service({ input: "x" })).content[0]!
         .text,
     );
     expect(payload.accepted).toBe(false);
@@ -526,7 +529,7 @@ describe("transparent review signing", () => {
       wallet: { walletDir: dir, autoCreate: false, env: {} as NodeJS.ProcessEnv },
     });
 
-    await handlers.request_service({ service_description: "OCR service" });
+    await handlers.request_service({ input: "Scanned invoice PDFs up to 50 pages" });
     expect(upstream.calls[0]!.args.requester_wallet).toBe(ACCOUNT.address);
   });
 

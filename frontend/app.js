@@ -140,9 +140,9 @@ function renderTable() {
 function renderDetail(d) {
   const summary = d.summary;
   const sections = [
-    ["Strengths", summary?.strengths],
-    ["Failure modes", summary?.failure_modes],
-    ["Caveats", summary?.caveats],
+    ["Pros", summary?.pros],
+    ["Cons", summary?.cons],
+    ["Watch out for", summary?.watch_out],
   ]
     .filter(([, items]) => Array.isArray(items) && items.length)
     .map(
@@ -157,7 +157,7 @@ function renderDetail(d) {
     ? `<div class="sum">
          <div class="sum-note">AI-generated from ${summary.n_reviews} review${
            summary.n_reviews === 1 ? "" : "s"
-         }${summary.through_date ? ` through ${esc(summary.through_date)}` : ""}</div>
+         }${summary.through_date ? ` through ${esc(summary.through_date)}` : ""}. Individual reviews stay private.</div>
          ${sections}
        </div>`
     : '<div class="sum state">No review summary yet — summaries are generated nightly once a service has trusted reviews.</div>';

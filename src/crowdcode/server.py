@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from crowdcode.db import connect
+from crowdcode.demand import validate_request_fields
 from crowdcode.discovery import find_services
 from crowdcode.identity import (
     build_identity,
@@ -47,7 +48,6 @@ from crowdcode.rate_limit import (
     rate_limit_payload,
 )
 from crowdcode.networks import EMPTY_NETWORKS, fetch_service_networks
-from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import (
     RedactionUnavailable,
     redact_texts,
@@ -68,6 +68,11 @@ from crowdcode.scoring import (
     as_float,
     is_unproven,
 )
+from crowdcode.proposals import CACHE_KEY as PROPOSALS_CACHE_KEY
+from crowdcode.proposals import PAYLOAD_VERSION as PROPOSALS_VERSION
+from crowdcode.proposals import as_project_ideas
+from crowdcode.proposals import empty_payload as empty_proposals
+from crowdcode.summaries import SUMMARY_VERSION
 from crowdcode.settings import (
     get_mcp_allowed_hosts,
     get_mcp_allowed_origins,
@@ -90,23 +95,19 @@ mcp = FastMCP(
     ),
 )
 
-# Reviews anybody may read. The legacy stripe/manual admission path accepted
-# unsigned placeholder rows (payments.verify_payment_reference): nothing
-# attributable stands behind them, so they are retained for continuity and
-# never published, counted, or summarized. Static SQL, interpolated by name.
+# Reviews that may be counted and summarized publicly. Their text is never
+# published: raw reviews stay in our tables, and only counts, scores and the
+# generated summary (pros, cons, things to watch out for) leave the backend.
+# The legacy stripe/manual admission path accepted unsigned placeholder rows
+# (payments.verify_payment_reference): nothing attributable stands behind
+# them, so they are retained for continuity and never counted or summarized.
+# Static SQL, interpolated by name.
 PUBLIC_REVIEWS = "(signature_verified or verified_source = 'hosted_receipt')"
 # The ranking-weighted subset: a verified hosted gateway receipt whose owner
 # was neither self-dealing nor paying dust (docs/SCORING.md §3.6).
 WEIGHTED_REVIEWS = "(weight_basis = 'hosted' and weight_exclusion is null)"
 # The pre-cutover corpus, which keeps the weight it earned under v2 (§3.7).
 LEGACY_REVIEWS = "(weight_basis = 'legacy')"
-# Columns every public review listing exposes, so a reader can tell judged
-# hosted evidence from community reports.
-PUBLIC_REVIEW_COLUMNS = f"""rating, reason, task_context, payment_verified,
-                   payment_verification_level as verification_level,
-                   verified_source, weight_basis,
-                   ({WEIGHTED_REVIEWS} or {LEGACY_REVIEWS}) as counts_towards_ranking,
-                   created_at"""
 # The evidence counters every score payload carries.
 REVIEW_COUNTS = f"""
               count(*) filter (where {PUBLIC_REVIEWS})::int as num_reviews,
@@ -204,7 +205,6 @@ def _stable_tool(func):
                     avg_rating=None,
                     num_reviews=0,
                     summary=None,
-                    recent_reviews=[],
                 )
             elif func.__name__ == "get_review_signing_payload":
                 payload["ok"] = False
@@ -217,32 +217,36 @@ def _stable_tool(func):
 @mcp.tool()
 @_stable_tool
 def request_service(
-    service_description: str,
-    task_context: str | None = None,
+    input: str,
+    output: str,
+    problem: str,
+    price_per_call: float,
     requester_wallet: str | None = None,
 ) -> dict[str, Any]:
-    """Record concrete paid-service demand discovered while completing a real task.
+    """Record a paid service you needed and could not buy, as four concrete fields.
 
-    Before the final answer, reflect on observed failures, poor results,
-    excessive cost, or avoidable detours, even if no purchase was attempted.
-    Describe a reusable service: exact input, paid deliverable and acceptance
-    criteria, actual use case and obstacle, and why the result is worth paying
-    for. An existing service qualifies only with a specific deficiency.
-    No actual purchase or spending authority is required; never invent a
-    budget or claim the user authorized payment. Skip local runtime wishes,
-    generic run-Python tasks, web search that already worked well, and ordinary
-    agent errors without a concrete sellable remedy. If nothing qualifies,
-    submit nothing. Submit each distinct gap once per task, respecting limits.
-    Example: scanned annual reports to reconciled tables with page citations
-    and confidence flags, after OCR dropped columns and forced manual checks.
-    Requires requester_wallet, attached automatically by the local client.
-    Never include secrets or private user data.
+    Call it before your final answer when a real task hit a failure, poor
+    result, excessive cost or avoidable detour that a reusable paid API call
+    would have fixed. No purchase or spending authority is needed. Builders
+    read these fields to decide what to build, so write them so a developer
+    could start today:
+    - input: the clear input the user will give, e.g. "a public MP4 URL (up
+      to 60 s) and the post text".
+    - output: the exact output they want back, e.g. "the published post ID
+      and URL, posted exactly once".
+    - problem: the problem it solves, e.g. "agents publishing video to X fail
+      on chunked uploads and cannot tell whether the post went out".
+    - price_per_call: what you would pay per call in USD, e.g. 0.05.
+    Describe a reusable service, not your task; no names, URLs, IDs or private
+    data. Skip local runtime wishes, generic web search that worked, and bugs
+    in your own tools. Submit each distinct gap once; if nothing qualifies,
+    submit nothing. Requests stay private: CrowdCode publishes only
+    aggregated, generalized proposals. requester_wallet is attached by the
+    local client.
     """
-    service_description = service_description.strip()
-    task_context = task_context.strip() if task_context else None
-
-    if not service_description:
-        return {"accepted": False, "reason": "service_description is required"}
+    fields, error = validate_request_fields(input, output, problem, price_per_call)
+    if fields is None:
+        return {"accepted": False, "error_code": "invalid_request_fields", "reason": error}
 
     wallet = _normalize_evm_address(requester_wallet) if requester_wallet else None
     if wallet is None:
@@ -263,8 +267,9 @@ def request_service(
     # so raw PII/secrets from clients that bypass crowdcode-mcp never land
     # in the shared database. Wallet fields are structured identifiers and
     # never pass through redaction.
+    texts = [fields.input, fields.output, fields.problem]
     try:
-        redacted = redact_texts([service_description, task_context], fail_closed=True)
+        redacted = redact_texts(texts, fail_closed=True)
     except RedactionUnavailable:
         return {
             "status": "unavailable",
@@ -279,8 +284,7 @@ def request_service(
             ),
         }
     if redacted is not None:
-        service_description = redacted[0] or service_description
-        task_context = redacted[1]
+        texts = [clean or original for clean, original in zip(redacted, texts)]
 
     settings = get_settings()
     with connect() as conn:
@@ -297,15 +301,15 @@ def request_service(
         row = conn.execute(
             """
             insert into service_requests (
-              service_description, task_context, requester_id, requester_wallet,
-              redacted_at
+              request_input, request_output, request_problem, price_per_call_usd,
+              fields_source, requester_id, requester_wallet, redacted_at
             )
-            values (%s, %s, %s, %s, %s)
-            returning id, directory_match
+            values (%s, %s, %s, %s, 'agent', %s, %s, %s)
+            returning id
             """,
             (
-                service_description,
-                task_context,
+                *texts,
+                fields.price_per_call,
                 requester_id,
                 wallet,
                 utc_now() if redaction_enabled() else None,
@@ -316,8 +320,10 @@ def request_service(
     return {
         "accepted": True,
         "request_id": row["id"],
-        "directory_match": row["directory_match"],
+        "recorded": {"input": texts[0], "output": texts[1], "problem": texts[2],
+                     "price_per_call": fields.price_per_call},
         "requests_remaining_today": limit_check.remaining,
+        "published_as": "aggregated proposals only; this request stays private",
     }
 
 
@@ -399,34 +405,6 @@ def get_service_score(
             "select score, n_eff, n_eff_legacy, n_eff_hosted, review_summary from services where id = %s",
             (service["id"],),
         ).fetchone()
-        # Weighted, judge-written reviews first: a client that reads only the
-        # first few sees evidence the ranking actually rests on, and never
-        # treats an unweighted community report as though it did.
-        recent_reviews = conn.execute(
-            f"""
-            select {PUBLIC_REVIEW_COLUMNS}
-            from reviews
-            where service_id = %s and {PUBLIC_REVIEWS}
-            order by {WEIGHTED_REVIEWS} desc, created_at desc
-            limit 5
-            """,
-            (service["id"],),
-        ).fetchall()
-
-    # Egress backstop: rows written before enforcement may contain raw text;
-    # redact on the way out, dropping free text if the redactor is down.
-    review_texts: list[str | None] = []
-    for review in recent_reviews:
-        review_texts.append(review.get("reason"))
-        review_texts.append(review.get("task_context"))
-    redacted = redact_texts(review_texts, fail_closed=False)
-    for index, review in enumerate(recent_reviews):
-        if redacted is None:
-            review["reason"] = None
-            review["task_context"] = None
-        else:
-            review["reason"] = redacted[index * 2]
-            review["task_context"] = redacted[index * 2 + 1]
 
     canonical_score = as_float(stored["score"]) if stored else None
     n_eff = as_float(stored["n_eff"]) if stored else 0.0
@@ -468,18 +446,25 @@ def get_service_score(
         # Deprecated alias of the canonical score, kept so pre-0.3.0 clients
         # silently upgrade instead of reading a dead formula.
         "weighted_rating": canonical_score,
-        "summary": _redacted_summary(stored["review_summary"] if stored else None),
-        "recent_reviews": [_json_ready(row) for row in recent_reviews],
+        # Pros, cons and things to watch out for, generated from the reviews.
+        # The reviews themselves are private and never returned.
+        "summary": _public_summary(stored["review_summary"] if stored else None),
     }
 
 
-def _redacted_summary(summary: Any) -> dict[str, Any] | None:
-    """Egress backstop for the cron-generated review summary: its inputs were
-    redacted, but re-redact on the way out anyway; drop the summary entirely
-    if the redactor is configured but down (never leak on failure)."""
-    if not isinstance(summary, dict):
+SUMMARY_KEYS = ("pros", "cons", "watch_out")
+
+
+def _public_summary(summary: Any) -> dict[str, Any] | None:
+    """The published form of a cron-generated review summary.
+
+    Only current-format summaries are served (an older one was written under
+    a prompt that could repeat task details; the cron regenerates it). Its
+    inputs were redacted, but re-redact on the way out anyway; drop the
+    summary entirely if the redactor is configured but down."""
+    if not isinstance(summary, dict) or str(summary.get("version")) != str(SUMMARY_VERSION):
         return None
-    keys = ("strengths", "failure_modes", "caveats")
+    keys = SUMMARY_KEYS
     texts: list[str | None] = []
     for key in keys:
         items = summary.get(key)
@@ -488,7 +473,7 @@ def _redacted_summary(summary: Any) -> dict[str, Any] | None:
     redacted = redact_texts(texts, fail_closed=False)
     if redacted is None:
         return None
-    clean = dict(summary)
+    clean = {key: summary.get(key) for key in ("n_reviews", "through_date", "generated_at")}
     cursor = 0
     for key in keys:
         items = summary.get(key)
@@ -527,7 +512,6 @@ def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
         "verified_avg_rating": None,
         "weighted_rating": None,
         "summary": None,
-        "recent_reviews": [],
         "reason": reason,
     }
 
@@ -1140,8 +1124,8 @@ def _unexpected_json_error(scope: str) -> JSONResponse:
     return response
 
 
-def _cron_project_ideas_payload(ttl_seconds: int) -> dict[str, Any] | None:
-    """Read the requested-services summary written by the trusted cron job."""
+def _cached_proposals(ttl_seconds: int) -> dict[str, Any] | None:
+    """Read the service proposals written by the trusted cron job."""
     try:
         with connect() as conn:
             row = conn.execute(
@@ -1149,36 +1133,37 @@ def _cron_project_ideas_payload(ttl_seconds: int) -> dict[str, Any] | None:
                 select payload, generated_at,
                        generated_at > now() - make_interval(secs => %s) as fresh
                 from app_cache
-                where key = 'project_ideas'
+                where key = %s
                 """,
-                (ttl_seconds,),
+                (ttl_seconds, PROPOSALS_CACHE_KEY),
             ).fetchone()
     except Exception:
         return None
     if row is None or not isinstance(row["payload"], dict):
         return None
     payload = dict(row["payload"])
+    if payload.get("version") != PROPOSALS_VERSION:
+        return None
     payload["source"] = "cron"
     payload["cached"] = True
     payload["stale"] = not bool(row["fresh"])
     return payload
 
 
-def _project_ideas_payload() -> dict[str, Any]:
-    """Serve cron output only; public requests never execute an LLM."""
+def _service_proposals_payload() -> dict[str, Any]:
+    """Serve cron output only; public requests never execute an LLM, and raw
+    request text is never part of it."""
     settings = get_settings()
-    payload = _cron_project_ideas_payload(settings.project_ideas_cache_seconds)
+    payload = _cached_proposals(settings.project_ideas_cache_seconds)
     if payload is not None:
         return payload
-    return {
-        "ok": True,
-        "source": "cron",
-        "cached": True,
-        "stale": True,
-        "generated_at": None,
-        "source_request_count": 0,
-        "ideas": [],
-    }
+    return {**empty_proposals(utc_now()), "generated_at": None, "source": "cron",
+            "cached": True, "stale": True}
+
+
+def _project_ideas_payload() -> dict[str, Any]:
+    """The pre-v2 shape, derived from the proposals for older clients."""
+    return as_project_ideas(_service_proposals_payload())
 
 
 def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
@@ -1186,7 +1171,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
     # refreshed by the review write path and the nightly consistency sweep.
     # The LEFT JOIN keeps zero-review services visible at the prior
     # (score 3.0, n_eff 0 => displayed as "unproven", never as a rating).
-    sql = """
+    sql = f"""
         select
           s.id as service_id,
           s.name,
@@ -1197,7 +1182,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.n_eff,
           s.n_eff_legacy,
           s.n_eff_hosted,
-          (s.review_summary is not null) as has_summary,
+          (s.review_summary->>'version' = '{SUMMARY_VERSION}') as has_summary,
           avg(r.rating) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::float as avg_rating,
           count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::int as num_reviews,
           count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verified)::int as num_verified_reviews,
@@ -1308,33 +1293,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """,
             (service_id,),
         ).fetchall()
-        # Up to 10 here (the website shows them grouped), weighted first.
-        recent_reviews = conn.execute(
-            f"""
-            select {PUBLIC_REVIEW_COLUMNS}
-            from reviews
-            where service_id = %s and {PUBLIC_REVIEWS}
-            order by {WEIGHTED_REVIEWS} desc, created_at desc
-            limit 10
-            """,
-            (service_id,),
-        ).fetchall()
         networks = fetch_service_networks(conn, service_id).get(service_id, EMPTY_NETWORKS)
-
-    # Same egress backstop as get_service_score: re-redact free text on the
-    # way out, dropping it if the redactor is down.
-    review_texts: list[str | None] = []
-    for review in recent_reviews:
-        review_texts.append(review.get("reason"))
-        review_texts.append(review.get("task_context"))
-    redacted = redact_texts(review_texts, fail_closed=False)
-    for index, review in enumerate(recent_reviews):
-        if redacted is None:
-            review["reason"] = None
-            review["task_context"] = None
-        else:
-            review["reason"] = redacted[index * 2]
-            review["task_context"] = redacted[index * 2 + 1]
 
     histogram = {str(rating): 0 for rating in range(1, 6)}
     for row in histogram_rows:
@@ -1370,21 +1329,17 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "n_eff_hosted": as_float(service["n_eff_hosted"]) or 0.0,
         "histogram": histogram,
         "weighted_histogram": weighted_histogram,
-        "summary": _redacted_summary(service.get("review_summary")),
-        "recent_reviews": [_json_ready(row) for row in recent_reviews],
+        # The reviews behind these numbers stay private; the summary is the
+        # only published form of their content.
+        "summary": _public_summary(service.get("review_summary")),
     }, 200
 
 
-KNOWLEDGE_EXPORT_DEFAULT_REVIEWS = 50
-KNOWLEDGE_EXPORT_MAX_REVIEWS = 500
-
-
-def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
-    """Full review evidence for every service, in one call. This is the input
-    to the OpenCrowd knowledge-tree generator (system prompt / skills folder
-    derived from CrowdCode reviews): per-service score, n_eff, the nightly
-    digest, and the raw redacted reviews with task context, rating, and the
-    verified paid amount (a real price observation)."""
+def _knowledge_evidence_payload() -> dict[str, Any]:
+    """Every service's evidence in one call: the input to the OpenCrowd
+    knowledge-tree generator. Per-service score, n_eff, review counts, the
+    rating histogram, the median verified paid amount (a real price
+    observation) and the generated summary. Review text is never exported."""
     with connect() as conn:
         services = conn.execute(
             """
@@ -1395,49 +1350,31 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
             order by score desc, n_eff desc, name asc
             """
         ).fetchall()
-        reviews = conn.execute(
+        counts = conn.execute(
             f"""
-            select service_id, rating, reason, task_context, payment_verified,
-                   payment_verification_level as verification_level,
-                   verified_source, weight_basis,
-                   ({WEIGHTED_REVIEWS} or {LEGACY_REVIEWS}) as counts_towards_ranking,
-                   amount, created_at
+            select service_id,
+                   count(*)::int as num_reviews,
+                   count(*) filter (where payment_verified)::int as num_verified_reviews,
+                   count(*) filter (where {WEIGHTED_REVIEWS})::int as num_weighted_reviews,
+                   count(*) filter (where {LEGACY_REVIEWS})::int as num_legacy_reviews,
+                   count(*) filter (where rating = 1)::int as r1,
+                   count(*) filter (where rating = 2)::int as r2,
+                   count(*) filter (where rating = 3)::int as r3,
+                   count(*) filter (where rating = 4)::int as r4,
+                   count(*) filter (where rating = 5)::int as r5,
+                   percentile_cont(0.5) within group (order by amount)
+                     filter (where payment_verified and amount > 0) as median_paid_amount
             from reviews
             where {PUBLIC_REVIEWS}
-            order by service_id, {WEIGHTED_REVIEWS} desc, created_at desc
+            group by service_id
             """
         ).fetchall()
-
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for review in reviews:
-        bucket = grouped.setdefault(review["service_id"], [])
-        if len(bucket) < max_reviews:
-            bucket.append(dict(review))
-
-    # Same egress backstop as the detail endpoint: re-redact free text on the
-    # way out; drop it if the redactor is configured but down.
-    kept = [review for bucket in grouped.values() for review in bucket]
-    texts: list[str | None] = []
-    for review in kept:
-        texts.append(review.get("reason"))
-        texts.append(review.get("task_context"))
-    redacted = redact_texts(
-        texts, fail_closed=False, timeout=REDACTION_BATCH_TIMEOUT, allow_partial=True
-    )
-    for index, review in enumerate(kept):
-        if redacted is None:
-            review["reason"] = None
-            review["task_context"] = None
-        else:
-            review["reason"] = redacted[index * 2]
-            review["task_context"] = redacted[index * 2 + 1]
-        review["amount"] = as_float(review.get("amount"))
-        review.pop("service_id", None)
+    by_service = {row["service_id"]: row for row in counts}
 
     out = []
     for service in services:
         n_eff = as_float(service["n_eff"]) or 0.0
-        service_reviews = grouped.get(service["id"], [])
+        row = by_service.get(service["id"]) or {}
         out.append(
             {
                 "service_id": service["id"],
@@ -1448,24 +1385,18 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
                 "score": as_float(service["score"]),
                 "n_eff": n_eff,
                 "unproven": is_unproven(n_eff),
-                "num_reviews": len(service_reviews),
-                "num_verified_reviews": sum(
-                    1 for r in service_reviews if r.get("payment_verified")
-                ),
-                "num_weighted_reviews": sum(
-                    1 for r in service_reviews if r.get("weight_basis") == "hosted"
-                ),
-                "num_legacy_reviews": sum(
-                    1 for r in service_reviews if r.get("weight_basis") == "legacy"
-                ),
-                "summary": _redacted_summary(service.get("review_summary")),
-                "reviews": [_json_ready(r) for r in service_reviews],
+                "num_reviews": row.get("num_reviews", 0),
+                "num_verified_reviews": row.get("num_verified_reviews", 0),
+                "num_weighted_reviews": row.get("num_weighted_reviews", 0),
+                "num_legacy_reviews": row.get("num_legacy_reviews", 0),
+                "histogram": {str(n): row.get(f"r{n}", 0) for n in range(1, 6)},
+                "median_paid_amount": as_float(row.get("median_paid_amount")),
+                "summary": _public_summary(service.get("review_summary")),
             }
         )
     return {
         "ok": True,
         "score_algorithm": SCORE_ALGORITHM,
-        "max_reviews_per_service": max_reviews,
         "services": out,
         "stats": {
             "num_services": len(out),
@@ -1475,9 +1406,9 @@ def _knowledge_evidence_payload(max_reviews: int) -> dict[str, Any]:
 
 
 async def knowledge_evidence(request: Request) -> JSONResponse:
-    """Token-gated full evidence export (see _knowledge_evidence_payload).
-    Reviews are public data, but the bulk export is gated so only the
-    OpenCrowd generator (hosted or a configured local run) pulls it."""
+    """Token-gated evidence export (see _knowledge_evidence_payload), gated so
+    only the OpenCrowd generator (hosted or a configured local run) pulls it.
+    It carries summaries and counts, never review text."""
     token = get_settings().knowledge_export_token
     if not token:
         return JSONResponse(
@@ -1488,14 +1419,7 @@ async def knowledge_evidence(request: Request) -> JSONResponse:
     if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     try:
-        max_reviews = int(
-            request.query_params.get("max_reviews", KNOWLEDGE_EXPORT_DEFAULT_REVIEWS)
-        )
-    except ValueError:
-        max_reviews = KNOWLEDGE_EXPORT_DEFAULT_REVIEWS
-    max_reviews = max(1, min(KNOWLEDGE_EXPORT_MAX_REVIEWS, max_reviews))
-    try:
-        payload = await run_in_threadpool(_knowledge_evidence_payload, max_reviews)
+        payload = await run_in_threadpool(_knowledge_evidence_payload)
     except Exception:
         return _unexpected_json_error("knowledge_evidence")
     return JSONResponse(payload, headers={"Cache-Control": "private, max-age=300"})
@@ -1556,6 +1480,14 @@ async def project_ideas(_: Request) -> JSONResponse:
     except Exception:
         return _unexpected_json_error("project_ideas")
     return JSONResponse(payload)
+
+
+async def service_proposals(_: Request) -> JSONResponse:
+    try:
+        payload = await run_in_threadpool(_service_proposals_payload)
+    except Exception:
+        return _unexpected_json_error("service_proposals")
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=300"})
 
 
 async def top_services(_: Request) -> JSONResponse:
@@ -1626,6 +1558,7 @@ def create_app() -> Starlette:
             Route("/ready", ready, methods=["GET"]),
             Route("/api/receipt-keys", receipt_keys, methods=["GET"]),
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
+            Route("/api/service-proposals", service_proposals, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),

@@ -62,7 +62,7 @@ services:
         sync: false
 
   # Nightly batch (docs/SCORING.md §8.2): consistency sweep, per-service
-  # review summaries, requested-services summary.
+  # review summaries, service proposals.
   - type: cron
     name: crowdcode-cron
     runtime: python
@@ -77,6 +77,10 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-5-mini
+      # Service proposals ask a product question over every request at once;
+      # they get a more capable model than the per-service summaries.
+      - key: CROWDCODE_PROPOSAL_MODEL
+        value: gpt-5.5
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
       - key: CROWDCODE_SEED_OWNERS

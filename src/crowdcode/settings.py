@@ -36,6 +36,9 @@ class Settings:
     request_rate_limit_per_day: int = 5
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
+    # The service-proposal job asks a product question (would anyone pay for
+    # this?) over every request at once, so it gets a more capable model.
+    proposal_model: str = "gpt-5.5"
     openai_base_url: str = "https://api.openai.com/v1"
     # Owner references pinned at trust 1.0 (docs/SCORING.md §3.5): the root of
     # trust. Synced into review_owners at startup and at each cron run.
@@ -109,6 +112,7 @@ def get_settings() -> Settings:
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or None,
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip()
         or "gpt-5-mini",
+        proposal_model=os.environ.get("CROWDCODE_PROPOSAL_MODEL", "").strip() or "gpt-5.5",
         openai_base_url=os.environ.get(
             "OPENAI_BASE_URL",
             "https://api.openai.com/v1",

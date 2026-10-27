@@ -534,15 +534,24 @@ canonical scoring function in `src/crowdcode/scoring.py`.
    reputation influence. This job is also where a future EigenTrust
    fixed-point iteration can live.
 2. **Per-resource review summaries** (LLM) — only for resources with reviews
-   newer than `last_summarized_at`; summarizer input is trust-weighted (wallets
-   below θ do not contribute when trusted reviews exist). Cold-start summaries
-   include authenticated unpaid reviews as well as verified payments, with the
-   payment status retained. Output is a constrained
-   factual format (strengths / failure modes / caveats) treating review text
-   as untrusted data; passes egress redaction; served inside
-   `get_service_score` and on the site next to the raw rating histogram,
-   labeled "AI-generated from N reviews through <date>".
-3. **Requested-services summary** (LLM) — same watermark pattern.
+   newer than `last_summarized_at`, or whose summary predates the current
+   summary version; summarizer input is trust-weighted (wallets below θ do not
+   contribute when trusted reviews exist). Cold-start summaries include
+   authenticated unpaid reviews as well as verified payments, with the payment
+   status retained. Output is pros / cons / things to watch out for, written
+   in general terms and treating review text as untrusted data; an item that
+   shares eight consecutive words with any input review is discarded, and the
+   rest passes egress redaction. Reviews are private: the summary is the only
+   published form of their content, served inside `get_service_score`, the
+   service detail API and on the site next to the rating histogram, labeled
+   with the number of reviews and the date it covers.
+3. **Service proposals** (LLM, `crowdcode.proposals`) — requests filed before
+   request_service v2 are mapped once into its four fields and marked
+   `inferred`; then every request in the last 180 days is grouped into
+   generalized proposals, each reviewed as a product for realism and clarity.
+   Only proposals that pass are published at `/api/service-proposals`, with
+   demand and the willingness-to-pay distribution computed from the rows.
+   Raw request text is never published.
 
 ### 8.3 Schema changes
 

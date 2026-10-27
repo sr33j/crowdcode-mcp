@@ -56,6 +56,20 @@ Reads environment variables:
 
 The module raises a clear error if `DATABASE_URL` is missing at runtime.
 
+## `src/crowdcode/demand.py`
+
+The request_service v2 contract (`validate_request_fields`: input, output,
+problem, price_per_call), the copy guard every generated public text passes
+(`SourceIndex`: no eight-word run shared with a private request or review),
+and the willingness-to-pay distribution.
+
+## `src/crowdcode/proposals.py`
+
+Nightly: maps pre-v2 free-text requests into the v2 fields, groups every
+request into generalized service proposals with a product review, and stores
+the published payload in `app_cache` (`service_proposals`). Raw request and
+review text is never published; only summaries and proposals are.
+
 ## `supabase/schema.sql`
 
 Creates the minimal schema:

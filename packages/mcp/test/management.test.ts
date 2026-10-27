@@ -47,7 +47,7 @@ describe("CrowdCode controls", () => {
     const { dir, handlers, calls } = await fixture();
     await handlers.set_crowdcode_enabled({ enabled: false });
     const results = await Promise.all([
-      handlers.request_service({ service_description: "A service" }),
+      handlers.request_service({ input: "A service input" }),
       handlers.get_service_score({ service_id: "svc_1" }),
       handlers.review_service({ rating: 5, reason: "Good" }),
       handlers.get_review_signing_payload({ rating: 5, reason: "Good", auto_sign: true }),
@@ -69,7 +69,7 @@ describe("CrowdCode controls", () => {
 
   it("creates an unfunded identity for requests", async () => {
     const { dir, handlers, calls } = await fixture();
-    await handlers.request_service({ service_description: "Scanned reports to reconciled CSV" });
+    await handlers.request_service({ input: "Scanned reports up to 200 pages", output: "Reconciled CSV tables" });
     const stored = JSON.parse(await readFile(join(dir, "wallet.json"), "utf8"));
     expect(calls[0]!.args.requester_wallet).toBe(stored.address);
     expect(calls).toHaveLength(1);
@@ -77,7 +77,7 @@ describe("CrowdCode controls", () => {
 
   it("honors the wallet creation opt-out for requests", async () => {
     const { dir, handlers, calls } = await fixture(false);
-    await handlers.request_service({ service_description: "Scanned reports to reconciled CSV" });
+    await handlers.request_service({ input: "Scanned reports up to 200 pages", output: "Reconciled CSV tables" });
     await expect(stat(join(dir, "wallet.json"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(calls[0]!.args.requester_wallet).toBeUndefined();
   });

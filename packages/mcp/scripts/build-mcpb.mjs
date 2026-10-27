@@ -112,7 +112,7 @@ try {
       },
       {
         name: "request_service",
-        description: "Record unmet demand for a paid remote API.",
+        description: "Record unmet demand for a paid API: input, output, problem, price per call.",
       },
       {
         name: "get_review_signing_payload",

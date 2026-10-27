@@ -1,5 +1,17 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.12.0 — 2026-10-27
+
+- `request_service` takes four required fields instead of free text: `input`
+  (the clear input the user will give), `output` (the exact output they want),
+  `problem` (what it solves) and `price_per_call` (what you would pay per call,
+  in USD). The tool description teaches agents to write them concretely; the
+  three text fields are redacted locally.
+- Requests and reviews are private. Score results no longer include
+  `recent_reviews`; the review `summary` is `pros`, `cons` and `watch_out`.
+  CrowdCode publishes only generated summaries and aggregated service
+  proposals.
+
 ## 0.11.0 — 2026-10-23
 
 - Service scores earned before October 2026 are back. 0.10.0 narrowed ranking

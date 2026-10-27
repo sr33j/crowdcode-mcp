@@ -37,25 +37,46 @@ const RATING_DESCRIPTION =
   "problem (e.g. timeout). A service that simply worked well AND helped is " +
   "a 5 — do not hedge to 4 without a concrete caveat.";
 
+/**
+ * request_service v2: four concrete fields a builder can act on. Bounds mirror
+ * crowdcode.demand.validate_request_fields; the backend stays authoritative.
+ */
 export const requestServiceShape = {
-  service_description: z
+  input: z
     .string()
+    .trim()
+    .min(20)
+    .max(600)
     .describe(
-      "Concrete reusable paid offering: exact input, output or state change, " +
-        "acceptance criteria, and why the outcome justifies payment. Ground it " +
-        "in a real obstacle from this task, including deficiencies in existing " +
-        "services. Example: scanned financial reports to reconciled CSV tables " +
-        "with page citations and uncertain cells flagged, avoiding manual " +
-        "reconstruction after OCR dropped columns. No generic local compute " +
-        "or web search that worked well. Do not invent prices or spend authority.",
+      "The clear input the user will give the service, concretely: format, size, fields. " +
+        "Example: \"a public MP4 URL (up to 60 s) and the post text\". " +
+        "General terms only: no names, URLs, IDs or private data.",
     ),
-  task_context: z
+  output: z
     .string()
-    .nullish()
+    .trim()
+    .min(20)
+    .max(600)
     .describe(
-      "Include the real use case, what was attempted, the observed failure, " +
-        "poor quality, cost or detour, and why available alternatives fell short. " +
-        "Omit private details. A purchase need not have been attempted.",
+      "The exact output they want back, specific enough to check. " +
+        "Example: \"the published post ID and URL, posted exactly once\".",
+    ),
+  problem: z
+    .string()
+    .trim()
+    .min(20)
+    .max(800)
+    .describe(
+      "The problem it solves: what failed, cost too much or was impossible without it. " +
+        "Example: \"agents publishing video to X fail on chunked uploads and cannot tell whether it posted\".",
+    ),
+  price_per_call: z
+    .number()
+    .positive()
+    .max(100)
+    .describe(
+      "What you would pay per call, in USD (e.g. 0.05). An honest estimate of the outcome's " +
+        "worth, not a budget the user approved.",
     ),
   requester_wallet: z
     .string()
