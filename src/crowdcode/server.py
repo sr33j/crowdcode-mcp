@@ -433,7 +433,7 @@ def get_service_score(
         "num_onchain_verified_reviews": score["num_onchain_verified_reviews"],
         "num_signature_only_reviews": score["num_signature_only_reviews"],
         # Weighted evidence is what the score is computed from; community
-        # reviews are readable context with no ranking weight.
+        # reviews are counted context with no ranking weight.
         "num_weighted_reviews": score["num_weighted_reviews"],
         "num_legacy_reviews": score["num_legacy_reviews"],
         "num_community_reviews": score["num_community_reviews"],
@@ -707,8 +707,10 @@ def review_service(
     Only reviews carrying a hosted OpenCrowd gateway attestation
     (gateway_attestation, signed by the gateway that made the paid call and
     containing the platform judge's score) count towards a service's ranking.
-    Every other review is accepted and published as community evidence with no
+    Every other review is accepted and counted as community evidence with no
     ranking weight; there is nothing to opt into and nothing to supply.
+    Review text is private: CrowdCode publishes only counts, scores and a
+    generated summary (pros, cons, things to watch out for), never the text.
 
     When claiming payment, use the actual settlement reference and payee.
     x402 Base/Monad USDC and mppx Tempo claims require a verified on-chain transfer

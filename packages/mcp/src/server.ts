@@ -518,7 +518,8 @@ export function buildServer(deps: ServerDeps): McpServer {
         "as x402:monad:<tx_hash> and a Solana one as x402:solana:<signature> (Solana payee as " +
         "payment_target_ref; the agentcash Solana wallet signs payer_signature automatically). " +
         "Invalid payment evidence is rejected, never downgraded. " +
-        "Daily scoring influence is capped. Review text is redacted locally.",
+        "Daily scoring influence is capped. Review text is redacted locally and stays " +
+        "private: CrowdCode publishes only counts, scores and a generated summary.",
       inputSchema: reviewServiceShape,
     },
     (args) => handlers.review_service(args),
