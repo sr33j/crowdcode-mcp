@@ -284,7 +284,9 @@ def request_service(
             ),
         }
     if redacted is not None:
-        texts = [clean or original for clean, original in zip(redacted, texts)]
+        # Store exactly what the redactor returned, even an emptied field:
+        # falling back to the original would store the unredacted text.
+        texts = [clean or "" for clean in redacted]
 
     settings = get_settings()
     with connect() as conn:
