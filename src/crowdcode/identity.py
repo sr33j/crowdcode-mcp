@@ -127,6 +127,38 @@ def generate_service_id(
     return "svc_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
 
 
+def normalize_payment_target(
+    payment_provider: str | None,
+    value: str | None,
+) -> str | None:
+    """Reject anything that is not a payee address for a machine-payment rail.
+
+    For x402 and mppx this column *is* an address: it is what an on-chain
+    check is run against and what `_machine_payment_alias_authorized` treats
+    as the service's one payee per address family. Nothing enforced that, and
+    svc_e91d4c0dfb719d9fefe8 ("Parallel MPP Search") was registered with the
+    literal string `parallel` — its directory slug — in that column. The
+    consequence is permanent: `_payee_family("parallel")` is None, so the
+    service has no canonical payee of any family, while a registered alias
+    holds the EVM slot, so every real EVM payee resolves to
+    `service identity conflict`. Two reviews of a real paid call were lost to
+    it on 2026-10-27, and the agent that made them was blocked from its next
+    purchase.
+
+    Stripe prices, payment links and manual arrangements are not addresses and
+    are left alone.
+    """
+    cleaned = clean_optional(value)
+    if cleaned is None or payment_provider not in MACHINE_PAYMENT_PROVIDERS:
+        return cleaned
+    if _payee_family(cleaned) is None:
+        raise ValueError(
+            "payment_target_ref must be the payee address for "
+            f"{payment_provider}: an 0x EVM address or a base58 Solana address"
+        )
+    return cleaned
+
+
 def build_identity(
     *,
     service_id: str | None = None,
@@ -135,15 +167,28 @@ def build_identity(
     payment_provider: str | None = None,
     payment_target_ref: str | None = None,
     directory_slug: str | None = None,
+    strict: bool = False,
 ) -> ServiceIdentity:
+    """Normalize an identity.
+
+    `strict` validates the payment target as well, and belongs on the way in —
+    where a caller supplies one. It is off by default because this is also how
+    a *stored* row is turned back into an identity, and a row written before
+    that validation existed must still resolve rather than raise.
+    """
     provider = normalize_payment_provider(payment_provider)
     endpoint = normalize_api_endpoint(api_endpoint)
+    target = (
+        normalize_payment_target(provider, payment_target_ref)
+        if strict
+        else clean_optional(payment_target_ref)
+    )
     return ServiceIdentity(
         service_id=clean_optional(service_id),
         service_name=clean_optional(service_name),
         api_endpoint=endpoint,
         payment_provider=provider,
-        payment_target_ref=clean_optional(payment_target_ref),
+        payment_target_ref=target,
         directory_slug=clean_optional(directory_slug),
     )
 
