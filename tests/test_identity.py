@@ -341,3 +341,51 @@ def test_service_id_does_not_authorize_unregistered_endpoint(monkeypatch):
         payment_provider='x402', payment_target_ref=SERVICE['payment_target_ref'],
     ))
     assert resolved.error == 'service identity conflict'
+
+
+def test_a_machine_payment_payee_must_be_an_address():
+    """A slug in the payee column wedges the service for good.
+
+    svc_e91d4c0dfb719d9fefe8 ("Parallel MPP Search") is registered with the
+    literal string `parallel` — its own directory slug — as its mppx
+    payment_target_ref. `_payee_family` does not recognise it, so the service
+    has no canonical payee of any address family while a registered alias
+    holds the EVM slot; every real EVM payee then resolves to
+    `service identity conflict`. Two reviews of a genuine paid call were lost
+    to that on 2026-10-27, and the agent that made them was refused its next
+    purchase while one of them sat pending.
+    """
+    import pytest
+
+    from crowdcode.identity import normalize_payment_target
+
+    payee = "0x" + "ab" * 20
+    for provider in ("mppx", "x402"):
+        assert normalize_payment_target(provider, payee) == payee
+        assert normalize_payment_target(provider, None) is None
+        with pytest.raises(ValueError, match="payee address"):
+            normalize_payment_target(provider, "parallel")
+        with pytest.raises(ValueError, match="payee address"):
+            normalize_payment_target(provider, "0xtooshort")
+    # Not every rail settles to an address: a Stripe price or payment link is
+    # a perfectly good payment target.
+    assert normalize_payment_target("stripe", "price_123") == "price_123"
+    assert normalize_payment_target("manual", "invoice by email") == "invoice by email"
+    assert normalize_payment_target(None, "anything") == "anything"
+
+    # Validated where a caller supplies one...
+    with pytest.raises(ValueError, match="payee address"):
+        build_identity(
+            api_endpoint="https://parallelmpp.dev/api/search",
+            payment_provider="mppx",
+            payment_target_ref="parallel",
+            strict=True,
+        )
+    # ...and tolerated where a row written before this rule is read back, so
+    # the services already carrying one still resolve instead of erroring.
+    stored = build_identity(
+        api_endpoint="https://parallelmpp.dev/api/search",
+        payment_provider="mppx",
+        payment_target_ref="parallel",
+    )
+    assert stored.payment_target_ref == "parallel"

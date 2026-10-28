@@ -380,6 +380,9 @@ def get_service_score(
             payment_provider=payment_provider,
             payment_target_ref=payment_target_ref,
             directory_slug=directory_slug,
+            # Validated on the way in: a payee that is not an address must never
+            # be stored as one. See normalize_payment_target.
+            strict=True,
         )
     except ValueError as exc:
         return _score_not_found(service_id, str(exc))
@@ -562,6 +565,9 @@ def get_review_signing_payload(
             payment_provider=payment_provider,
             payment_target_ref=payment_target_ref,
             directory_slug=directory_slug,
+            # Validated on the way in: a payee that is not an address must never
+            # be stored as one. See normalize_payment_target.
+            strict=True,
         )
     except ValueError as exc:
         return {"ok": False, "reason": str(exc)}
@@ -745,6 +751,9 @@ def review_service(
             payment_provider=payment_provider,
             payment_target_ref=payment_target_ref,
             directory_slug=directory_slug,
+            # Validated on the way in: a payee that is not an address must never
+            # be stored as one. See normalize_payment_target.
+            strict=True,
         )
     except ValueError as exc:
         return {"accepted": False, "reason": str(exc)}
