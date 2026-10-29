@@ -275,9 +275,22 @@ def payee_rotates(service: dict[str, Any]) -> bool:
     identifier, and on the gateway receipt: a judged hosted review is pinned
     to the payee and endpoint the *ledger* recorded, not to what the agent
     claimed (docs/SCORING.md §3.6), and the on-chain check still proves the
-    transfer reached the payee the review names. Only an operator sets this
-    column, from scripts/fix_machine_payees.py, which requires two probes of
-    the service's own 402 to advertise different payees.
+    transfer reached the payee the review names.
+
+    Be clear about what that costs. For these services alone, CrowdCode can
+    no longer tell a payee the provider has just issued from one the caller
+    made up: both are addresses it has never seen, which is what "rotates"
+    means. A community review could therefore name a payee it really paid
+    that was never this provider's. Two things bound it. The endpoint still
+    decides which service a review lands on, so a payee can never redirect
+    one onto a different listing. And a community review carries weight
+    exactly zero; everything that moves a ranking is a hosted receipt, where
+    the gateway, not the agent, states the payee. The alternative on offer
+    was a service nobody could review at all.
+
+    Only an operator sets this column, from scripts/fix_machine_payees.py,
+    which requires two probes of the service's own 402 to advertise different
+    payees.
     """
     return bool(service.get("payee_rotates"))
 
