@@ -332,3 +332,26 @@ alter table service_requests
   add column if not exists inference_confidence text
     check (inference_confidence is null or inference_confidence in ('high', 'low')),
   add column if not exists inferred_at timestamptz;
+
+-- Services that issue a fresh, single-use payee with every 402
+-- (supabase/rotating-payees.sql). Their payee cannot anchor identity, so
+-- resolution authorizes any payee of a machine-payment address family for
+-- them and leans on the endpoint and the gateway receipt instead.
+-- Operator-set only; no code path writes it.
+alter table services
+  add column if not exists payee_rotates boolean not null default false;
+
+-- A review of a failure CrowdCode caused is not evidence about the provider
+-- (supabase/platform-defect-reviews.sql). 'platform_defect' keeps the row and
+-- its rating verbatim while removing it from every published count,
+-- histogram, average and generated summary; exclusion_note records which
+-- defect and why. Only an operator writes it.
+alter table reviews
+  drop constraint if exists reviews_weight_exclusion_check;
+alter table reviews
+  add constraint reviews_weight_exclusion_check
+  check (weight_exclusion is null or weight_exclusion in
+    ('community', 'self_dealing', 'dust_payment', 'unsigned_placeholder',
+     'platform_defect'));
+alter table reviews
+  add column if not exists exclusion_note text;

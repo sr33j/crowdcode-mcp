@@ -1,0 +1,26 @@
+-- Services that issue a fresh payee for every request.
+--
+-- A provider may hand out a single-use payment destination with each 402.
+-- Parallel MPP Search (svc_e91d4c0dfb719d9fefe8) answers every call with a new
+-- 0x address, on Base and on Tempo. CrowdCode anchors a machine-payment
+-- service's identity on its payee, so such a service could not be reviewed at
+-- all: the first payee seen holds the EVM slot and every later purchase — to a
+-- destination the provider itself had just issued — resolved to
+-- `service identity conflict`. Two reviews of a genuine paid call were lost to
+-- it on 2026-10-27, and the agent that wrote them was refused its next
+-- purchase while one of them sat pending.
+--
+-- For these services identity rests on the endpoint, which is a globally
+-- unique product identifier, and on the gateway receipt: a judged hosted
+-- review is pinned to the payee and endpoint the ledger recorded, not to what
+-- the agent claimed (docs/SCORING.md §3.6), and the on-chain check still
+-- proves the transfer reached the payee the review names.
+--
+-- Operator-set only. No code path writes this column; it is set by
+-- scripts/fix_machine_payees.py, which requires two probes of the service's
+-- own 402 to advertise different payees before it will.
+--
+-- Apply this, deploy the backend, then run
+-- `scripts/fix_machine_payees.py --apply`. Safe to rerun.
+alter table services
+  add column if not exists payee_rotates boolean not null default false;

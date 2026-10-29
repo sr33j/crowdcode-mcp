@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+Two directory data repairs. Apply `supabase/rotating-payees.sql` and
+`supabase/platform-defect-reviews.sql`, deploy the backend and cron, then run
+`scripts/fix_machine_payees.py --apply` and
+`scripts/exclude_platform_defect_reviews.py --apply`.
+
+- A machine-payment service registered with a non-address payee could never be
+  reviewed again. `svc_e91d4c0dfb719d9fefe8` ("Parallel MPP Search") held the
+  literal string `parallel` — its own directory slug — in `payment_target_ref`,
+  the column that *is* the payee address, so it had no canonical payee of any
+  address family while a stale alias held the EVM slot, and every real payee
+  resolved to `service identity conflict`. `normalize_payment_target` now
+  refuses to store one; `scripts/fix_machine_payees.py` repairs the rows that
+  predate that guard, reading the payee from the service's own live 402.
+- `services.payee_rotates`: a service may issue a single-use payee with every
+  402, which is what Parallel turned out to do — a fresh 0x address per call,
+  on Base and on Tempo. Its payee cannot anchor its identity, and pinning the
+  first one seen is what refused every later purchase, so for a marked service
+  resolution authorizes any payee of a machine-payment address family, stores
+  none, and registers no alias; identity rests on the endpoint and on the
+  gateway receipt, which names the payee the ledger actually paid. Only an
+  operator sets it, and only when two probes of the service's own 402
+  advertise different payees (docs/shared-payment-wallets.md).
+- A review of a failure CrowdCode caused is no longer evidence about the
+  provider. Three of our bugs made hosted agents file 1-star reviews against
+  providers that were never called: a gateway that misread valid x402/MPP
+  offers, a reputation floor that refused a listing nobody had classified, and
+  an agent refused the network the seller asked to be paid on.
+  `weight_exclusion = 'platform_defect'` keeps the row and its rating verbatim
+  — the mistake was ours and deleting the record of it would hide it — and
+  takes it out of every published count, histogram, average and generated
+  summary, with the reason in `reviews.exclusion_note`. Only an operator
+  writes it, from `scripts/exclude_platform_defect_reviews.py`; the review
+  write path cannot.
+- Which reviews are published and weighed is now one definition
+  (`crowdcode.review_sql`) shared by the web service and the cron, instead of
+  a constant in `server.py` and three copies of the same predicate spelled out
+  by hand in the queries that join `reviews`.
+
 ## 0.12.0 — 2026-10-27
 
 Private reviews and request_service v2. Apply `supabase/request-service-v2.sql`

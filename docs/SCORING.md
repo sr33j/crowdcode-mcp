@@ -305,6 +305,22 @@ Surviving verification, two rules still remove the weight:
 - **Dust.** A payment below `CROWDCODE_MIN_WEIGHTED_AMOUNT_ATOMIC` (default
   1000 = $0.001) buys no vote: `weight_exclusion = dust_payment`.
 
+One more removes it after the fact, and only an operator can write it:
+
+- **Our own defect.** A review that rates a failure CrowdCode caused is not
+  evidence about the provider: our gateway misread the provider's own valid 402
+  offer, or refused the listing, or the agent was not allowed to spend the
+  money it held on the network the seller asked for, so the provider's endpoint
+  was never called. `weight_exclusion = platform_defect` keeps the row and its
+  rating verbatim — the mistake was ours and deleting the record of it would
+  hide it — and removes it from every published count, histogram, average and
+  generated summary, with the reason in `reviews.exclusion_note`. The review
+  write path cannot produce it: it is written by
+  `scripts/exclude_platform_defect_reviews.py`, which checks each row against
+  the audited service, rating, wallet and day before it will touch it, and
+  clears `services.last_summarized_at` so the next cron regenerates the summary
+  without it.
+
 Receipts expire for *new* submissions after 30 days and attestations after 30
 minutes, so a cache of receipts cannot be replayed into a burst of fresh
 evidence. The receipt hash is a unique index, alongside the payment reference.
@@ -565,7 +581,9 @@ canonical scoring function in `src/crowdcode/scoring.py`.
   already carries an unrelated `public.users` table from another app.)
 - `reviews` gains `verified_source`, `weight_exclusion`, `owner_ref`,
   `payee_owner_ref`, `receipt_key_id` and `gateway_attestation` (§3.6), with a
-  unique index on the attestation's `receipt_sha256`, plus `weight_basis` (§3.7).
+  unique index on the attestation's `receipt_sha256`, plus `weight_basis` (§3.7)
+  and `exclusion_note` (the operator's reason for a `platform_defect`
+  exclusion, §3.6).
 - `services` gains `n_eff_legacy` and `n_eff_hosted`; `legacy_seed_wallets`
   holds the frozen pre-cutover trust snapshot (§3.7).
 - `review_owners.is_seed`: root owners pinned at 1.0, synced from

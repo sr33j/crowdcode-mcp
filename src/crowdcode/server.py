@@ -72,6 +72,12 @@ from crowdcode.proposals import CACHE_KEY as PROPOSALS_CACHE_KEY
 from crowdcode.proposals import PAYLOAD_VERSION as PROPOSALS_VERSION
 from crowdcode.proposals import as_project_ideas
 from crowdcode.proposals import empty_payload as empty_proposals
+from crowdcode.review_sql import (
+    legacy_reviews,
+    public_reviews,
+    review_counts,
+    weighted_reviews,
+)
 from crowdcode.summaries import SUMMARY_VERSION
 from crowdcode.settings import (
     get_mcp_allowed_hosts,
@@ -95,35 +101,12 @@ mcp = FastMCP(
     ),
 )
 
-# Reviews that may be counted and summarized publicly. Their text is never
-# published: raw reviews stay in our tables, and only counts, scores and the
-# generated summary (pros, cons, things to watch out for) leave the backend.
-# The legacy stripe/manual admission path accepted unsigned placeholder rows
-# (payments.verify_payment_reference): nothing attributable stands behind
-# them, so they are retained for continuity and never counted or summarized.
-# Static SQL, interpolated by name.
-PUBLIC_REVIEWS = "(signature_verified or verified_source = 'hosted_receipt')"
-# The ranking-weighted subset: a verified hosted gateway receipt whose owner
-# was neither self-dealing nor paying dust (docs/SCORING.md §3.6).
-WEIGHTED_REVIEWS = "(weight_basis = 'hosted' and weight_exclusion is null)"
-# The pre-cutover corpus, which keeps the weight it earned under v2 (§3.7).
-LEGACY_REVIEWS = "(weight_basis = 'legacy')"
-# The evidence counters every score payload carries.
-REVIEW_COUNTS = f"""
-              count(*) filter (where {PUBLIC_REVIEWS})::int as num_reviews,
-              count(*) filter (where {PUBLIC_REVIEWS} and payment_verified)::int as num_verified_reviews,
-              avg(rating) filter (where {PUBLIC_REVIEWS} and payment_verified) as verified_avg_rating,
-              count(*) filter (where {PUBLIC_REVIEWS} and payment_verification_level
-                in ('onchain_verified', 'response_attested'))::int
-                as num_onchain_verified_reviews,
-              count(*) filter (where {PUBLIC_REVIEWS} and payment_verification_level
-                in ('unverified', 'signature_only'))::int
-                as num_signature_only_reviews,
-              count(*) filter (where {WEIGHTED_REVIEWS})::int as num_weighted_reviews,
-              avg(rating) filter (where {WEIGHTED_REVIEWS}) as weighted_avg_rating,
-              count(*) filter (where {LEGACY_REVIEWS})::int as num_legacy_reviews,
-              count(*) filter (where {PUBLIC_REVIEWS} and not {WEIGHTED_REVIEWS}
-                and not {LEGACY_REVIEWS})::int as num_community_reviews"""
+# Which reviews are published and weighed: crowdcode.review_sql, shared with
+# the cron. Static SQL, interpolated by name.
+PUBLIC_REVIEWS = public_reviews()
+WEIGHTED_REVIEWS = weighted_reviews()
+LEGACY_REVIEWS = legacy_reviews()
+REVIEW_COUNTS = review_counts()
 
 
 def _json_ready(row: dict[str, Any]) -> dict[str, Any]:
@@ -398,9 +381,7 @@ def get_service_score(
 
         score = conn.execute(
             f"""
-            select
-              avg(rating) filter (where {PUBLIC_REVIEWS}) as avg_rating,
-              {REVIEW_COUNTS}
+            select {REVIEW_COUNTS}
             from reviews
             where service_id = %s
             """,
@@ -1196,19 +1177,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.n_eff_legacy,
           s.n_eff_hosted,
           (s.review_summary->>'version' = '{SUMMARY_VERSION}') as has_summary,
-          avg(r.rating) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::float as avg_rating,
-          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt'))::int as num_reviews,
-          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verified)::int as num_verified_reviews,
-          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verification_level
-            in ('onchain_verified', 'response_attested'))::int
-            as num_onchain_verified_reviews,
-          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and r.payment_verification_level
-            in ('unverified', 'signature_only'))::int
-            as num_signature_only_reviews,
-          count(r.id) filter (where (r.weight_basis = 'hosted' and r.weight_exclusion is null))::int as num_weighted_reviews,
-          avg(r.rating) filter (where (r.weight_basis = 'hosted' and r.weight_exclusion is null))::float as weighted_avg_rating,
-          count(r.id) filter (where (r.weight_basis = 'legacy'))::int as num_legacy_reviews,
-          count(r.id) filter (where (r.signature_verified or r.verified_source = 'hosted_receipt') and not (r.weight_basis = 'hosted' and r.weight_exclusion is null) and not (r.weight_basis = 'legacy'))::int as num_community_reviews
+          {review_counts('r')}
         from services s
         left join reviews r on r.service_id = s.id
         group by s.id

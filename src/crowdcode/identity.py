@@ -205,7 +205,8 @@ def _fetch_service(conn: psycopg.Connection, service_id: str) -> dict[str, Any] 
     return conn.execute(
         """
         select id, name, directory_slug, canonical_origin, canonical_endpoint,
-               payment_provider, payment_target_ref, created_from_review
+               payment_provider, payment_target_ref, payee_rotates,
+               created_from_review
         from services
         where id = %s
         """,
@@ -222,7 +223,7 @@ def _fetch_by_identifier(
         """
         select s.id, s.name, s.directory_slug, s.canonical_origin,
                s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
-               s.created_from_review
+               s.payee_rotates, s.created_from_review
         from service_identifiers si
         join services s on s.id = si.service_id
         where si.identifier_type = %s
@@ -239,7 +240,8 @@ def _fetch_by_directory_slug(
     return conn.execute(
         """
         select id, name, directory_slug, canonical_origin, canonical_endpoint,
-               payment_provider, payment_target_ref, created_from_review
+               payment_provider, payment_target_ref, payee_rotates,
+               created_from_review
         from services
         where directory_slug = %s
         """,
@@ -257,6 +259,27 @@ def _payee_family(value: str | None) -> str | None:
     if is_solana_address(value):
         return "solana"
     return None
+
+
+def payee_rotates(service: dict[str, Any]) -> bool:
+    """Whether this service issues a fresh payee for every request.
+
+    A provider may hand out a single-use payment destination with each 402:
+    Parallel MPP Search (svc_e91d4c0dfb719d9fefe8) answers every call with a
+    new 0x address, on Base and on Tempo. For such a service the payee cannot
+    anchor identity — there is nothing stable to store, and pinning the first
+    one seen refuses every later purchase as `service identity conflict`,
+    which is what it did until an operator set this flag.
+
+    Identity then rests on the endpoint, which is a globally unique product
+    identifier, and on the gateway receipt: a judged hosted review is pinned
+    to the payee and endpoint the *ledger* recorded, not to what the agent
+    claimed (docs/SCORING.md §3.6), and the on-chain check still proves the
+    transfer reached the payee the review names. Only an operator sets this
+    column, from scripts/fix_machine_payees.py, which requires two probes of
+    the service's own 402 to advertise different payees.
+    """
+    return bool(service.get("payee_rotates"))
 
 
 def _same_payment_target(
@@ -290,7 +313,7 @@ def _fetch_all_by_machine_payment_target(
             """
             select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
                    s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
-                   s.created_from_review
+                   s.payee_rotates, s.created_from_review
             from services s
             left join service_identifiers si on si.service_id = s.id
             where (si.identifier_type = 'payment_target'
@@ -313,7 +336,7 @@ def _fetch_all_by_machine_payment_target(
         """
         select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
                s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
-               s.created_from_review
+               s.payee_rotates, s.created_from_review
         from services s
         left join service_identifiers si on si.service_id = s.id
         where (si.identifier_type = 'payment_target'
@@ -334,7 +357,7 @@ def _fetch_all_by_payment_target(
         """
         select distinct s.id, s.name, s.directory_slug, s.canonical_origin,
                s.canonical_endpoint, s.payment_provider, s.payment_target_ref,
-               s.created_from_review
+               s.payee_rotates, s.created_from_review
         from services s
         left join service_identifiers si on si.service_id = s.id
         where (si.identifier_type = 'payment_target' and si.identifier_value = %s)
@@ -361,12 +384,16 @@ def _machine_payment_alias_authorized(
     other family yet, which — like an endpoint first seen in an unpaid
     review — the first verified payment registers.
     register_machine_payment_alias re-checks this under a row lock.
+
+    A rotating-payee service is the exception; see `payee_rotates`.
     """
     if supplied.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
         return False
     family = _payee_family(supplied.payment_target_ref)
     if family is None:
         return False
+    if payee_rotates(service):
+        return True
     if service.get("payment_provider") in MACHINE_PAYMENT_PROVIDERS and _same_payment_target(
         supplied.payment_provider,
         supplied.payment_target_ref,
@@ -619,6 +646,11 @@ def register_machine_payment_alias(
     service = conn.execute("select * from services where id = %s for update", (service_id,)).fetchone()
     if _resolved_identity(conn, identity, service) is None:
         raise ValueError("service identity conflict")
+    if payee_rotates(service):
+        # Nothing to register: this payee was valid for one request. Pinning
+        # it would refuse the next purchase, and storing it as an alias would
+        # add a row per sale forever.
+        return
     conn.execute(
         """update services set payment_provider = %s, payment_target_ref = %s
            where id = %s and payment_provider is null and payment_target_ref is null""",

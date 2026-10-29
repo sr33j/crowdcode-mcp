@@ -107,7 +107,8 @@ class ReviewRow:
     # The hosted owner behind the review, from its verified attestation.
     owner_ref: str | None = None
     # None when the review carries ranking weight; otherwise why it does not
-    # ('community', 'self_dealing', 'dust_payment', 'unsigned_placeholder').
+    # (crowdcode.review_sql.WEIGHT_EXCLUSIONS: 'community', 'self_dealing',
+    # 'dust_payment', 'unsigned_placeholder', 'platform_defect').
     weight_exclusion: str | None = "community"
     # Which era's rules weigh this row: 'legacy' for the pre-cutover corpus
     # (v2 wallet trust, frozen), 'hosted' for a verified judged purchase,
