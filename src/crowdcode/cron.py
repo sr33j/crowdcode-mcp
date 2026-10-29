@@ -55,12 +55,15 @@ from crowdcode.scoring import (
     review_weight,
     updated_raw_trust,
 )
+from crowdcode.review_sql import public_reviews
 from crowdcode.settings import get_settings
 from crowdcode import proposals
 from crowdcode.summaries import SUMMARY_VERSION, summarize_service_reviews
 
 DRIFT_TOLERANCE = 0.01
 SUMMARY_MAX_REVIEWS = 50
+PUBLIC_REVIEWS = public_reviews()
+PUBLIC_REVIEWS_R = public_reviews('r')
 
 # rpc_unreachable re-verification window: retry nightly for up to 14 days /
 # 5 attempts, then give up (the review keeps its signature_only weight).
@@ -332,17 +335,17 @@ def _summary_input_reviews(
     whichever era weighs it — a trusted owner's judged purchase, or a
     pre-cutover review from a wallet the frozen snapshot trusted. Cold-start
     fallback: with neither, fall back to authenticated community reviews.
-    Unsigned placeholder rows never appear — they are not publishable. Payment
+    Unsigned placeholder rows never appear — they are not publishable, and
+    neither do reviews of a failure CrowdCode caused (review_sql). Payment
     status is preserved in the summarizer input."""
     rows = conn.execute(
-        """
+        f"""
         select rating, reason, task_context, payment_verified,
                signature_verified, payment_verification_level,
                reviewer_wallet, owner_ref, weight_exclusion, weight_basis,
                verified_source, created_at
         from reviews
-        where service_id = %s
-          and (signature_verified or verified_source = 'hosted_receipt')
+        where service_id = %s and {PUBLIC_REVIEWS}
         order by (weight_exclusion is null) desc, created_at desc
         limit %s
         """,
@@ -378,13 +381,13 @@ def _collect_summary_inputs(now: datetime) -> list[tuple[str, str, list[dict[str
     pooler drops a connection idled across a slow LLM round trip."""
     with connect() as conn:
         pending = conn.execute(
-            """
+            f"""
             select s.id, s.name, s.review_revision
             from services s
             where exists (
               select 1 from reviews r
               where r.service_id = s.id
-                and (r.signature_verified or r.verified_source = 'hosted_receipt')
+                and {PUBLIC_REVIEWS_R}
                 and (s.last_summarized_at is null
                      or r.created_at > s.last_summarized_at
                      or coalesce(s.review_summary->>'version', '1') <> %s)

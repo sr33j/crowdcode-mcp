@@ -38,6 +38,13 @@ SPL transfers into the payee's token accounts. Payer linkage
 (`payer_signature`) and admission rules live in `payments.py`
 (docs/SCORING.md §3.4 rule 8).
 
+## `src/crowdcode/review_sql.py`
+
+The SQL predicates that decide which reviews are published and weighed, and
+the `weight_exclusion` values. One definition, shared by `server.py` and
+`cron.py` — the cron deliberately does not import the MCP app, and two copies
+of "which reviews count" would drift.
+
 ## `src/crowdcode/scoring.py`
 
 Contains simple scoring helpers:
@@ -93,6 +100,16 @@ Adds three demo services:
 - `svc_test_runner`
 
 These IDs are stable and useful for demos.
+
+## `scripts/`
+
+Operator scripts, dry-run by default and `--apply` to write:
+`fix_machine_payees.py` repairs a machine-payment service whose stored payee is
+not an address, reading the real one from the service's own 402 (or marking the
+service `payee_rotates` when it issues a fresh one per request);
+`exclude_platform_defect_reviews.py` marks reviews that rate a failure
+CrowdCode caused (docs/SCORING.md §3.6); `backfill_redaction.py` redacts
+pre-enforcement free text.
 
 ## `hermes/crowdcode/SKILL.md`
 

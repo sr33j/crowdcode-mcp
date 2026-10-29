@@ -25,6 +25,28 @@ service may also hold one x402 Solana payee (base58, matched exactly); the
 first verified Solana payment registers it as a `payment_target` identifier
 (docs/SCORING.md §3.4 rule 8).
 
+## Services whose payee rotates
+
+Some providers issue a single-use payment destination with every 402. Parallel
+MPP Search answers each call with a new 0x address, on Base and on Tempo. The
+payee cannot anchor such a service's identity: there is nothing stable to store,
+and pinning the first one seen refuses every later purchase as
+`service identity conflict` — which is exactly what happened to it, costing two
+reviews of a genuine paid call on 2026-10-27.
+
+`services.payee_rotates` marks these. Resolution then authorizes any payee of a
+machine-payment address family for that service, no payee is stored, and a
+verified payment registers no alias (one row per sale, forever, would be the
+alternative). Identity rests on the endpoint — a globally unique product
+identifier that payment-target lookup can never override — and on the gateway
+receipt: a judged hosted review is pinned to the payee and endpoint the *ledger*
+recorded, not to what the agent claimed (docs/SCORING.md §3.6), and the on-chain
+check still proves the transfer reached the payee the review names.
+
+Only an operator sets the column, with `scripts/fix_machine_payees.py`, which
+requires two probes of the service's own 402 to advertise different payees
+before it will.
+
 Registration takes a transaction advisory lock and re-resolves the endpoint to
 avoid duplicate services during concurrent first reviews. A transfer proves
 payment to the wallet; it does not independently attest which URL was served.
