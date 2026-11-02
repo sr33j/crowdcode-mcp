@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from crowdcode.solana import is_solana_address
+
+if TYPE_CHECKING:
+    from crowdcode.advertised import Offer
 
 
 PAYMENT_PROVIDERS = {"stripe", "stripe_payment_link", "mppx", "x402", "manual"}
@@ -23,8 +28,10 @@ PAYMENT_PROVIDER_ALIASES = {
 # protocol label, anchors a service's payment identity: one endpoint may
 # accept both mppx/Tempo and x402/Base payments to the same wallet, and the
 # on-chain check independently proves the transfer on whichever chain the
-# supplied protocol pins. A service holds at most one payee per address
-# family (EVM, Solana); see _machine_payment_alias_authorized.
+# supplied protocol pins. A service holds a set of payees: its canonical one
+# plus every `payment_target` identifier. A verified payment adds at most the
+# first payee of an address family (_machine_payment_alias_authorized); the
+# service's own 402 adds every payee it advertises (crowdcode.advertised).
 MACHINE_PAYMENT_PROVIDERS = frozenset({"mppx", "x402"})
 
 
@@ -392,11 +399,12 @@ def _machine_payment_alias_authorized(
     family is still a conflict — resolution must never let a caller redirect
     verification to an unregistered payment destination.
 
-    A machine-payment service has one payee slot per address family: an
-    EVM-registered service paid on Solana (or vice versa) has no payee in the
-    other family yet, which — like an endpoint first seen in an unpaid
-    review — the first verified payment registers.
-    register_machine_payment_alias re-checks this under a row lock.
+    A payment alone can add one payee per address family: an EVM-registered
+    service paid on Solana (or vice versa) has no payee in the other family
+    yet, which — like an endpoint first seen in an unpaid review — the first
+    verified payment registers. register_machine_payment_alias re-checks this
+    under a row lock. Any further payee of a family must come from the
+    service's own 402 (crowdcode.advertised, register_advertised_payees).
 
     A rotating-payee service is the exception; see `payee_rotates`.
     """
@@ -608,6 +616,83 @@ def resolve_service(
         return ResolvedService(service, identity=resolved_identity)
 
     return ResolvedService(None)
+
+
+def unregistered_payee_service(
+    conn: psycopg.Connection,
+    supplied: ServiceIdentity,
+) -> tuple[str, str] | None:
+    """The service, and its endpoint, whose own 402 could vouch for a payee.
+
+    Only when the supplied machine payee is the whole reason resolution
+    conflicts: without the payment pair the same lookup resolves to one
+    machine-payment service, with it the lookup is refused. The endpoint is
+    the one resolution authorized, so it is registered to that service; the
+    caller never chooses which URL is asked.
+    """
+    if supplied.payment_provider not in MACHINE_PAYMENT_PROVIDERS:
+        return None
+    if _payee_family(supplied.payment_target_ref) is None:
+        return None
+    if resolve_service(conn, supplied).error != "service identity conflict":
+        return None
+    resolved = resolve_service(
+        conn, replace(supplied, payment_provider=None, payment_target_ref=None)
+    )
+    if resolved.row is None or resolved.identity is None or not resolved.identity.api_endpoint:
+        return None
+    service = resolved.row
+    if service.get("payment_provider") not in MACHINE_PAYMENT_PROVIDERS or payee_rotates(service):
+        return None
+    return service["id"], resolved.identity.api_endpoint
+
+
+def register_advertised_payees(
+    conn: psycopg.Connection,
+    service_id: str,
+    endpoint: str,
+    offers: list[Offer],
+    evidence: str,
+) -> list[str]:
+    """Register every payee the service's own 402 advertised.
+
+    Only crowdcode.advertised calls this, with offers it fetched itself from
+    `endpoint`, an endpoint registered to this service. What was registered,
+    and the 402 that justified it, is kept in `metadata.advertised_payees`.
+    Returns the identifiers added.
+    """
+    service = conn.execute(
+        "select id, payee_rotates, metadata from services where id = %s for update",
+        (service_id,),
+    ).fetchone()
+    if service is None or service["payee_rotates"]:
+        return []
+    registered = []
+    for offer in offers:
+        if offer.provider not in MACHINE_PAYMENT_PROVIDERS or _payee_family(offer.payee) is None:
+            continue
+        value = payment_identifier(offer.provider, offer.payee)
+        # A payee already held under either rail is already in the set.
+        if _identifier_belongs_to_service(conn, service_id, "payment_target", value):
+            continue
+        _insert_identifier(conn, service_id, "payment_target", value)
+        registered.append(value)
+    if registered:
+        metadata = dict(service["metadata"] or {})
+        learned = list(metadata.get("advertised_payees") or [])[-19:]
+        learned.append({
+            "at": datetime.now(UTC).isoformat(),
+            "endpoint": endpoint,
+            "registered": registered,
+            "source": "advertised 402 offer",
+            "evidence": evidence,
+        })
+        metadata["advertised_payees"] = learned
+        conn.execute(
+            "update services set metadata = %s where id = %s",
+            (Jsonb(metadata), service_id),
+        )
+    return registered
 
 
 def _fallback_service_name(identity: ServiceIdentity) -> str:

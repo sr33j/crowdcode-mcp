@@ -25,6 +25,50 @@ service may also hold one x402 Solana payee (base58, matched exactly); the
 first verified Solana payment registers it as a `payment_target` identifier
 (docs/SCORING.md §3.4 rule 8).
 
+## Services with more than one payee
+
+A provider may collect at several stable addresses in one family. Exa
+(`https://api.exa.ai/search`) advertises two Base payees in the same 402,
+`0x6d6E…9192` and `0xB98e…2dbC`, and which one a buyer pays depends on which
+`accepts` entry it picks. Registered from an mppx payment to `0xB98e…`, it
+refused every hosted Base purchase — the gateway pays `0x6d6E…` — as
+`service identity conflict`: 62 hosted reviews in the week to 2026-11-02
+(SRI-69).
+
+A service's payees are a set: the canonical payee plus every `payment_target`
+identifier. A verified payment adds at most the first payee of a family the
+service has none of. Every other payee comes from the service's own 402:
+
+```mermaid
+sequenceDiagram
+  participant C as Gateway or client
+  participant B as Backend
+  participant DB as Database
+  participant S as Service endpoint
+  C->>B: get_service_score / review_service (endpoint, x402, payee)
+  B->>DB: resolve; conflict only because of the payee?
+  DB-->>B: yes: service + its registered endpoint
+  Note over B: connection closed
+  B->>S: unpaid POST {} (no redirects, public hosts only)
+  S-->>B: 402 accepts[].payTo, MPP recipient
+  B->>DB: lock service; register every advertised payee; commit
+  alt supplied payee advertised
+    B->>DB: resolve again: accepted
+  else not advertised
+    B-->>C: service identity conflict (that payee is not registered)
+  end
+```
+
+What keeps a stranger's address out of a set: the payee must appear in the
+402 served by an endpoint already registered to that service, fetched by
+CrowdCode at the moment of the lookup. The caller chooses neither the URL nor
+the answer, and a lookup that conflicts for any other reason (an unregistered
+endpoint, a different service ID) asks nothing. A payee in the set gives no
+ranking weight by itself: that still needs a gateway receipt for a settled
+purchase, and the on-chain check still proves the transfer reached the payee.
+The probe runs at most once per service every ten minutes, however many
+payees callers name, and what was registered is recorded in `services.metadata.advertised_payees`.
+
 ## Services whose payee rotates
 
 Some providers issue a single-use payment destination with every 402. Parallel

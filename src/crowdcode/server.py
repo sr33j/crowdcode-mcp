@@ -20,10 +20,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from crowdcode.advertised import learn_advertised_payee
 from crowdcode.db import connect
 from crowdcode.demand import validate_request_fields
 from crowdcode.discovery import find_services
 from crowdcode.identity import (
+    ServiceIdentity,
     build_identity,
     create_service_from_identity,
     register_machine_payment_alias,
@@ -339,6 +341,19 @@ def find_service(
                          candidates=candidates, limit=limit, conn_factory=connect)
 
 
+def _learn_payees(identity: ServiceIdentity) -> None:
+    """Let a payee the service's own 402 advertises join its payee set.
+
+    Runs before resolution, holding no connection while it asks the service
+    (crowdcode.advertised). A service that collects at two Base addresses, as
+    Exa does, otherwise refuses every purchase paid to the second.
+    """
+    try:
+        learn_advertised_payee(connect, identity)
+    except Exception:
+        logger.exception("learning a service's advertised payees failed")
+
+
 @mcp.tool()
 @_stable_tool
 def get_service_score(
@@ -370,6 +385,7 @@ def get_service_score(
     except ValueError as exc:
         return _score_not_found(service_id, str(exc))
 
+    _learn_payees(identity)
     with connect() as conn:
         resolved = resolve_service(conn, identity)
         if resolved.error:
@@ -553,6 +569,7 @@ def get_review_signing_payload(
     except ValueError as exc:
         return {"ok": False, "reason": str(exc)}
 
+    _learn_payees(identity)
     with connect() as conn:
         resolved = resolve_service(conn, identity)
         if resolved.error:
@@ -744,6 +761,7 @@ def review_service(
     if not reason:
         return {"accepted": False, "reason": "reason is required"}
 
+    _learn_payees(identity)
     with connect() as conn:
         resolved = resolve_service(conn, identity)
         if resolved.error:

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- A service that collects at more than one payee per address family can be
+  reviewed at any of them. Exa (`https://api.exa.ai/search`) advertises two
+  Base payees in one 402 and was registered on the one the hosted gateway does
+  not pay, so 62 hosted reviews in the week to 2026-11-02 were refused as
+  `service identity conflict` (SRI-69). A service's payees are a set — its
+  canonical payee plus every `payment_target` identifier — and when a supplied
+  payee is the only reason a lookup conflicts, `crowdcode.advertised` asks the
+  service's registered endpoint for its 402, registers every payee it
+  advertises (`metadata.advertised_payees` keeps the evidence), and accepts
+  the payee if it is one of them. The probe holds no database connection,
+  follows no redirect, refuses non-public hosts and runs at most once per
+  service every ten minutes; a payee the 402 does not advertise is still a
+  conflict.
+
 Two directory data repairs. Apply `supabase/rotating-payees.sql` and
 `supabase/platform-defect-reviews.sql`, deploy the backend and cron, then run
 `scripts/fix_machine_payees.py --apply` and

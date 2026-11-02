@@ -53,17 +53,17 @@ Requires DATABASE_URL, and supabase/rotating-payees.sql applied.
 from __future__ import annotations
 
 import argparse
-import base64
-import json
-import re
 import sys
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-from eth_utils import to_checksum_address
 from psycopg.types.json import Jsonb
 
+# The 402 parser is shared with the backend, which learns advertised payees
+# on its own (crowdcode.advertised); these names are this script's API.
+from crowdcode.advertised import Offer, probe
+from crowdcode.advertised import mpp_offers as _mpp_offers  # noqa: F401
+from crowdcode.advertised import x402_offers as _x402_offers  # noqa: F401
 from crowdcode.db import connect
 from crowdcode.identity import (
     MACHINE_PAYMENT_PROVIDERS,
@@ -72,19 +72,8 @@ from crowdcode.identity import (
 )
 from crowdcode.payments import utc_now
 
-PROBE_TIMEOUT = 20.0
 # Two probes, because one cannot tell a stable payee from a rotating one.
 PROBES = 2
-# The 402 is the response to a real call, so the probe has to look like one.
-# A body of `{}` is enough: a paywall answers 402 before it validates input.
-PROBE_BODY: dict[str, Any] = {}
-
-
-@dataclass(frozen=True)
-class Offer:
-    provider: str
-    payee: str
-    network: str | None
 
 
 @dataclass(frozen=True)
@@ -92,96 +81,6 @@ class Advertised:
     offers: list[Offer]
     rotating: bool
     note: str
-
-
-def _normalize(payee: str) -> str:
-    """Checksum an EVM payee; leave a base58 Solana payee exactly as given."""
-    if re.fullmatch(r"0x[0-9a-fA-F]{40}", payee):
-        return to_checksum_address(payee)
-    return payee
-
-
-def _x402_offers(body: Any, header: str | None) -> list[Offer]:
-    """x402 `accepts[].payTo`, from the JSON body or the base64 header twin."""
-    payload = body if isinstance(body, dict) else None
-    if payload is None and header:
-        try:
-            payload = json.loads(base64.b64decode(header + "=" * (-len(header) % 4)))
-        except Exception:
-            payload = None
-    if not isinstance(payload, dict):
-        return []
-    offers = []
-    for accept in payload.get("accepts") or []:
-        if not isinstance(accept, dict):
-            continue
-        payee = accept.get("payTo")
-        if isinstance(payee, str) and payee.strip():
-            network = accept.get("network")
-            offers.append(Offer("x402", _normalize(payee.strip()),
-                                network if isinstance(network, str) else None))
-    return offers
-
-
-def _mpp_offers(header: str | None) -> list[Offer]:
-    """`Payment method="tempo", request="<base64url JSON>"` challenges.
-
-    The challenge's `request` payload names the `recipient` the payment must
-    reach; mppx settles on Tempo.
-    """
-    if not header:
-        return []
-    offers = []
-    for segment in re.split(r",\s*(?=Payment\s)", header):
-        if not re.match(r"^\s*Payment\s", segment, re.IGNORECASE):
-            continue
-        params = dict(
-            (match.group(1), match.group(2) if match.group(2) is not None else match.group(3))
-            for match in re.finditer(
-                r'(\w+)=(?:"([^"]*)"|([^\s,]+))',
-                re.sub(r"^\s*Payment\s+", "", segment, flags=re.IGNORECASE),
-            )
-        )
-        raw = params.get("request")
-        if not raw:
-            continue
-        try:
-            request = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
-        except Exception:
-            continue
-        payee = request.get("recipient") if isinstance(request, dict) else None
-        if isinstance(payee, str) and payee.strip():
-            details = request.get("methodDetails")
-            chain = details.get("chainId") if isinstance(details, dict) else None
-            method = params.get("method") or "tempo"
-            offers.append(Offer("mppx", _normalize(payee.strip()),
-                                f"{method}:{chain}" if chain else method))
-    return offers
-
-
-def probe(endpoint: str) -> tuple[list[Offer], str]:
-    """One call to the endpoint, and the payees its 402 advertised."""
-    with httpx.Client(timeout=PROBE_TIMEOUT, follow_redirects=False) as client:
-        try:
-            response = client.post(endpoint, json=PROBE_BODY)
-            if response.status_code != 402:
-                response = client.get(endpoint)
-        except httpx.HTTPError as error:
-            return [], f"probe failed: {type(error).__name__}: {error}"
-    try:
-        body = response.json()
-    except ValueError:
-        body = None
-    offers = _x402_offers(body, response.headers.get("payment-required"))
-    offers += _mpp_offers(response.headers.get("www-authenticate"))
-    seen: dict[tuple[str, str], Offer] = {}
-    for offer in offers:
-        seen.setdefault((offer.provider, offer.payee.lower()), offer)
-    note = f"HTTP {response.status_code}; " + (
-        ", ".join(f"{o.provider} {o.payee} ({o.network})" for o in seen.values())
-        or "no payee advertised"
-    )
-    return list(seen.values()), note
 
 
 def advertised_payees(endpoint: str) -> Advertised:
