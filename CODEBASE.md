@@ -38,6 +38,14 @@ SPL transfers into the payee's token accounts. Payer linkage
 (`payer_signature`) and admission rules live in `payments.py`
 (docs/SCORING.md §3.4 rule 8).
 
+## `src/crowdcode/advertised.py`
+
+The payees a service advertises in its own 402 (x402 `accepts[].payTo`, MPP
+`recipient`), and learning them: when a supplied machine payee is the only
+reason resolution conflicts, the service's registered endpoint is probed and
+every advertised payee joins its payee set (docs/shared-payment-wallets.md).
+`scripts/fix_machine_payees.py` uses the same parser.
+
 ## `src/crowdcode/review_sql.py`
 
 The SQL predicates that decide which reviews are published and weighed, and
