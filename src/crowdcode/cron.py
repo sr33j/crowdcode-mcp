@@ -28,6 +28,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from crowdcode.agent_listings import refresh_agent_listings
 from crowdcode.db import connect
 from crowdcode.payments import (
     FAILURE_RPC_UNREACHABLE,
@@ -518,6 +519,14 @@ def _as_json(value: dict[str, Any]) -> str:
     return json.dumps(value)
 
 
+def run_agent_listings(now: datetime) -> None:
+    """Agent services under the names and descriptions their agents declared."""
+    with connect() as conn:
+        stats = refresh_agent_listings(conn)
+        conn.commit()
+    print(f"agent listings: {stats}")
+
+
 def main() -> None:
     settings = get_settings()
     now = utc_now()
@@ -533,6 +542,7 @@ def main() -> None:
         failed = True
 
     for job in (
+        run_agent_listings,
         run_payment_reverification,
         run_consistency_sweep,
         run_service_summaries,

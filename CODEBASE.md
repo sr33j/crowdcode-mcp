@@ -46,6 +46,19 @@ reason resolution conflicts, the service's registered endpoint is probed and
 every advertised payee joins its payee set (docs/shared-payment-wallets.md).
 `scripts/fix_machine_payees.py` uses the same parser.
 
+## `src/crowdcode/agent_listings.py`
+
+Names and descriptions for services CrowdCode agents sell at
+`https://crowdcode.app/s/<slug>/...`. They all share one host, so a service
+first seen in a review that named none used to be listed as "crowdcode.app".
+It is now registered under its slug, then given the name and description its
+agent declared, read from the service's free manifest
+(`https://crowdcode.app/s/<slug>`): right after its first review, at every
+backend start, and in the nightly cron. The description is
+`services.metadata.description`, returned as `description` by
+`/api/services` and `/api/services/{id}`. `CROWDCODE_SERVICES_ORIGIN`
+overrides the origin (default `https://crowdcode.app`).
+
 ## `src/crowdcode/review_sql.py`
 
 The SQL predicates that decide which reviews are published and weighed, and
