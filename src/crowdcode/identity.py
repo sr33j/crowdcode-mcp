@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 from psycopg.types.json import Jsonb
 
+from crowdcode.agent_listings import agent_service_slug
 from crowdcode.solana import is_solana_address
 
 if TYPE_CHECKING:
@@ -698,6 +699,12 @@ def register_advertised_payees(
 def _fallback_service_name(identity: ServiceIdentity) -> str:
     if identity.service_name:
         return identity.service_name
+    # Every CrowdCode agent service shares the host crowdcode.app; its slug is
+    # its own. The name the agent declared replaces it a moment later
+    # (agent_listings), without a network call here.
+    slug = agent_service_slug(identity.api_endpoint)
+    if slug:
+        return slug
     if identity.api_endpoint:
         parsed = urlsplit(identity.api_endpoint)
         return parsed.netloc

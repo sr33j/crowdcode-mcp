@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from crowdcode.advertised import learn_advertised_payee
+from crowdcode.agent_listings import agent_service_slug, refresh_in_background
 from crowdcode.db import connect
 from crowdcode.demand import validate_request_fields
 from crowdcode.discovery import find_services
@@ -1051,6 +1052,10 @@ def review_service(
                 "reason": "payment_reference already used",
             }
 
+    if service_created and agent_service_slug(service.get("canonical_endpoint")):
+        # Named after its slug for now; the agent's declared name and
+        # description follow from its manifest, off the request path.
+        refresh_in_background([service["id"]])
     return _review_accepted(service["id"], row["id"], verification, service_created,
                             weight_exclusion, attested is not None)
 
@@ -1190,6 +1195,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.directory_slug,
           s.canonical_endpoint,
           s.payment_provider,
+          s.metadata->>'description' as description,
           s.score,
           s.n_eff,
           s.n_eff_legacy,
@@ -1212,6 +1218,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
         {
             "service_id": row["service_id"],
             "name": row["name"],
+            "description": row.get("description"),
             "directory_slug": row.get("directory_slug"),
             "canonical_endpoint": row.get("canonical_endpoint"),
             "payment_provider": row.get("payment_provider"),
@@ -1252,7 +1259,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """
             select id, name, directory_slug, canonical_endpoint,
                    payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
-                   review_summary
+                   review_summary, metadata->>'description' as description
             from services
             where id = %s
             """,
@@ -1308,6 +1315,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "service": {
             "service_id": service["id"],
             "name": service["name"],
+            "description": service.get("description"),
             "directory_slug": service.get("directory_slug"),
             "canonical_endpoint": service.get("canonical_endpoint"),
             "payment_provider": service.get("payment_provider"),
@@ -1551,6 +1559,9 @@ def _sync_seed_owners_at_startup() -> None:
 def create_app() -> Starlette:
     settings = get_settings()
     _sync_seed_owners_at_startup()
+    # Agent-service names and descriptions, refreshed at every deploy as well
+    # as nightly, so a fix reaches the listings without waiting for the cron.
+    refresh_in_background()
     mcp_app = mcp.streamable_http_app()
     app = Starlette(
         routes=[
