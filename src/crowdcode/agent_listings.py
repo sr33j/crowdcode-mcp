@@ -15,7 +15,8 @@ and the platform publishes them, free, at ``https://crowdcode.app/s/<slug>``
 - **Right after registration, at startup, and nightly**, the manifest is read
   and its name and description are stored (``metadata.description``). A
   service that is stopped or deleted answers with no manifest and keeps the
-  listing it had.
+  listing it had, except that one still named after the shared host is
+  renamed to its slug.
 
 Only an endpoint on the configured services origin, whose path is
 ``/s/<slug>``, is treated as an agent service, and only the manifest at that
@@ -171,6 +172,7 @@ def refresh_agent_listings(
         listings = {slug: fetch(slug) for slug in by_slug}
 
     stats = {"candidates": len(rows), "updated": 0, "unchanged": 0, "unavailable": 0}
+    hosts = _hosts(origin)
     now = datetime.now(timezone.utc).isoformat()
     with conn.transaction():
         for slug, services in by_slug.items():
@@ -178,6 +180,11 @@ def refresh_agent_listings(
             for row in services:
                 if listing is None:
                     stats["unavailable"] += 1
+                    # Nothing declared to read (stopped, deleted): at least
+                    # not the host every agent service shares.
+                    if (row["name"] or "").lower() in hosts:
+                        conn.execute("update services set name = %s where id = %s and directory_slug is null", (slug, row["id"]))
+                        stats["updated"] += 1
                     continue
                 metadata = dict(row["metadata"] or {})
                 if row["name"] == listing["name"] and metadata.get("description") == listing.get("description"):

@@ -117,6 +117,9 @@ def _register(conn, endpoint, **extra):
 def test_an_agent_service_is_listed_under_its_own_name_and_description(db, monkeypatch):
     venice = _register(db, "https://crowdcode.app/s/venice-reseller/chat/completions")
     stopped = _register(db, "https://crowdcode.app/s/stopped-one/run")
+    # Registered before this change, under the host every agent service shares.
+    legacy = _register(db, "https://crowdcode.app/s/text-stats/stats")
+    db.execute("update services set name = 'crowdcode.app' where id = %s", (legacy["id"],))
     elsewhere = _register(db, "https://api.other.example/v1/search")
     with db.transaction():
         curated = create_service_from_identity(db, build_identity(
@@ -135,14 +138,16 @@ def test_an_agent_service_is_listed_under_its_own_name_and_description(db, monke
         return parse_manifest(slug, VENICE, ORIGIN) if slug == "venice-reseller" else None
 
     stats = refresh_agent_listings(db, fetch=fetch, origin=ORIGIN)
-    assert sorted(fetched) == ["stopped-one", "venice-reseller"]
-    assert stats == {"candidates": 2, "updated": 1, "unchanged": 0, "unavailable": 1}
+    assert sorted(fetched) == ["stopped-one", "text-stats", "venice-reseller"]
+    assert stats == {"candidates": 3, "updated": 2, "unchanged": 0, "unavailable": 2}
     rows = {r["id"]: r for r in db.execute("select id, name, metadata from services").fetchall()}
     assert rows[venice["id"]]["name"] == "Venice, per request"
     assert rows[venice["id"]]["metadata"]["description"] == VENICE["description"]
     assert rows[venice["id"]]["metadata"]["listing_source"] == "crowdcode-agent-service"
     # A service with nothing to say keeps what it had; others are not touched.
     assert rows[stopped["id"]]["name"] == "stopped-one"
+    # One with nothing to say that was still named after the host gets its slug.
+    assert rows[legacy["id"]]["name"] == "text-stats"
     assert rows[elsewhere["id"]]["name"] == "api.other.example"
     assert rows[curated["id"]]["name"] == "Curated name"
 
