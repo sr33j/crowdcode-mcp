@@ -241,3 +241,31 @@ def test_fill_merges_into_metadata_in_postgres(db):  # noqa: F811
     listed = {r["id"]: r for r in directory_rows(conn)}
     assert listed["svc_new"]["description"] == "Turn text into natural speech audio."
     assert listed["svc_new"]["listing_text"] == "Turn text into natural speech audio."
+
+
+def test_the_web_service_only_describes_listings_never_looked_at():
+    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    rows = [row("new", "https://a.example.com/x"),
+            row("stale", "https://d.example.com/x", {"listing_checked_at": (now - timedelta(days=40)).isoformat(),
+                                                     "description": "Old words.", "description_source": "x402"})]
+    stats = lm.fill_descriptions(Conn(rows), fetch=Web({}), mpp_catalog={}, now=now, only_unchecked=True)
+    assert stats["candidates"] == 1  # the monthly refresh is the cron's
+    assert lm.fill_descriptions(Conn(rows), fetch=Web({}), mpp_catalog={}, now=now)["candidates"] == 2
+
+
+def test_origin_documents_are_kept_parsed_and_compact():
+    document = {"info": {"summary": "S"}, "components": {"schemas": {"Huge": {"x": "y" * 10_000}}},
+                "paths": {"/a/{id}": {"post": {"summary": "Make a thing", "description": "Makes a thing from a prompt.",
+                                               "parameters": [{"name": "id"}],
+                                               "requestBody": {"content": {"application/json": {"schema": {"properties": {"prompt": {}}}}}}}}}}
+    compact = lm.compact_openapi(document)
+    assert "components" not in compact and len(json.dumps(compact)) < 600
+    found = lm.Found()
+    lm.read_openapi(found, compact, "u", "https://h.example/a/42")
+    assert found.description(None)[2] == "Make a thing. Makes a thing from a prompt."
+    assert found.fields == ["id", "prompt"]
+    web = Web({("ANY", "https://h.example/llms.txt"): response(200, "> One line.", content_type="text/plain")})
+    cache = lm.OriginCache(web)
+    assert cache.get("https://h.example/llms.txt", lm.llms_summary) == "One line."
+    assert cache.get("https://h.example/llms.txt", lm.llms_summary) == "One line."
+    assert len(web.calls) == 1
