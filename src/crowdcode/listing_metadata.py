@@ -301,22 +301,26 @@ def read_openapi(found: Found, document: Any, url: str, endpoint: str) -> None:
         found.add("openapi", url, detail)
 
 
-def read_llms(found: Found, response: httpx.Response | None, url: str) -> None:
+def llms_summary(response: httpx.Response | None) -> str | None:
     if response is None or response.status_code != 200 or "html" in response.headers.get("content-type", ""):
-        return
+        return None
     for line in response.text.splitlines()[:40]:
         if line.startswith(">"):
-            found.add("llms.txt", url, line.lstrip("> "))
-            return
+            return line.lstrip("> ")
+    return None
+
+
+def read_llms(found: Found, response: httpx.Response | None, url: str) -> None:
+    found.add("llms.txt", url, llms_summary(response))
 
 
 _META = re.compile(r"<meta\s+[^>]*>", re.IGNORECASE)
 _ATTR = re.compile(r'([a-zA-Z:-]+)\s*=\s*("([^"]*)"|\'([^\']*)\')')
 
 
-def read_landing(found: Found, response: httpx.Response | None, url: str) -> None:
+def landing_description(response: httpx.Response | None) -> str | None:
     if response is None or response.status_code != 200 or "html" not in response.headers.get("content-type", ""):
-        return
+        return None
     head = response.text[:200_000]
     best: dict[str, str] = {}
     for tag in _META.findall(head):
@@ -324,7 +328,42 @@ def read_landing(found: Found, response: httpx.Response | None, url: str) -> Non
         key = (attrs.get("name") or attrs.get("property") or "").lower()
         if key in ("description", "og:description", "twitter:description") and attrs.get("content"):
             best.setdefault(key, attrs["content"])
-    found.add("landing page", url, best.get("description") or best.get("og:description") or best.get("twitter:description"))
+    return best.get("description") or best.get("og:description") or best.get("twitter:description")
+
+
+def read_landing(found: Found, response: httpx.Response | None, url: str) -> None:
+    found.add("landing page", url, landing_description(response))
+
+
+def compact_openapi(document: Any) -> dict[str, Any] | None:
+    """Only what read_openapi reads: a large OpenAPI document is mostly schemas no listing needs."""
+    if not isinstance(document, dict) or not isinstance(document.get("paths"), dict):
+        return None
+    text = lambda v: v[:DESCRIPTION_MAX * 2] if isinstance(v, str) else None  # noqa: E731
+    paths: dict[str, Any] = {}
+    for template, operations in document["paths"].items():
+        if not isinstance(template, str) or not isinstance(operations, dict):
+            continue
+        kept = {}
+        for method in ("post", "get", "put"):
+            operation = operations.get(method)
+            if not isinstance(operation, dict):
+                continue
+            body = Found()
+            content = ((operation.get("requestBody") or {}).get("content") or {}) if isinstance(operation.get("requestBody"), dict) else {}
+            for media in content.values() if isinstance(content, dict) else []:
+                if isinstance(media, dict):
+                    _schema_fields(body, media.get("schema"))
+            kept[method] = {
+                "summary": text(operation.get("summary")), "description": text(operation.get("description")),
+                "parameters": [{"name": p.get("name")} for p in operation.get("parameters") or [] if isinstance(p, dict)],
+                "requestBody": {"content": {"application/json": {"schema": {"properties": {f: {} for f in body.fields}}}}},
+            }
+        paths[template] = kept
+    info = document.get("info") if isinstance(document.get("info"), dict) else {}
+    return {"servers": [{"url": s.get("url")} for s in document.get("servers") or [] if isinstance(s, dict)],
+            "info": {"summary": text(info.get("summary")), "description": text(info.get("description"))},
+            "paths": paths}
 
 
 def read_mpp_catalog(found: Found, catalog: Any, endpoint: str) -> None:
@@ -343,32 +382,43 @@ def read_mpp_catalog(found: Found, catalog: Any, endpoint: str) -> None:
 
 
 class OriginCache:
-    """Origin documents fetched once per backfill, however many endpoints share them."""
+    """What each origin document said, fetched once per backfill however many endpoints share it.
+
+    Only the parsed result is kept (a summary line, a meta description, a
+    compacted OpenAPI document), never the response: a whole directory's
+    documents held at once cost the backend a hundred megabytes.
+    """
 
     def __init__(self, fetch: Fetch) -> None:
         self._fetch = fetch
         self._lock = threading.Lock()
         self._docs: dict[str, Any] = {}
 
-    def get(self, url: str) -> httpx.Response | None:
-        with self._lock:
-            if url in self._docs:
-                return self._docs[url]
-            event = threading.Event()
-            self._docs[url] = event
-        response = self._fetch("GET", url)
-        with self._lock:
-            self._docs[url] = response
-        event.set()
-        return response
-
-    def __getitem__(self, url: str) -> httpx.Response | None:
-        value = self.get(url)
-        while isinstance(value, threading.Event):
-            value.wait(FETCH_TIMEOUT * (MAX_REDIRECTS + 2))
+    def get(self, url: str, parse: Callable[[httpx.Response | None], Any]) -> Any:
+        while True:
             with self._lock:
-                value = self._docs.get(url)
-        return value
+                value = self._docs.get(url, _MISSING)
+                if value is _MISSING:
+                    event = threading.Event()
+                    self._docs[url] = event
+                    break
+            if not isinstance(value, threading.Event):
+                return value
+            value.wait(FETCH_DEADLINE * 2)
+            with self._lock:
+                if self._docs.get(url) is value:  # the fetching thread died: try again ourselves
+                    del self._docs[url]
+        try:
+            parsed = parse(self._fetch("GET", url))
+        except Exception:
+            parsed = None
+        with self._lock:
+            self._docs[url] = parsed
+        event.set()
+        return parsed
+
+
+_MISSING = object()
 
 
 def describe_endpoint(endpoint: str, *, fetch: Fetch, origins: OriginCache, mpp_catalog: Any = None,
@@ -383,13 +433,12 @@ def describe_endpoint(endpoint: str, *, fetch: Fetch, origins: OriginCache, mpp_
         read_mpp_catalog(found, mpp_catalog, endpoint)
     origin = _origin(endpoint)
     for path in ("/openapi.json", "/.well-known/openapi.json"):
-        document = _json(origins[origin + path])
-        if isinstance(document, dict) and document.get("paths"):
-            # The document may live where the origin redirects to.
+        document = origins.get(origin + path, lambda r: compact_openapi(_json(r)))
+        if document:
             read_openapi(found, document, origin + path, endpoint)
             break
-    read_llms(found, origins[origin + "/llms.txt"], origin + "/llms.txt")
-    read_landing(found, origins[origin + "/"], origin + "/")
+    found.add("llms.txt", origin + "/llms.txt", origins.get(origin + "/llms.txt", llms_summary))
+    found.add("landing page", origin + "/", origins.get(origin + "/", landing_description))
     return found
 
 
@@ -417,13 +466,16 @@ def fill_descriptions(
     mpp_catalog: Any = None,
     apply: bool = True,
     force: bool = False,
+    only_unchecked: bool = False,
     now: datetime | None = None,
     report: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, int]:
     """Describe every due listing from its own metadata.
 
-    Reads candidates, closes the transaction, fetches with no connection in
-    use, then writes in one short transaction. ``conn`` must be in autocommit
+    ``only_unchecked``: just listings never looked at (what the web service
+    does at start; the 7- and 30-day revisits are the cron's, on its own
+    instance). Reads candidates, closes the transaction, fetches with no
+    connection in use, then writes in one short transaction. ``conn`` must be in autocommit
     mode or have no transaction in progress.
     """
     now = now or datetime.now(timezone.utc)
@@ -432,7 +484,8 @@ def fill_descriptions(
     if service_ids is not None:
         sql += " and id = any(%s)"
         params.append(list(service_ids))
-    rows = [r for r in conn.execute(sql, params).fetchall() if force or _due(r, now)]
+    rows = [r for r in conn.execute(sql, params).fetchall()
+            if force or (_due(r, now) and not (only_unchecked and (r.get("metadata") or {}).get("listing_checked_at")))]
     if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
         conn.commit()  # never hold a transaction across the calls below
     stats = {"candidates": len(rows), "described": 0, "nothing_found": 0, "unchanged": 0}
@@ -502,7 +555,8 @@ def _describe_safely(row: dict[str, Any], fetch: Fetch, origins: OriginCache, mp
         return None
 
 
-def fill_in_background(service_ids: Iterable[str] | None = None, *, then: Callable[[], None] | None = None) -> threading.Thread:
+def fill_in_background(service_ids: Iterable[str] | None = None, *, only_unchecked: bool = True,
+                       then: Callable[[], None] | None = None) -> threading.Thread:
     """Best effort, off the request path: a new listing is described a moment after its first review."""
     ids = None if service_ids is None else list(service_ids)
 
@@ -511,7 +565,7 @@ def fill_in_background(service_ids: Iterable[str] | None = None, *, then: Callab
 
         try:
             with connect() as conn:
-                fill_descriptions(conn, service_ids=ids)
+                fill_descriptions(conn, service_ids=ids, only_unchecked=only_unchecked)
                 conn.commit()
         except Exception:
             traceback.print_exc()
