@@ -190,14 +190,35 @@ search results, tagged with their `source`).
 
 Ranking, best first:
 
-1. CrowdCode quality: the canonical `score` in quarter-point bands (unreviewed
-   services sit at the 3.0 prior); within a band, services with 3+ distinct
-   payers in the last 30 days (Bazaar usage) first. Services rated below 2 with
-   real evidence go last.
-2. Effective price on the payer's best network: the catalog price, plus about
-   $0.03 for one transfer between the payer's own networks when that network's
-   `balances` entry does not cover it.
-3. The payer's balance on that network.
+1. Match and quality together. Every candidate gets a `match` from 0 to 1:
+   how close its listing is in meaning to the request (cosine similarity of
+   static embeddings, `minishlab/potion-base-8M`, run in-process) blended with
+   the share of the request's words it contains. A full match is worth two
+   points of CrowdCode quality (the canonical `score` in quarter-point bands;
+   unreviewed services sit at the 3.0 prior), so a much closer match beats a
+   somewhat better score, and on a near-tie in match the better-reviewed
+   service wins. Services rated below 2 with real evidence go last. If the
+   model is unavailable, `match` is null and quality leads as before.
+2. Within a tie: services with 3+ distinct payers in the last 30 days
+   (Bazaar usage), then effective price on the payer's best network (the
+   catalog price, plus about $0.03 for one transfer between the payer's own
+   networks when that network's `balances` entry does not cover it), then the
+   payer's balance on that network.
+
+CrowdCode's own listings are matched on their name, endpoint and description.
+Most services enter the directory through a review, which names an endpoint
+but not what it does, so the backend reads the description from the service
+itself: its 402 (`resource.description`, `accepts[].description`, an MPP
+challenge's `description`), its OpenAPI document, its mpp.dev catalog entry,
+its `/llms.txt` or its landing page, in that order of specificity, at its
+first review, at every start and nightly (`listing_metadata.py`;
+`scripts/fill_listing_descriptions.py` runs it by hand). Nothing is written
+that the service did not say about itself.
+
+`tests/search_eval/cases.json` holds 60 real intents with the services that
+should answer them; CI ranks them over a snapshot of the directory and fails
+when recall@3 or MRR drops (`tests/test_search_eval.py`), and the nightly
+workflow ranks them on production (`scripts/search_eval.py --live`).
 
 Each result carries `best` (`network`, `protocol`, `price_usd`,
 `effective_price_usd`, `transfer_needed`, `fundable`, `balance_usd`), all

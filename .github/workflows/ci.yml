@@ -20,6 +20,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      # tests/test_search_eval.py ranks the evaluation set with the pinned
+      # embedding model (crowdcode/semantic.py); keep its ~30 MB download warm.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-${{ hashFiles('src/crowdcode/semantic.py') }}
       - run: pip install -e . pytest
       - run: python -m pytest -q
         env:

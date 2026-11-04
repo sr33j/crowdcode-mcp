@@ -29,6 +29,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from crowdcode.agent_listings import refresh_agent_listings
+from crowdcode.listing_metadata import fill_descriptions
 from crowdcode.db import connect
 from crowdcode.payments import (
     FAILURE_RPC_UNREACHABLE,
@@ -527,6 +528,15 @@ def run_agent_listings(now: datetime) -> None:
     print(f"agent listings: {stats}")
 
 
+def run_listing_descriptions(now: datetime) -> None:
+    """Listings described from their own 402, OpenAPI or landing page: new ones, ones that
+    had nothing a week ago, and a monthly refresh of the rest (listing_metadata)."""
+    with connect() as conn:
+        stats = fill_descriptions(conn, now=now)
+        conn.commit()
+    print(f"listing descriptions: {stats}")
+
+
 def main() -> None:
     settings = get_settings()
     now = utc_now()
@@ -543,6 +553,7 @@ def main() -> None:
 
     for job in (
         run_agent_listings,
+        run_listing_descriptions,
         run_payment_reverification,
         run_consistency_sweep,
         run_service_summaries,

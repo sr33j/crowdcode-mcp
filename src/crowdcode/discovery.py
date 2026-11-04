@@ -25,9 +25,13 @@ search and is never stored.
 
 from __future__ import annotations
 
+import bisect
+import functools
 import math
 import re
+import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
@@ -35,6 +39,7 @@ from typing import Any, Callable, Iterable
 import httpx
 import psycopg
 
+from crowdcode import semantic
 from crowdcode.identity import normalize_api_endpoint
 from crowdcode.networks import fetch_service_networks
 from crowdcode.scoring import as_float, is_unproven
@@ -70,6 +75,28 @@ PRIOR_SCORE = 3.0
 ADOPTED_PAYERS = 3
 
 SOURCE_LIMIT = 12
+# Listings offered per search, best matches first.
+DIRECTORY_LIMIT = 8
+# Meaning (semantic.py): a cosine similarity of SEMANTIC_ZERO counts as no match and
+# SEMANTIC_FULL as a full one. A listing whose words do not match joins the search when
+# its similarity is within SEMANTIC_ADMIT_GAP of the best listing's and at least
+# SEMANTIC_ADMIT_FLOOR.
+#
+# Match strength is KEYWORD_SHARE shared words and the rest meaning; it is worth
+# RELEVANCE_WEIGHT quality points per unit, in RELEVANCE_STEPS steps, so a much better
+# match beats a somewhat better score, and on a near-tie in match quality still decides.
+#
+# Chosen on tests/search_eval (SRI-86) from a grid over all five, checked on both halves
+# of the set separately; the neighbourhood of these values scores within about one case.
+SEMANTIC_ZERO = 0.25
+SEMANTIC_FULL = 0.55
+SEMANTIC_ADMIT_FLOOR = 0.30
+SEMANTIC_ADMIT_GAP = 0.20
+KEYWORD_SHARE = 0.3
+RELEVANCE_WEIGHT = 1.0
+RELEVANCE_STEPS = 10
+# Below this match a result ranks after every real match, whatever its score.
+WEAK_MATCH = 0.2
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 25
 MAX_CANDIDATES = 50
@@ -112,9 +139,18 @@ class Candidate:
     sources: list[str] = field(default_factory=list)
     order: int = 0  # best position within any source's own relevance order
     unique_payers: int | None = None  # catalog usage: distinct payers over the last 30 days
+    document: str | None = None  # what a directory listing is matched on (semantic.document)
+    keyword: float | None = None  # share of the query's words it matches
+    similarity: float | None = None  # cosine similarity of its document to the query
+
+    def text(self) -> str:
+        return self.document or semantic.document(self.name, self.description, endpoint=self.endpoint)
 
     def merge(self, other: "Candidate") -> None:
         self.order = min(self.order, other.order)
+        # A listing's document is the richer text; scores computed on it stay with it.
+        if other.document and not self.document:
+            self.document, self.keyword, self.similarity = other.document, other.keyword, other.similarity
         if other.unique_payers is not None:
             self.unique_payers = max(self.unique_payers or 0, other.unique_payers)
         self.method = self.method or other.method
@@ -159,15 +195,26 @@ def tokens(text: str) -> list[str]:
     return [w for w in dict.fromkeys(words) if len(w) >= 3 and w not in _STOPWORDS]
 
 
-def _matches(token: str, haystack: set[str]) -> bool:
+@functools.lru_cache(maxsize=16384)
+def _haystack(text: str) -> tuple[frozenset[str], frozenset[str], tuple[str, ...]]:
+    """A text's words, their six-letter stems, and the words sorted for prefix lookups."""
+    words = frozenset(re.findall(r"[a-z0-9]+", text.lower()))
+    return words, frozenset(w[:6] for w in words), tuple(sorted(words))
+
+
+def _matches(token: str, haystack: tuple[frozenset[str], frozenset[str], tuple[str, ...]]) -> bool:
     # A shared six-letter stem matches word forms: "generation" and "generate-ics".
-    return token in haystack or any(w.startswith(token) or (len(token) >= 6 and w[:6] == token[:6]) for w in haystack)
+    words, stems, ordered = haystack
+    if token in words or (len(token) >= 6 and token[:6] in stems):
+        return True
+    index = bisect.bisect_left(ordered, token)
+    return index < len(ordered) and ordered[index].startswith(token)
 
 
 def relevance(query_tokens: list[str], text: str) -> float:
     if not query_tokens:
         return 0.0
-    haystack = set(re.findall(r"[a-z0-9]+", text.lower()))
+    haystack = _haystack(text)
     return sum(1 for t in query_tokens if _matches(t, haystack)) / len(query_tokens)
 
 
@@ -239,12 +286,12 @@ def mpp_candidates(catalog: Any, query: str, networks: Iterable[str], limit: int
             payment = endpoint.get("payment") or {}
             if payment.get("method") != "tempo" or payment.get("intent") != "charge":
                 continue  # sessions open payment channels; other methods are not payable
-            url = _endpoint(str(base).rstrip("/") + str(endpoint.get("path") or ""))
-            if not url:
-                continue
             endpoint_score = relevance(query_tokens, f"{endpoint.get('description') or ''} {endpoint.get('path') or ''}")
             score = max(endpoint_score, 0.6 * relevance(query_tokens, service_text) + 0.4 * endpoint_score)
             if score < 0.5:
+                continue
+            url = _endpoint(str(base).rstrip("/") + str(endpoint.get("path") or ""))
+            if not url:
                 continue
             payable = "tempo" in networks and str(payment.get("currency") or "").lower() == NETWORK_TOKENS["tempo"]
             scored.append((score, Candidate(
@@ -294,27 +341,58 @@ def caller_candidates(raw: Any, networks: Iterable[str]) -> list[Candidate]:
     return out
 
 
-def directory_candidates(rows: list[dict[str, Any]], query: str, limit: int = 6,
+def listing_document(row: dict[str, Any]) -> str:
+    """What a listing is matched on. A listing whose service describes itself nowhere is matched on
+    what its verified buyers found it did: the published pros of its review summary."""
+    listing_text = row.get("listing_text")
+    pros = row.get("review_pros")
+    if isinstance(pros, list) and pros and not row.get("description"):
+        listing_text = " ".join(filter(None, [listing_text, " ".join(str(p) for p in pros[:5])]))
+    return semantic.document(row.get("name"), row.get("description"), listing_text,
+                             row.get("canonical_endpoint"), row.get("directory_slug"))
+
+
+def directory_candidates(rows: list[dict[str, Any]], query: str, limit: int = DIRECTORY_LIMIT,
                          networks: dict[str, dict[str, Any]] | None = None,
-                         payer_networks: Iterable[str] = DEFAULT_NETWORKS) -> list[Candidate]:
-    """Reviewed services matching the query, with the networks CrowdCode has seen them paid or advertised on."""
+                         payer_networks: Iterable[str] = DEFAULT_NETWORKS,
+                         embedder: semantic.Embedder | None = None) -> list[Candidate]:
+    """Listed services matching the query, with the networks CrowdCode has seen them paid or advertised on.
+
+    A listing matches on its words (half the query's subject words) or, with
+    the model loaded, on meaning: a similarity within SEMANTIC_ADMIT_GAP of
+    the best listing's and at least SEMANTIC_ADMIT_FLOOR.
+    """
     query_tokens = tokens(query)
     payer_networks = tuple(payer_networks)
+    listed = [(row, endpoint) for row in rows if (endpoint := _endpoint(row.get("canonical_endpoint")))]
+    documents = [listing_document(row) for row, _ in listed]
+    similarities = embedder.similarities(query, documents) if embedder is not None else None
+    best = max(similarities, default=0.0) if similarities else 0.0
     scored = []
-    for row in rows:
-        endpoint = _endpoint(row.get("canonical_endpoint"))
-        if not endpoint:
-            continue
-        score = relevance(query_tokens, f"{row.get('name') or ''} {row.get('directory_slug') or ''} {endpoint}")
-        if score < 0.5:
+    for index, ((row, endpoint), text) in enumerate(zip(listed, documents)):
+        keyword = relevance(query_tokens, f"{text} {endpoint}")
+        similarity = similarities[index] if similarities is not None else None
+        semantic_match = similarity is not None and similarity >= max(SEMANTIC_ADMIT_FLOOR, best - SEMANTIC_ADMIT_GAP)
+        if keyword < 0.5 and not semantic_match:
             continue
         protocol = "mpp" if row.get("payment_provider") == "mppx" else "x402"
         seen = [n for n in ((networks or {}).get(row.get("id")) or {}).get("networks", []) if n in NETWORK_TOKENS]
         offers = [Offer(n, "mpp" if n == "tempo" else "x402", None, n in payer_networks) for n in seen] or [
             Offer("tempo" if protocol == "mpp" else None, protocol, None, ("tempo" in payer_networks) if protocol == "mpp" else None)]
-        scored.append((score, Candidate(endpoint=endpoint, name=row.get("name"), offers=offers, sources=["crowdcode"])))
+        candidate = Candidate(endpoint=endpoint, name=row.get("name"), description=row.get("description"),
+                              offers=offers, sources=["crowdcode"], document=text,
+                              keyword=keyword, similarity=similarity)
+        scored.append((match_strength(keyword, similarity), candidate))
     scored.sort(key=lambda item: -item[0])
     return [candidate for _, candidate in scored[:limit]]
+
+
+def match_strength(keyword: float, similarity: float | None) -> float:
+    """How well a candidate matches the query, 0 to 1: meaning blended with shared words."""
+    if similarity is None:
+        return keyword
+    meaning = min(1.0, max(0.0, (similarity - SEMANTIC_ZERO) / (SEMANTIC_FULL - SEMANTIC_ZERO)))
+    return KEYWORD_SHARE * keyword + (1 - KEYWORD_SHARE) * meaning
 
 
 class CatalogClient:
@@ -357,7 +435,12 @@ CATALOGS = CatalogClient()
 
 def directory_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
     return conn.execute(
-        "select id, name, directory_slug, canonical_endpoint, payment_provider from services"
+        """
+        select id, name, directory_slug, canonical_endpoint, payment_provider,
+               metadata->>'description' as description, metadata->>'listing_text' as listing_text,
+               review_summary->'pros' as review_pros
+        from services
+        """
     ).fetchall()
 
 
@@ -444,8 +527,15 @@ def best_offer(candidate: Candidate, networks: tuple[str, ...], balances: dict[s
     return choices[0]
 
 
+def relevance_band(strength: float) -> float:
+    return math.floor(strength * RELEVANCE_STEPS + 1e-9) / RELEVANCE_STEPS
+
+
 def rank(candidates: list[Candidate], evidence: dict[str, dict[str, Any]], networks: tuple[str, ...],
          balances: dict[str, float] | None) -> list[dict[str, Any]]:
+    """Best first. With meaning known, how well a service matches and how good it is are traded
+    off (RELEVANCE_WEIGHT quality points per unit of match); without it, quality leads as before."""
+    by_meaning = any(c.similarity is not None for c in candidates)
     ranked = []
     for candidate in candidates:
         best = best_offer(candidate, networks, balances)
@@ -454,9 +544,14 @@ def rank(candidates: list[Candidate], evidence: dict[str, dict[str, Any]], netwo
         q = quality(evidence.get(candidate.endpoint))
         below_floor = not q["unproven"] and q["score"] < SCORE_FLOOR
         adopted = (candidate.unique_payers or 0) >= ADOPTED_PAYERS
+        strength = match_strength(candidate.keyword or 0.0, candidate.similarity) if by_meaning else None
+        merit = quality_band(q) + (RELEVANCE_WEIGHT * relevance_band(strength) if strength is not None else 0.0)
+        # A catalog may return something that matches nothing asked for; its score is not a reason to show it first.
+        off_topic = strength is not None and strength < WEAK_MATCH
         key = (
             below_floor,
-            -quality_band(q),
+            off_topic,
+            -round(merit, 6),
             not adopted,
             not best["fundable"],
             best["effective_price_usd"] is None,
@@ -464,16 +559,17 @@ def rank(candidates: list[Candidate], evidence: dict[str, dict[str, Any]], netwo
             -(best["balance_usd"] or 0.0),
             candidate.order,
         )
-        ranked.append((key, candidate, q, best, below_floor))
+        ranked.append((key, candidate, q, best, below_floor, strength))
     ranked.sort(key=lambda item: item[0])
     out = []
-    for position, (_, candidate, q, best, below_floor) in enumerate(ranked, start=1):
+    for position, (_, candidate, q, best, below_floor, strength) in enumerate(ranked, start=1):
         out.append({
             "rank": position,
             "endpoint": candidate.endpoint,
             "method": candidate.method,
             "name": candidate.name,
             "description": (candidate.description or "")[:300] or None,
+            "match": round(strength, 3) if strength is not None else None,
             "quality": {**q, "score": round(q["score"], 2), "n_eff": round(q["n_eff"], 2),
                         "unique_payers_30d": candidate.unique_payers,
                         **({"below_floor": True} if below_floor else {})},
@@ -482,6 +578,25 @@ def rank(candidates: list[Candidate], evidence: dict[str, dict[str, Any]], netwo
             "sources": candidate.sources,
         })
     return out
+
+
+def score_matches(candidates: list[Candidate], query: str, embedder: semantic.Embedder | None) -> bool:
+    """Keyword and meaning for every candidate that has not been scored yet; False without the model."""
+    query_tokens = tokens(query)
+    for candidate in candidates:
+        if candidate.keyword is None:
+            candidate.keyword = relevance(query_tokens, f"{candidate.text()} {candidate.endpoint}")
+    if embedder is None:
+        return False
+    pending = [c for c in candidates if c.similarity is None]
+    similarities = embedder.similarities(query, [c.text() for c in pending])
+    if similarities is None:
+        for candidate in candidates:
+            candidate.similarity = None  # all or nothing: one scale for every candidate
+        return False
+    for candidate, similarity in zip(pending, similarities):
+        candidate.similarity = similarity
+    return True
 
 
 def parse_networks(value: Any) -> tuple[str, ...]:
@@ -504,11 +619,20 @@ def parse_balances(value: Any) -> dict[str, float] | None:
     return out or None
 
 
+_TIE_BREAKS = (
+    f"within a tie, services with {ADOPTED_PAYERS}+ distinct payers in 30 days first, then effective price on your best "
+    f"network (plus ~${TRANSFER_COST_USD:.2f} for one transfer between your own networks when that network's balance "
+    "is short), then your balance there. Catalog prices can be dynamic: inspect the endpoint for the live quote before paying."
+)
 RANKING = (
-    "Ranked by CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at the 3.0 prior; "
-    f"within a band, services with {ADOPTED_PAYERS}+ distinct payers in 30 days first), then effective price on your best network (plus ~${TRANSFER_COST_USD:.2f} for one transfer between your own "
-    "networks when that network's balance is short), then your balance there. Catalog prices can be dynamic: "
-    "inspect the endpoint for the live quote before paying."
+    "Ranked by how well each service matches the request (its meaning and words; `match`, 0-1) together with "
+    "CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at the 3.0 prior): "
+    f"a full match is worth {RELEVANCE_WEIGHT:g} quality point(s), so a much closer match beats a somewhat better score "
+    "and on a near-tie in match the better-reviewed service wins; " + _TIE_BREAKS
+)
+RANKING_BY_QUALITY = (
+    "Ranked by CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at the 3.0 prior); "
+    + _TIE_BREAKS
 )
 
 
@@ -521,8 +645,10 @@ def find_services(
     limit: Any = None,
     conn_factory: Callable[[], Any] | None = None,
     catalogs: CatalogClient | None = None,
+    embedder: semantic.Embedder | None = None,
 ) -> dict[str, Any]:
     query = (query or "").strip()[:500]
+    embedder = embedder if embedder is not None else (semantic.EMBEDDER if semantic.enabled() else None)
     if not query:
         return {"ok": False, "error": "query is required", "services": []}
     payer_networks = parse_networks(networks)
@@ -555,7 +681,7 @@ def find_services(
         try:
             with conn_factory() as conn:
                 listed = _ordered(directory_candidates(directory_rows(conn), query, networks=_service_networks(conn),
-                                                       payer_networks=payer_networks))
+                                                       payer_networks=payer_networks, embedder=embedder))
                 sources["crowdcode"] = {"ok": True, "count": len(listed)}
                 found.extend(listed)
                 merged = _merge(found)
@@ -566,17 +692,42 @@ def find_services(
     else:
         merged = _merge(found)
 
+    by_meaning = score_matches(merged, query, embedder)
     ranked = rank(merged, evidence, payer_networks, payer_balances)
     return {
         "ok": True,
         "query": query,
         "networks": list(payer_networks),
         "balances_considered": payer_balances is not None,
-        "ranking": RANKING,
+        "ranking": RANKING if by_meaning else RANKING_BY_QUALITY,
         "services": ranked[:size],
         "total_matches": len(ranked),
         "sources": sources,
     }
+
+
+def warm_search(embedder: semantic.Embedder | None = None) -> threading.Thread | None:
+    """Load the model and embed every listing in the background, so no search waits for either."""
+    if embedder is None and not semantic.enabled():
+        return None
+    embedder = embedder or semantic.EMBEDDER
+
+    def run() -> None:
+        from crowdcode.db import connect
+
+        try:
+            embedder.warm(wait=True)
+            if not embedder.ready():
+                return
+            with connect() as conn:
+                rows = directory_rows(conn)
+            embedder.encode([listing_document(row) for row in rows])
+        except Exception:
+            traceback.print_exc()
+
+    thread = threading.Thread(target=run, name="search-warmup", daemon=True)
+    thread.start()
+    return thread
 
 
 def _service_networks(conn: Any) -> dict[str, dict[str, Any]]:

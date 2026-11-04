@@ -24,7 +24,8 @@ from crowdcode.advertised import learn_advertised_payee
 from crowdcode.agent_listings import agent_service_slug, refresh_in_background
 from crowdcode.db import connect
 from crowdcode.demand import validate_request_fields
-from crowdcode.discovery import find_services
+from crowdcode.discovery import find_services, warm_search
+from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
     ServiceIdentity,
     build_identity,
@@ -1056,6 +1057,10 @@ def review_service(
         # Named after its slug for now; the agent's declared name and
         # description follow from its manifest, off the request path.
         refresh_in_background([service["id"]])
+    elif service_created:
+        # A review names an endpoint, not what it does: read that from the
+        # service's own 402, OpenAPI or landing page, off the request path.
+        fill_in_background([service["id"]])
     return _review_accepted(service["id"], row["id"], verification, service_created,
                             weight_exclusion, attested is not None)
 
@@ -1562,6 +1567,11 @@ def create_app() -> Starlette:
     # Agent-service names and descriptions, refreshed at every deploy as well
     # as nightly, so a fix reaches the listings without waiting for the cron.
     refresh_in_background()
+    # Search by meaning: load the model and embed the directory before the
+    # first search needs them; then describe listings never looked at
+    # (the cron revisits the rest) and embed what that changed.
+    warm_search()
+    fill_in_background(then=warm_search)
     mcp_app = mcp.streamable_http_app()
     app = Starlette(
         routes=[
