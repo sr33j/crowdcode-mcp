@@ -59,6 +59,29 @@ backend start, and in the nightly cron. The description is
 `/api/services` and `/api/services/{id}`. `CROWDCODE_SERVICES_ORIGIN`
 overrides the origin (default `https://crowdcode.app`).
 
+## `src/crowdcode/listing_metadata.py`
+
+Descriptions for listings that have none, read from the service itself: its
+402, OpenAPI document, mpp.dev entry, `/llms.txt` or landing page, most
+specific first. Stored as `metadata.description` (shown) and
+`metadata.listing_text` (searched), with `description_source`. Runs after a
+service's first review, at every start for listings never looked at, and in
+the nightly cron; never replaces a description an agent or a person declared.
+`scripts/fill_listing_descriptions.py` is the dry-run-first operator version.
+
+## `src/crowdcode/semantic.py`
+
+Matching by meaning for `find_service`: the pinned `minishlab/potion-base-8M`
+static-embedding model, loaded in the background, and the text each listing
+is matched on. `discovery.py` blends its similarity with keyword overlap and
+quality. `CROWDCODE_SEMANTIC_SEARCH=0` turns it off.
+
+## `src/crowdcode/search_eval.py`
+
+recall@3 and MRR for the evaluation set in `tests/search_eval/cases.json`,
+used offline by `tests/test_search_eval.py` (over `snapshot.json.gz`) and live
+by `scripts/search_eval.py --live`.
+
 ## `src/crowdcode/review_sql.py`
 
 The SQL predicates that decide which reviews are published and weighed, and

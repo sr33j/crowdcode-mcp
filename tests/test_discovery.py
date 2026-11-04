@@ -260,3 +260,83 @@ def test_word_forms_match_and_directory_entries_carry_seen_networks():
     assert [(o.network, o.payable) for o in found[0].offers] == [("tempo", True)]
     assert [(o.network, o.protocol, o.payable) for o in found[1].offers] == [("solana", "x402", True)]
     assert discovery.relevance(["transcription"], "transform json") == 0
+
+
+# --- Matching by meaning (SRI-86) ---------------------------------------------------
+
+from tests.test_semantic import embedder as toy_embedder  # noqa: E402
+
+DRIP = "https://dripstack.xyz/api/v1/publications/{publicationSlug}/{postSlug}"
+
+
+def listing(service_id, name, endpoint, description=None, listing_text=None, provider="x402"):
+    return {"id": service_id, "name": name, "directory_slug": None, "canonical_endpoint": endpoint,
+            "payment_provider": provider, "description": description, "listing_text": listing_text}
+
+
+def reviewed(endpoint, service_id, score, n_eff=1.4):
+    return {"endpoint": endpoint, "service_id": service_id, "score": score, "n_eff": n_eff,
+            "num_reviews": 1, "num_verified_reviews": 1}
+
+
+def test_a_listing_that_shares_no_words_with_the_request_is_found_by_meaning():
+    directory = [
+        listing("svc_drip", "Drip", DRIP, "Premium financial newsletter research and analyst calls."),
+        listing("svc_mail", "StableEmail", "https://stableemail.dev/api/send", "Send an email."),
+    ]
+    evidence = [reviewed(DRIP, "svc_drip", 3.8)]
+    catalogs = FakeCatalogs(cdp={"resources": [resource("https://x.example/weather", accept(BASE_NETWORK, 1000))]})
+    # No word of "sell-side memo" appears in Drip's listing; keywords alone never offered it.
+    keyword_only = find_services("sell-side memo", catalogs=catalogs, conn_factory=conn_factory(directory, evidence))
+    assert DRIP not in [s["endpoint"] for s in keyword_only["services"]]
+    result = find_services("sell-side memo", catalogs=catalogs, conn_factory=conn_factory(directory, evidence),
+                           embedder=toy_embedder())
+    assert result["services"][0]["endpoint"] == DRIP
+    assert result["services"][0]["match"] > 0
+    assert "https://stableemail.dev/api/send" not in [s["endpoint"] for s in result["services"]]
+    assert result["ranking"] == discovery.RANKING
+
+
+def test_on_a_near_tie_in_match_the_reviewed_service_beats_the_unproven_one():
+    # Both are speech services, worded alike; the reviewed 3.8 wins over the unproven 3.0 prior.
+    catalogs = FakeCatalogs(cdp={"resources": [
+        dict(resource("https://new.example/speech", accept(BASE_NETWORK, 1000)), description="Speech audio from text"),
+        dict(resource("https://known.example/speech", accept(BASE_NETWORK, 5000)), description="Speech audio from text"),
+    ]})
+    evidence = [reviewed("https://known.example/speech", "svc_known", 3.8)]
+    result = find_services("voice mp3", catalogs=catalogs, conn_factory=conn_factory(evidence=evidence),
+                           embedder=toy_embedder())
+    assert [s["endpoint"] for s in result["services"]] == ["https://known.example/speech", "https://new.example/speech"]
+
+
+def test_a_much_better_match_beats_a_better_score():
+    catalogs = FakeCatalogs(cdp={"resources": [
+        dict(resource("https://search.example/web", accept(BASE_NETWORK, 1000)), description="Search the web"),
+        dict(resource("https://voice.example/speech", accept(BASE_NETWORK, 1000)), description="Speech audio voice"),
+    ]})
+    evidence = [reviewed("https://search.example/web", "svc_search", 4.4, n_eff=6)]
+    result = find_services("voice speech audio", catalogs=catalogs, conn_factory=conn_factory(evidence=evidence),
+                           embedder=toy_embedder())
+    assert result["services"][0]["endpoint"] == "https://voice.example/speech"
+
+
+def test_without_the_model_ranking_is_quality_first_as_before():
+    class Unavailable:
+        def similarities(self, query, documents):
+            return None
+
+    catalogs = FakeCatalogs(cdp={"resources": [
+        dict(resource("https://search.example/web", accept(BASE_NETWORK, 1000)), description="Search the web"),
+        dict(resource("https://voice.example/speech", accept(BASE_NETWORK, 1000)), description="Speech audio voice"),
+    ]})
+    evidence = [reviewed("https://search.example/web", "svc_search", 4.4, n_eff=6)]
+    result = find_services("voice speech audio", catalogs=catalogs, conn_factory=conn_factory(evidence=evidence),
+                           embedder=Unavailable())
+    assert result["services"][0]["endpoint"] == "https://search.example/web"
+    assert result["services"][0]["match"] is None
+    assert result["ranking"] == discovery.RANKING_BY_QUALITY
+
+
+def test_directory_listings_match_on_their_descriptions():
+    rows = [listing("svc_v", "StableVoice", "https://stablevoice.dev/api/speech", "Convert text to natural speech, MP3 output.")]
+    assert [c.endpoint for c in discovery.directory_candidates(rows, "text to mp3")] == ["https://stablevoice.dev/api/speech"]
