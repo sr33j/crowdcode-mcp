@@ -12,6 +12,34 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "dev"))
 
 
+def _stub_hermes_credentials():
+    """Without Hermes installed (plain CI), stand in for its .env writer: the same file it writes,
+    plus the process environment, which is where the plugin's fallback read looks."""
+    try:
+        import hermes_cli.config  # noqa: F401
+        return
+    except ImportError:
+        pass
+    import types
+
+    def save_env_value(key, value):
+        home = Path(os.environ["HERMES_HOME"])
+        home.mkdir(parents=True, exist_ok=True)
+        with open(home / ".env", "a") as fh:
+            fh.write(f"{key}={value}\n")
+        os.environ[key] = value
+
+    package = types.ModuleType("hermes_cli")
+    config = types.ModuleType("hermes_cli.config")
+    config.save_env_value = save_env_value
+    package.config = config
+    sys.modules["hermes_cli"] = package
+    sys.modules["hermes_cli.config"] = config
+
+
+_stub_hermes_credentials()
+
+
 def _load_plugin():
     if "crowdcode_plugin" in sys.modules:
         return sys.modules["crowdcode_plugin"]
