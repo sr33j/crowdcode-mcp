@@ -152,20 +152,20 @@ def test_files_list_and_download(ctx, tmp_path):
     every = json.loads(t.download({"agent_id": agent, "file_ids": ["all"]}, base=tmp_path))
     names = sorted(p.name for p in target.iterdir())
     # the traversal name became a plain file inside the folder; nothing was overwritten
-    assert names == ["passwd", "report-1.md", "report-2.md", "report.md"], names
+    assert names == ["notes.txt", "report-1.md", "report-2.md", "report.md"], names
     assert all(Path(s["path"]).parent == target for s in every["downloaded"])
     assert (target / "report.md").read_bytes().startswith(b"# Report")
-    assert not (tmp_path / "etc").exists()
+    assert not (tmp_path / "outside").exists()
 
     missing = json.loads(t.download({"agent_id": agent, "file_ids": ["fl_nope"]}, base=tmp_path))
     assert missing["ok"] is False and "No such file" in missing["error"]
     text = ctx.commands["crowdcode"]("files scout")
-    assert "Files of scout" in text and "passwd" in text
+    assert "Files of scout" in text and "notes.txt" in text
 
 
 def test_safe_names():
     files = sys.modules["crowdcode_plugin.files"]
-    assert files.safe_name("../../etc/passwd") == "passwd"
+    assert files.safe_name("../../outside/notes.txt") == "notes.txt"
     assert files.safe_name("..\\\\win\\\\evil.exe") == "evil.exe"
     assert files.safe_name("..") == "file" and files.safe_name("") == "file"
     assert files.safe_name("a\x00b<c>.txt") == "a_b_c_.txt"

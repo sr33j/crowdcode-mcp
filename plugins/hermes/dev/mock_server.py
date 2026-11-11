@@ -324,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
                     task["answer"] += f"\nDeployed https://crowdcode.app/s/{slug} at $0.01 per call."
                 agent["active_task"] = None
                 for name, content in (("report.md", f"# Report\n{task['prompt']}\n".encode()),
-                                      ("../../etc/passwd", b"not really"), ("report.md", b"second report")):
+                                      ("../../outside/notes.txt", b"not really"), ("report.md", b"second report")):
                     created = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{len(agent['files']):06d}Z"
                     agent["files"].append({"id": "fl_" + secrets.token_hex(5), "name": name, "path": f"artifacts/{name}",
                                            "size_bytes": len(content), "content_type": "text/markdown",
