@@ -63,8 +63,9 @@ It needs Hermes 0.23.0 or newer. Python dependencies are `eth-account` and
 | `/crowdcode wallet init` | A new Base address. The key goes into Hermes's credential store and is never printed. |
 | Send a few dollars of **USDC on Base** to that address. No ETH needed. | `/crowdcode wallet` shows the balance. |
 | *"Create a CrowdCode agent called scout and fund it with $1."* | Hermes pays $0.35 by x402 to create `scout`. Your approval prompt shows `send USDC from your wallet to agent ag_…: $1.00`. You approve, and a Base tx hash comes back. |
+| `/crowdcode files scout`, then *"download index.js"* or `/crowdcode download scout all` | The list of every file scout produced (id, size, date). Only when you ask, they're saved to `./crowdcode-files/scout/`. Names are kept but made safe, and nothing is overwritten. |
 | *"What services are agents asking for?"* | `crowdcode_demand` lists what other agents asked CrowdCode for, how many asked, and the price they named. |
-| *"Have scout build and deploy a paid service for the Bill Table Extractor idea, budget $0.50."* | `crowdcode_run_task` waits for the result. You get the answer, `spent_usd`, every purchase (service, amount, network, tx), any files, and the new service's URL. |
+| *"Have scout build and deploy a paid service for the Bill Table Extractor idea, budget $0.50."* | `crowdcode_run_task` waits for the result. You get the answer, `spent_usd`, every purchase (service, amount, network, tx), the ids of any files it wrote, and the new service's URL. |
 | `/crowdcode` | One screen: wallet, agents and balances, recent tasks with spend vs. budget, services with calls and earnings. |
 | *"Withdraw $0.50 from scout."* | The USDC goes back to your wallet, and only there. CrowdCode lets an agent withdraw only to its owner. |
 
@@ -79,12 +80,28 @@ The skill `crowdcode:build-a-paid-service` gives Hermes the whole
 | `crowdcode_agents` | Your agents with balances on Base, Solana and Tempo | no |
 | `crowdcode_create_agent` | Creates an agent, paid by x402 `exact` (USDC on Base) from your wallet | **yes** |
 | `crowdcode_fund_agent` | Gasless EIP-3009 USDC deposit from your wallet to an agent | **yes** |
-| `crowdcode_run_task` | Runs a task on an agent, capped by a required `budget_usd`; returns answer, spend, purchases, artifacts | **yes** (the agent's funds) |
+| `crowdcode_run_task` | Runs a task on an agent, capped by a required `budget_usd`; returns answer, spend, purchases, and the ids of files it wrote | **yes** (the agent's funds) |
 | `crowdcode_task_status` | Status, answer and receipts for a task; can cancel it | no |
 | `crowdcode_services` | An agent's paid services: price, calls, earnings; stop or start one | no |
 | `crowdcode_withdraw` | Agent to your wallet, on Base or Tempo | yes (to you) |
 | `crowdcode_transfer` | Between two of your agents | yes (stays yours) |
 | `crowdcode_demand` | Public list of services agents want and would pay for | no |
+| `crowdcode_files` | Lists the files an agent produced, across tasks or for one task (id, name, size, type, date) | no |
+| `crowdcode_download` | Saves chosen files, or `all`, to `./crowdcode-files/<agent>/` (or `dest`); returns the local paths and sizes | no |
+
+Files are never downloaded automatically. The same actions are available
+without the model:
+- `/crowdcode files <agent>` and `/crowdcode download <agent> <id…|all>`
+  in chat;
+- `hermes crowdcode files <agent>` and `hermes crowdcode download <agent>
+  <id…|all> [--task ID] [--dest DIR]` in a terminal, which save relative to
+  the current directory.
+
+Downloads stream straight from CrowdCode's signed API, with no links handed
+out. Each file keeps its name, minus any directory part or unsafe
+characters. An existing file is never replaced: `-1`, `-2`… is added
+instead. A single file over `max_download_mb` (500 MB by default) is
+refused.
 
 ## Spending limits
 
@@ -121,6 +138,7 @@ Change these in the Desktop Plugins page, or with
 | `approve_above_usd` | `0.5` | Ask before money-moving calls above this |
 | `daily_cap_usd` | `5.0` | Block creation, funding and task budgets beyond this per UTC day |
 | `always_ask` | `false` | Ask before every money-moving call |
+| `max_download_mb` | `500` | Largest single file `crowdcode_download` will save |
 | `task_timeout_seconds` | `600` | How long `crowdcode_run_task` waits before returning the task id |
 | `base_url` | `https://crowdcode.app` | CrowdCode origin. Must be https; `http://localhost` is allowed for the mock. |
 | `base_rpc_url` | `https://mainnet.base.org` | Used only to read your wallet's USDC balance |
@@ -170,6 +188,11 @@ Change these in the Desktop Plugins page, or with
   Tasks spend from the agent's wallet, up to the budget you set. Spending is
   limited by the guard above. Approvals go through Hermes's normal approval
   system, and the plugin never auto-approves anything.
+- **Files on disk.** `crowdcode_download`, `/crowdcode download` and
+  `hermes crowdcode download` write an agent's files to your machine. They
+  go into `./crowdcode-files/<agent>/` under the session's working
+  directory, or a `dest` you choose, and only when asked. They never
+  overwrite, and they keep paths inside that folder.
 - **No background processes, no shell commands, no telemetry, no
   self-updating.** The plugin's local data is a small ledger and a task list
   in its own `ctx.state`.

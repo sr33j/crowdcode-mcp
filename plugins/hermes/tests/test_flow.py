@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import sys
 
 
@@ -14,7 +15,7 @@ def call(ctx, tool, **args):
 
 
 def test_registers_everything(ctx):
-    assert len(ctx.tools) == 10
+    assert len(ctx.tools) == 12
     assert "pre_tool_call" in ctx.hooks and "crowdcode" in ctx.commands and "crowdcode" in ctx.cli
     assert "build-a-paid-service" in ctx.skills
 
@@ -129,3 +130,44 @@ def test_server_error_after_sending_keeps_the_reservation(ctx, monkeypatch):
     out = call(ctx, "crowdcode_fund_agent", agent_id=agent, amount_usd=0.5)
     assert out["ok"] is False and "Do NOT retry" in out["error"]
     assert abs(policy.spent_today() - before - 0.5) < 1e-9
+
+
+def test_files_list_and_download(ctx, tmp_path):
+    ctx.commands["crowdcode"]("wallet init")
+    agent = call(ctx, "crowdcode_create_agent", name="scout")["agent_id"]
+    call(ctx, "crowdcode_fund_agent", agent_id=agent, amount_usd=1)
+    task = call(ctx, "crowdcode_run_task", agent_id=agent, budget_usd=0.25, prompt="write a report")
+    assert task["status"] == "completed" and len(task["files"]) == 3
+    assert all("url" not in f and f["id"] for f in task["files"]) and "crowdcode_download" in task["files_note"]
+    assert not (tmp_path / "crowdcode-files").exists()  # nothing downloads by itself
+
+    listed = call(ctx, "crowdcode_files", agent_id=agent)
+    assert listed["count"] == 3 and listed["files"][0]["name"] == "report.md"
+
+    tools = sys.modules["crowdcode_plugin.tools"]
+    t = tools.Tools(ctx, ctx.hooks["pre_tool_call"].__self__)
+    one = json.loads(t.download({"agent_id": agent, "file_ids": [listed["files"][-1]["id"]]}, base=tmp_path))
+    assert one["ok"] and len(one["downloaded"]) == 1
+    target = tmp_path / "crowdcode-files" / "scout"
+    every = json.loads(t.download({"agent_id": agent, "file_ids": ["all"]}, base=tmp_path))
+    names = sorted(p.name for p in target.iterdir())
+    # the traversal name became a plain file inside the folder; nothing was overwritten
+    assert names == ["notes.txt", "report-1.md", "report-2.md", "report.md"], names
+    assert all(Path(s["path"]).parent == target for s in every["downloaded"])
+    assert (target / "report.md").read_bytes().startswith(b"# Report")
+    assert not (tmp_path / "outside").exists()
+
+    missing = json.loads(t.download({"agent_id": agent, "file_ids": ["fl_nope"]}, base=tmp_path))
+    assert missing["ok"] is False and "No such file" in missing["error"]
+    text = ctx.commands["crowdcode"]("files scout")
+    assert "Files of scout" in text and "notes.txt" in text
+
+
+def test_safe_names():
+    files = sys.modules["crowdcode_plugin.files"]
+    assert files.safe_name("../../outside/notes.txt") == "notes.txt"
+    assert files.safe_name("..\\\\win\\\\evil.exe") == "evil.exe"
+    assert files.safe_name("..") == "file" and files.safe_name("") == "file"
+    assert files.safe_name("a\x00b<c>.txt") == "a_b_c_.txt"
+    assert files.safe_name("CON.txt") == "_CON.txt"
+    assert len(files.safe_name("x" * 400 + ".pdf").encode()) <= 200 and files.safe_name("x" * 400 + ".pdf").endswith(".pdf")

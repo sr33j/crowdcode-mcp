@@ -20,6 +20,8 @@ USAGE = """CrowdCode: cloud agents with their own wallets.
   /crowdcode agents             agents and their balances
   /crowdcode tasks              recent tasks started from here
   /crowdcode services <agent>   an agent's paid services and earnings
+  /crowdcode files <agent> [task-id]            files the agent produced (nothing is downloaded)
+  /crowdcode download <agent> <file-id…|all>    save them to ./crowdcode-files/<agent>/
   /crowdcode demand [keyword]   services other agents are asking for
   /crowdcode limits             spending limits and today's spend
 
@@ -31,6 +33,15 @@ def _usd(value: Any) -> str:
         return f"${float(value):,.2f}"
     except (TypeError, ValueError):
         return "-"
+
+
+def _size(value: Any) -> str:
+    n = _num(value)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} GB"
 
 
 def _num(value: Any) -> float:
@@ -68,6 +79,13 @@ class Dashboard:
                 return self.tasks_text()
             if head == "services":
                 return self.services_text(rest[0]) if rest else "Usage: /crowdcode services <agent-id>"
+            if head == "files":
+                return self.files_text(rest[0], rest[1] if len(rest) > 1 else "") if rest else \
+                    "Usage: /crowdcode files <agent> [task-id]"
+            if head == "download":
+                if len(rest) < 2:
+                    return "Usage: /crowdcode download <agent> <file-id…|all>"
+                return self.download_text(rest[0], rest[1:])
             if head == "demand":
                 return self.demand_text(" ".join(rest))
             if head == "limits":
@@ -139,6 +157,34 @@ class Dashboard:
         for s in services:
             lines.append(f"  {s.get('slug', '?'):<22} {s.get('status', ''):<8} {_usd(s.get('price_usd'))}/call  "
                          f"{s.get('calls', 0)} calls  earned {_usd(s.get('earned_usd'))}\n    {s.get('url', '')}")
+        return "\n".join(lines)
+
+    def files_text(self, agent: str, task_id: str = "") -> str:
+        agent_id = self.tools.resolve_agent(agent)
+        data = json.loads(self.tools.files({"agent_id": agent_id, "task_id": task_id}))
+        if not data.get("ok"):
+            return f"CrowdCode: {data.get('error')}"
+        files = data.get("files") or []
+        if not files:
+            return f"{agent} has no files yet."
+        lines = [f"Files of {agent}  ({len(files)}, {_size(data.get('total_bytes'))})"]
+        for f in files:
+            lines.append(f"  {str(f.get('id', '?')):<38} {_size(f.get('size_bytes')):>9}  {str(f.get('created_at', ''))[:16]:<16}  "
+                         f"{f.get('name', '')}")
+        lines.append(f"\nSave them: /crowdcode download {agent} <id…|all>")
+        return "\n".join(lines)
+
+    def download_text(self, agent: str, ids: list[str], base: Any = None) -> str:
+        agent_id = self.tools.resolve_agent(agent)
+        data = json.loads(self.tools.download({"agent_id": agent_id, "file_ids": ids}, base=base))
+        if not data.get("ok"):
+            return f"CrowdCode: {data.get('error')}"
+        saved, failed = data.get("downloaded") or [], data.get("failed") or []
+        if not saved and not failed:
+            return data.get("note") or "Nothing to download."
+        lines = [f"Saved {len(saved)} file(s), {_size(data.get('total_bytes'))}, to {data.get('directory')}"]
+        lines += [f"  {_size(s['size_bytes']):>9}  {s['path']}" for s in saved]
+        lines += [f"  failed  {f.get('name') or f.get('id')}: {f.get('error')}" for f in failed]
         return "\n".join(lines)
 
     def demand_text(self, query: str = "") -> str:

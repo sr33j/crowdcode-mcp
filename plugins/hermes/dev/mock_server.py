@@ -49,7 +49,8 @@ class State:
                  "created": time.time(), "addresses": {"base": Account.create().address,
                                                        "solana": "So1" + secrets.token_hex(20),
                                                        "tempo": Account.create().address},
-                 "balances": {"base": 0.0, "solana": 0.0, "tempo": 0.0}, "services": [], "active_task": None}
+                 "balances": {"base": 0.0, "solana": 0.0, "tempo": 0.0}, "services": [], "active_task": None,
+                 "files": []}
         self.agents[agent_id] = agent
         return agent
 
@@ -200,6 +201,25 @@ class Handler(BaseHTTPRequestHandler):
             if target is None or target["owner"] != agent["owner"]:
                 return self._send(403, {"error": "not_owner"})
             return self._move(agent, payload, target)
+        if rest == ["files"] and method == "GET":
+            from urllib.parse import parse_qs
+            q = {k: v[0] for k, v in parse_qs(urlsplit(raw_path).query).items()}
+            files = [f for f in reversed(agent["files"]) if not q.get("task_id") or f["task_id"] == q["task_id"]]
+            if q.get("before"):
+                files = [f for f in files if f["created_at"] < q["before"]]
+            limit = max(1, min(int(q.get("limit") or 200), 500))
+            return self._send(200, [{k: v for k, v in f.items() if k != "content"} for f in files[:limit]])
+        if len(rest) == 2 and rest[0] == "files" and method == "GET":
+            f = next((f for f in agent["files"] if f["id"] == rest[1]), None)
+            if f is None:
+                return self._send(404, {"error": "not_found"})
+            self.send_response(200)
+            self.send_header("content-type", f["content_type"])
+            self.send_header("content-disposition", f'attachment; filename="{f["name"]}"')
+            self.send_header("content-length", str(len(f["content"])))
+            self.end_headers()
+            self.wfile.write(f["content"])
+            return
         if rest == ["services"] and method == "GET":
             return self._send(200, [{k: v for k, v in s.items()} for s in agent["services"]])
         if len(rest) == 3 and rest[0] == "services" and rest[2] in ("stop", "start") and method == "POST":
@@ -303,10 +323,15 @@ class Handler(BaseHTTPRequestHandler):
                                               "status": "active", "calls": 0, "earned_usd": "0.000000"})
                     task["answer"] += f"\nDeployed https://crowdcode.app/s/{slug} at $0.01 per call."
                 agent["active_task"] = None
+                for name, content in (("report.md", f"# Report\n{task['prompt']}\n".encode()),
+                                      ("../../outside/notes.txt", b"not really"), ("report.md", b"second report")):
+                    created = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{len(agent['files']):06d}Z"
+                    agent["files"].append({"id": "fl_" + secrets.token_hex(5), "name": name, "path": f"artifacts/{name}",
+                                           "size_bytes": len(content), "content_type": "text/markdown",
+                                           "task_id": task["id"], "created_at": created, "content": content})
+        files = [{k: v for k, v in f.items() if k != "content"} for f in agent["files"] if f["task_id"] == task["id"]]
         return {"status": task["status"], "answer": task.get("answer"), "spent_usd": _dec(task.get("spent", 0.0)),
-                "purchases": task.get("purchases", []),
-                "artifacts": [{"name": "report.md", "url": "https://example.invalid/report.md"}]
-                if task["status"] == "completed" else []}
+                "purchases": task.get("purchases", []), "artifacts": files}
 
     def _move(self, agent: dict, payload: dict, target: dict | None) -> None:
         amount = float(payload.get("amount_usd") or 0)
