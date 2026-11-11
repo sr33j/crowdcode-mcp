@@ -68,6 +68,7 @@ jobs:
           "$RUNNER_TEMP/plugin-venv/bin/python" -m pytest -q -p no:cacheprovider
       - name: hermes plugins validate (the catalog admission check)
         run: |
-          uv venv -p 3.14 "$RUNNER_TEMP/hermes-venv"
-          VIRTUAL_ENV="$RUNNER_TEMP/hermes-venv" uv pip install "hermes-agent @ git+https://github.com/NousResearch/hermes-agent@v0.23.1"
-          HERMES_HOME="$RUNNER_TEMP/hermes-home" "$RUNNER_TEMP/hermes-venv/bin/hermes" plugins validate . --install-deps
+          # Hermes v0.23.1 exactly as its lockfile pins it.
+          git clone -q --depth 1 --branch v0.23.1 https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
+          (cd "$RUNNER_TEMP/hermes-agent" && uv sync -q --frozen --no-dev -p 3.14)
+          HERMES_HOME="$RUNNER_TEMP/hermes-home" "$RUNNER_TEMP/hermes-agent/.venv/bin/hermes" plugins validate . --install-deps
