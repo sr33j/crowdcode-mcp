@@ -50,3 +50,24 @@ jobs:
       - run: npm run typecheck -w @crowdcode/redaction -w crowdcode-mcp
       - run: npm test
       - run: npm run check:assets -w crowdcode-mcp
+  hermes-plugin:
+    # The Hermes Agent plugin in plugins/hermes (CrowdCode's wallet API).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/hermes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Tests against the local Wallet API mock (no network, no money)
+        run: |
+          uv venv -p 3.12 "$RUNNER_TEMP/plugin-venv"
+          # A release quarantine for the plugin's own dependencies.
+          VIRTUAL_ENV="$RUNNER_TEMP/plugin-venv" uv pip install --exclude-newer "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+            "eth-account>=0.13.0,<0.15" "httpx>=0.27,<1" "pytest>=8,<10"
+          "$RUNNER_TEMP/plugin-venv/bin/python" -m pytest -q -p no:cacheprovider
+      - name: hermes plugins validate (the catalog admission check)
+        run: |
+          uv venv -p 3.14 "$RUNNER_TEMP/hermes-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/hermes-venv" uv pip install "hermes-agent @ git+https://github.com/NousResearch/hermes-agent@v0.23.1"
+          HERMES_HOME="$RUNNER_TEMP/hermes-home" "$RUNNER_TEMP/hermes-venv/bin/hermes" plugins validate . --install-deps

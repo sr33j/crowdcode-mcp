@@ -1,0 +1,65 @@
+name: crowdcode
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >-
+  Cloud agents with their own wallets. Create CrowdCode agents owned by this
+  install's Base wallet, fund them with USDC, give them tasks that buy x402/MPP
+  services or deploy paid services of their own, and withdraw the earnings.
+author: Srijith Poduval
+license: MIT
+homepage: https://github.com/sr33j/crowdcode-mcp/tree/main/plugins/hermes
+tags: [payments, x402, agents, base, usdc, wallet]
+requires_hermes: ">=0.23.0"
+provides_tools:
+  - crowdcode_wallet
+  - crowdcode_agents
+  - crowdcode_create_agent
+  - crowdcode_fund_agent
+  - crowdcode_run_task
+  - crowdcode_task_status
+  - crowdcode_services
+  - crowdcode_withdraw
+  - crowdcode_transfer
+  - crowdcode_demand
+provides_hooks:
+  - pre_tool_call
+config_schema:
+  wallet_key:
+    type: secret
+    env: CROWDCODE_WALLET_KEY
+    label: Wallet private key
+    description: >-
+      Set by /crowdcode wallet init. Paste an existing Base EVM key here only if
+      you want to use that wallet instead. Stored in Hermes's credential store.
+  approve_above_usd:
+    type: float
+    default: 0.5
+    label: Ask before spending more than (USD)
+    description: Money-moving calls above this amount go through Hermes's approval prompt.
+  daily_cap_usd:
+    type: float
+    default: 5.0
+    label: Daily cap (USD)
+    description: >-
+      Agent creation, funding and task budgets above this per UTC day are
+      blocked. Withdrawals and transfers between your own agents never count.
+  always_ask:
+    type: bool
+    default: false
+    label: Ask before every money-moving call
+  base_url:
+    type: str
+    default: https://crowdcode.app
+    label: CrowdCode URL
+    description: CrowdCode origin (https only; http is accepted for localhost testing).
+  base_rpc_url:
+    type: str
+    default: https://mainnet.base.org
+    label: Base RPC URL
+    description: Used only to read this wallet's USDC balance.
+  task_timeout_seconds:
+    type: int
+    default: 600
+    label: Task wait (seconds)
+    description: How long crowdcode_run_task waits for a result before returning the task id.
