@@ -18,7 +18,7 @@ TOOLSET = "crowdcode"
 EMOJI = {"crowdcode_wallet": "👛", "crowdcode_agents": "🤖", "crowdcode_create_agent": "✨",
          "crowdcode_fund_agent": "💸", "crowdcode_run_task": "🚀", "crowdcode_task_status": "📋",
          "crowdcode_services": "🛠", "crowdcode_withdraw": "🏦", "crowdcode_transfer": "🔁",
-         "crowdcode_demand": "📈"}
+         "crowdcode_demand": "📈", "crowdcode_files": "🗂", "crowdcode_download": "⬇️"}
 
 
 def _cli_setup(parser) -> None:
@@ -30,10 +30,48 @@ def _cli_setup(parser) -> None:
     export = wallet_sub.add_parser("export", help="Print the private key (to import it into another wallet)")
     export.add_argument("--yes-show-private-key", action="store_true", dest="confirm",
                         help="Required: confirms you want the key printed in this terminal")
+    files = sub.add_parser("files", help="List the files an agent produced")
+    files.add_argument("agent", help="Agent name or id")
+    files.add_argument("--task", default="", help="Only files from this task id")
+    download = sub.add_parser("download", help="Download an agent's files into ./crowdcode-files/<agent>/")
+    download.add_argument("agent", help="Agent name or id")
+    download.add_argument("ids", nargs="+", help="File ids, or 'all'")
+    download.add_argument("--task", default="", help="With 'all': only this task's files")
+    download.add_argument("--dest", default="", help="Folder to save into")
 
 
-def _cli_handler(args) -> int:
+def _cli_files(args, dashboard: Dashboard) -> int:
+    from pathlib import Path
+
+    try:
+        if args.crowdcode_command == "files":
+            print(dashboard.files_text(args.agent, args.task))
+        else:
+            tools = dashboard.tools
+            agent_id = tools.resolve_agent(args.agent)
+            result = tools.download({"agent_id": agent_id, "file_ids": args.ids, "task_id": args.task,
+                                     "dest": args.dest}, base=Path.cwd())
+            import json
+
+            data = json.loads(result)
+            if not data.get("ok"):
+                print(f"CrowdCode: {data.get('error')}", file=sys.stderr)
+                return 1
+            for s in data.get("downloaded") or []:
+                print(f"{s['size_bytes']:>10}  {s['path']}")
+            for f in data.get("failed") or []:
+                print(f"failed  {f.get('name') or f.get('id')}: {f.get('error')}", file=sys.stderr)
+            return 1 if data.get("failed") else 0
+    except (ValueError, walletlib.WalletMissing) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cli_handler(args, dashboard: Dashboard | None = None) -> int:
     command = getattr(args, "crowdcode_command", None)
+    if command in ("files", "download") and dashboard is not None:
+        return _cli_files(args, dashboard)
     if command != "wallet":
         print(USAGE)
         return 0
@@ -74,11 +112,12 @@ def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", policy.pre_tool_call)
     for skill in sorted((Path(__file__).parent / "skills").glob("*/SKILL.md")):
         ctx.register_skill(skill.parent.name, skill)
-    ctx.register_command("crowdcode", Dashboard(tools),
+    dashboard = Dashboard(tools)
+    ctx.register_command("crowdcode", dashboard,
                          description="CrowdCode wallet, cloud agents, tasks and earnings",
                          args_hint="[wallet|agents|tasks|services|demand|limits]")
-    ctx.register_cli_command(name="crowdcode", help="CrowdCode wallet (init, address, export)",
-                             setup_fn=_cli_setup, handler_fn=_cli_handler)
+    ctx.register_cli_command(name="crowdcode", help="CrowdCode wallet and agent files",
+                             setup_fn=_cli_setup, handler_fn=lambda args: _cli_handler(args, dashboard))
 
 
 __all__ = ["register"]

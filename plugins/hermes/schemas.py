@@ -53,7 +53,8 @@ SCHEMAS = {
         ["agent_id", "prompt", "budget_usd"]),
     "crowdcode_task_status": _tool(
         "crowdcode_task_status",
-        "Check a CrowdCode task: status, answer, spend, purchases and artifacts. With cancel=true, cancel it first.",
+        "Check a CrowdCode task: status, answer, spend, purchases and the files it produced (ids; download them "
+        "with crowdcode_download). With cancel=true, cancel it first.",
         {"agent_id": _AGENT, "task_id": {"type": "string"},
          "cancel": {"type": "boolean", "description": "Cancel the task."}},
         ["agent_id", "task_id"]),
@@ -82,4 +83,21 @@ SCHEMAS = {
         "of agents asking and the price they named. Good ideas for a paid service an agent could build. Read-only.",
         {"query": {"type": "string", "description": "Optional keyword filter."},
          "limit": {"type": "integer", "description": "How many to return (default 10, max 50)."}}),
+    "crowdcode_files": _tool(
+        "crowdcode_files",
+        "List the files an agent has produced across its tasks (newest first): id, name, size, type, task. "
+        "Read-only; nothing is downloaded.",
+        {"agent_id": _AGENT, "task_id": {"type": "string", "description": "Only files from this task."}},
+        ["agent_id"]),
+    "crowdcode_download": _tool(
+        "crowdcode_download",
+        "Download an agent's files to this machine, only when the user asks for them. Saves into "
+        "./crowdcode-files/<agent name>/ under the session's working directory unless dest is given, keeps the "
+        "file names (made safe), never overwrites (adds -1, -2…), and returns the local paths and sizes.",
+        {"agent_id": _AGENT,
+         "file_ids": {"type": "array", "items": {"type": "string"},
+                      "description": 'File ids from crowdcode_files, or ["all"] for every file.'},
+         "task_id": {"type": "string", "description": "With \"all\": only that task's files."},
+         "dest": {"type": "string", "description": "Folder to save into (created if missing)."}},
+        ["agent_id", "file_ids"]),
 }

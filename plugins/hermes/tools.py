@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import httpx
 
 from . import client as clientlib
+from . import files as fileslib
 from . import guard as guardlib
 from . import wallet as walletlib
 
@@ -52,6 +54,20 @@ def _definitely_failed(exc: Exception) -> bool:
         return 400 <= exc.status < 500
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, ValueError, PermissionError,
                             walletlib.WalletMissing))
+
+
+def _file_summary(f: dict) -> dict:
+    return {k: f.get(k) for k in ("id", "name", "path", "size_bytes", "content_type", "task_id", "created_at") if k in f}
+
+
+def session_dir() -> Path:
+    """The Hermes session's working directory (not the gateway's), else the process's."""
+    try:
+        from agent.runtime_cwd import resolve_agent_cwd
+
+        return Path(resolve_agent_cwd())
+    except Exception:
+        return Path.cwd()
 
 
 def _hint_for(exc: clientlib.ApiError) -> str:
@@ -138,7 +154,7 @@ class Tools:
         return {name: self._guarded(getattr(self, name.removeprefix("crowdcode_"))) for name in (
             "crowdcode_wallet", "crowdcode_agents", "crowdcode_create_agent", "crowdcode_fund_agent",
             "crowdcode_run_task", "crowdcode_task_status", "crowdcode_services", "crowdcode_withdraw",
-            "crowdcode_transfer", "crowdcode_demand")}
+            "crowdcode_transfer", "crowdcode_demand", "crowdcode_files", "crowdcode_download")}
 
     # tools ---------------------------------------------------------------
     def wallet(self, args: dict) -> str:
@@ -302,11 +318,11 @@ class Tools:
         out = {"task_id": record["task_id"], "agent_id": record["agent_id"], "status": status,
                "answer": task.get("answer"), "spent_usd": task.get("spent_usd"),
                "budget_usd": record.get("budget_usd"), "purchases": task.get("purchases") or [],
-               "artifacts": task.get("artifacts") or []}
+               "files": [_file_summary(f) for f in task.get("artifacts") or []]}
         if task.get("waiting_for"):
             out["waiting_for"] = task["waiting_for"]
-        if out["artifacts"]:
-            out["artifacts_note"] = "Download links last 15 minutes; check the task again for fresh ones."
+        if out["files"]:
+            out["files_note"] = "Nothing was downloaded. Save them with crowdcode_download (file ids or \"all\")."
         if status not in TERMINAL:
             out["next"] = "Still running; check again with crowdcode_task_status."
         return _ok(**out)
@@ -390,3 +406,63 @@ class Tools:
         return _ok(count=len(rows), proposals=rows[:limit],
                    tip=("Each one is a service other agents asked for. To have an agent build one, load the skill "
                         "crowdcode:build-a-paid-service, or ask an agent to with crowdcode_run_task."))
+
+    def files(self, args: dict) -> str:
+        agent_id = _id(args, "agent_id")
+        task_id = _id(args, "task_id") if args.get("task_id") else ""
+        listed = fileslib.list_files(self.api(), agent_id, task_id)
+        total = sum(int(f.get("size_bytes") or 0) for f in listed)
+        return _ok(agent_id=agent_id, count=len(listed), total_bytes=total,
+                   files=[_file_summary(f) for f in listed],
+                   next="Save some or all of them with crowdcode_download." if listed else None)
+
+    def download(self, args: dict, base: Path | None = None) -> str:
+        agent_id = _id(args, "agent_id")
+        task_id = _id(args, "task_id") if args.get("task_id") else ""
+        wanted = args.get("file_ids")
+        if isinstance(wanted, str):
+            wanted = [w for w in wanted.replace(",", " ").split() if w]
+        if not wanted:
+            raise ValueError('file_ids is required: a list of file ids, or "all"')
+        api = self.api()
+        listed = fileslib.list_files(api, agent_id, task_id)
+        if [w.lower() for w in wanted] == ["all"]:
+            chosen = listed
+        else:
+            by_id = {str(f.get("id")): f for f in listed}
+            for w in wanted:
+                if not guardlib.ID_RE.match(str(w)):
+                    raise ValueError(f"{w!r} is not a valid file id")
+            missing = [w for w in wanted if str(w) not in by_id]
+            if missing:
+                return _fail(f"No such file for this agent: {', '.join(missing)}. List them with crowdcode_files.")
+            chosen = [by_id[str(w)] for w in wanted]
+        if not chosen:
+            return _ok(agent_id=agent_id, downloaded=[], note="This agent has no files yet.")
+        name = api.signed("GET", f"/agents/{agent_id}").get("name") or agent_id
+        directory = fileslib.resolve_dest(str(args.get("dest") or ""), name, base or session_dir())
+        max_bytes = int(float(self.setting("max_download_mb", 500)) * 1_000_000)
+        saved, failed = [], []
+        for f in chosen:
+            try:
+                saved.append(fileslib.download(api, agent_id, f, directory, max_bytes))
+            except (clientlib.ApiError, ValueError, OSError, httpx.HTTPError) as exc:
+                failed.append({"id": f.get("id"), "name": f.get("name"), "error": str(exc)})
+        return _ok(agent_id=agent_id, directory=str(directory), downloaded=saved, failed=failed,
+                   total_bytes=sum(s["size_bytes"] for s in saved))
+
+    def resolve_agent(self, ref: str) -> str:
+        """An agent id from an id, an id prefix or a name, among the agents this wallet owns."""
+        ref = (ref or "").strip()
+        if not ref:
+            raise ValueError("name an agent (its name or id)")
+        agents = self.api().signed("GET", "/me").get("agents") or []
+        for match in (lambda a: a.get("id") == ref,
+                      lambda a: str(a.get("name", "")).lower() == ref.lower(),
+                      lambda a: str(a.get("id", "")).startswith(ref)):
+            found = [a for a in agents if match(a)]
+            if len(found) == 1:
+                return str(found[0]["id"])
+            if len(found) > 1:
+                raise ValueError(f"'{ref}' matches more than one agent; use its id")
+        raise ValueError(f"no agent of yours is called '{ref}'")

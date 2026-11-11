@@ -1,5 +1,5 @@
 name: crowdcode
-version: 0.1.0
+version: 0.2.0
 manifest_version: 2
 api_version: 1
 description: >-
@@ -22,6 +22,8 @@ provides_tools:
   - crowdcode_withdraw
   - crowdcode_transfer
   - crowdcode_demand
+  - crowdcode_files
+  - crowdcode_download
 provides_hooks:
   - pre_tool_call
 config_schema:
@@ -58,6 +60,11 @@ config_schema:
     default: https://mainnet.base.org
     label: Base RPC URL
     description: Used only to read this wallet's USDC balance.
+  max_download_mb:
+    type: int
+    default: 500
+    label: Largest file to download (MB)
+    description: crowdcode_download refuses a single file larger than this.
   task_timeout_seconds:
     type: int
     default: 600

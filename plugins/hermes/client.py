@@ -77,6 +77,21 @@ class CrowdCode:
             raise _decode_error(response)
         return response.json() if response.content else {}
 
+    def signed_stream(self, path: str, chunk_size: int = 64 * 1024):
+        """GET ``/api/app/v1<path>`` (signed, empty body) and yield the response body in chunks."""
+        if self.wallet is None:
+            raise walletlib.WalletMissing("No CrowdCode wallet yet. Run /crowdcode wallet init to create one.")
+        url = self.api_root + path
+        parts = urlsplit(url)
+        signed_path = parts.path + (f"?{parts.query}" if parts.query else "")
+        headers = self.wallet.sign_request("GET", signed_path, b"")
+        with self._client() as http:
+            with http.stream("GET", url, headers=headers, timeout=httpx.Timeout(300.0, connect=10.0)) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    raise _decode_error(response)
+                yield from response.iter_bytes(chunk_size)
+
     # -- public -----------------------------------------------------------
     def demand(self) -> Any:
         with self._client() as http:
