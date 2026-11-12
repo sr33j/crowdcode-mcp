@@ -104,7 +104,7 @@ class Dashboard:
         lines = [f"Wallet   {data['address']}",
                  f"         {_usd(data['usdc_base']) if isinstance(data['usdc_base'], (int, float)) else data['usdc_base']} USDC on Base"]
         lines.append(f"Today    {_usd(data['spent_today_usd'])} of {_usd(data['daily_cap_usd'])} daily cap used; "
-                     f"asks before anything over {_usd(data['approve_above_usd'])}")
+                     + ("asks before every money move" if not data['approve_above_usd'] else f"asks at {_usd(data['approve_above_usd'])} or more"))
         return lines
 
     def wallet(self, init: bool = False) -> str:
@@ -198,7 +198,8 @@ class Dashboard:
 
     def limits_text(self) -> str:
         policy = self.tools.policy
-        lines = [f"Asks for approval above {_usd(policy.approve_above)} per call"
+        lines = [("Asks for approval before every money-moving call" if not policy.approve_above
+                  else f"Asks for approval at {_usd(policy.approve_above)} or more per call")
                  + (" (and for every money-moving call: always_ask is on)" if policy.always_ask else ""),
                  f"Daily cap {_usd(policy.daily_cap)}: {_usd(policy.spent_today())} used today (UTC)",
                  "Change them in the plugin settings (approve_above_usd, daily_cap_usd, always_ask)."]

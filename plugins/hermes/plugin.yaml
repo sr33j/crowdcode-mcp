@@ -1,5 +1,5 @@
 name: crowdcode
-version: 0.2.0
+version: 0.2.1
 manifest_version: 2
 api_version: 1
 description: >-
@@ -36,9 +36,12 @@ config_schema:
       you want to use that wallet instead. Stored in Hermes's credential store.
   approve_above_usd:
     type: float
-    default: 0.5
-    label: Ask before spending more than (USD)
-    description: Money-moving calls above this amount go through Hermes's approval prompt.
+    default: 0.0
+    label: Ask before moving this much or more (USD)
+    description: >-
+      Money-moving calls (create, fund, task budget, withdraw, transfer) at or
+      above this amount go through Hermes's approval prompt. The default 0 asks
+      for every one; raise it to skip prompts for smaller amounts.
   daily_cap_usd:
     type: float
     default: 5.0

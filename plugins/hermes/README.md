@@ -108,8 +108,10 @@ refused.
 The plugin registers a `pre_tool_call` hook. It runs on every money-moving
 call before the call executes:
 
-- **Above `approve_above_usd`** (default $0.50), the call goes to Hermes's own
-  approval prompt. The prompt names the amount, the destination and the
+- **Every money-moving call asks by default.** Creating, funding, task
+  budgets, withdrawals and transfers at or above `approve_above_usd` (default
+  `0`, so all of them) go to Hermes's own approval prompt. Raising the
+  threshold is how you opt out of prompts for small amounts. The prompt names the amount, the destination and the
   agent, for example `CrowdCode: send USDC from your wallet to agent ag_3f…:
   $1.00 USDC on Base; $4.65 of today's $5.00 cap left`. If no one is there to
   answer (cron, an unattended gateway), the call is denied, because Hermes
@@ -135,7 +137,7 @@ Change these in the Desktop Plugins page, or with
 
 | Key | Default | |
 |---|---|---|
-| `approve_above_usd` | `0.5` | Ask before money-moving calls above this |
+| `approve_above_usd` | `0` | Ask before money-moving calls at or above this (0 = every one) |
 | `daily_cap_usd` | `5.0` | Block creation, funding and task budgets beyond this per UTC day |
 | `always_ask` | `false` | Ask before every money-moving call |
 | `max_download_mb` | `500` | Largest single file `crowdcode_download` will save |
