@@ -38,7 +38,8 @@ def test_daily_cap_blocks_and_counts_reservations(policy):
 def test_withdrawals_never_hit_the_cap(policy):
     policy.reserve("crowdcode_fund_agent", 2.0)
     assert hook(policy, "crowdcode_withdraw", agent_id="a", amount_usd=5)["action"] == "approve"
-    assert hook(policy, "crowdcode_withdraw", agent_id="a", amount_usd=0.5) is None
+    assert hook(policy, "crowdcode_withdraw", agent_id="a", amount_usd=0.25) is None  # below a raised threshold
+    assert hook(policy, "crowdcode_withdraw", agent_id="a", amount_usd=0.5)["action"] == "approve"  # at it asks
     policy.reserve("crowdcode_withdraw", 5.0)
     assert policy.spent_today() == 2.0
 
@@ -50,8 +51,27 @@ def test_bad_amounts_block(policy):
 
 
 def test_create_uses_max_price(policy):
-    assert hook(policy, "crowdcode_create_agent", name="x") is None  # default max $0.50
-    assert hook(policy, "crowdcode_create_agent", name="x", max_price_usd=0.75)["action"] == "approve"
+    # the default max price is $0.50, which a $0.50 threshold now asks for (>=)
+    assert hook(policy, "crowdcode_create_agent", name="x")["action"] == "approve"
+    assert hook(policy, "crowdcode_create_agent", name="x", max_price_usd=0.25) is None
+
+
+def test_every_money_move_asks_by_default(plugin):
+    """Catalog review: with default settings nothing moves USDC without Hermes approval."""
+    from conftest import FakeCtx
+    import sys
+    p = sys.modules["crowdcode_plugin.guard"].Policy(FakeCtx({}))
+    assert p.approve_above == 0
+    for tool, args in [
+        ("crowdcode_create_agent", {"name": "x"}),
+        ("crowdcode_fund_agent", {"agent_id": "a", "amount_usd": 0.5}),  # the minimum deposit
+        ("crowdcode_fund_agent", {"agent_id": "a", "amount_usd": 0.01}),
+        ("crowdcode_run_task", {"agent_id": "a", "budget_usd": 0.05}),
+        ("crowdcode_withdraw", {"agent_id": "a", "amount_usd": 0.5}),
+        ("crowdcode_transfer", {"from_agent_id": "a", "to_agent_id": "b", "amount_usd": 0.5}),
+    ]:
+        decision = hook(p, tool, **args)
+        assert decision and decision["action"] == "approve", (tool, decision)
 
 
 def test_always_ask(plugin):

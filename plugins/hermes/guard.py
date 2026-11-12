@@ -2,15 +2,18 @@
 
 Two limits, both plugin settings:
 
-* ``approve_above_usd``: a money-moving call above this asks the human first,
-  through Hermes's own approval gate (``{"action": "approve"}``). The prompt names
-  the amount, the destination and the agent.
+* ``approve_above_usd``: a money-moving call **at or above** this asks the human
+  first, through Hermes's own approval gate (``{"action": "approve"}``). The
+  default is 0, so every money-moving call asks; a user who raises it opts out
+  of prompts below that amount themselves. The prompt names the amount, the
+  destination and the agent. Unattended runs (cron) get no prompt, so Hermes
+  denies those calls.
 * ``daily_cap_usd``: money that leaves the wallet or can be spent by an agent
   (creating an agent, funding one, a task budget) is summed per UTC day; a
   call that would go over the cap is blocked outright, approval or not.
 
 Withdrawals and transfers between your own agents keep money with you, so they
-ask for approval above the per-call limit but never count against the daily cap
+ask for approval like any other money move but never count against the daily cap
 (a cap must never stop you rescuing funds).
 
 The guard only reads the call's arguments and local state: no network, so it
@@ -28,7 +31,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-DEFAULT_APPROVE_ABOVE = 0.50
+DEFAULT_APPROVE_ABOVE = 0.0  # ask for every money-moving call unless the user raises it
 DEFAULT_DAILY_CAP = 5.00
 DEFAULT_CREATE_MAX = 0.50
 LEDGER_KEY = "ledger"
@@ -181,7 +184,7 @@ class Policy:
             return {"action": "block", "message": (
                 f"Blocked by the CrowdCode daily cap: ${amount:.2f} requested, ${self.remaining_today():.2f} left of "
                 f"${self.daily_cap:.2f} today. The user can raise daily_cap_usd in the plugin settings.")}
-        if self.always_ask or amount > self.approve_above + 1e-9:
+        if self.always_ask or amount >= self.approve_above - 1e-9:
             # "Always allow" then covers only this exact move (tool, amount, destination);
             # with always_ask on, every call gets its own key so nothing is remembered.
             target = "|".join(str(args.get(k, "")) for k in ("agent_id", "from_agent_id", "to_agent_id", "network", "name"))
