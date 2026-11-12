@@ -16,6 +16,7 @@
  */
 
 import { SecretRedactor } from "./secrets.js";
+import { dropTechnicalFalsePositives } from "./technical.js";
 
 export interface RedactionResult {
   text: string;
@@ -59,7 +60,11 @@ export class RedactionEngine {
         try {
           const transformers = await import("@huggingface/transformers");
           transformers.env.cacheDir = opts.cacheDir;
-          const full = (await createGuard({ device: "cpu" })) as Guard;
+          const { detectNer, loadNerClassifier } = await import("@nationaldesignstudio/rampart");
+          const classifier = await loadNerClassifier({ device: "cpu" });
+          const full = (await createGuard({
+            ner: async (text: string) => dropTechnicalFalsePositives(text, await detectNer(text, classifier)),
+          })) as Guard;
           engine.fullGuard = full;
           return true;
         } catch (err) {
