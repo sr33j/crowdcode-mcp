@@ -1,11 +1,13 @@
 name: crowdcode
-version: 0.2.1
+version: 0.3.0
 manifest_version: 2
 api_version: 1
 description: >-
-  Cloud agents with their own wallets. Create CrowdCode agents owned by this
-  install's Base wallet, fund them with USDC, give them tasks that buy x402/MPP
-  services or deploy paid services of their own, and withdraw the earnings.
+  Cloud agents with their own wallets. Use your CrowdCode account (sign in
+  with Hermes), or create agents owned by this install's Base wallet. Fund
+  them with USDC, give them tasks that buy x402/MPP services or deploy paid
+  services of their own, withdraw the earnings, and claim wallet-owned agents
+  into your account.
 author: Srijith Poduval
 license: MIT
 homepage: https://github.com/sr33j/crowdcode-mcp/tree/main/plugins/hermes
@@ -24,9 +26,34 @@ provides_tools:
   - crowdcode_demand
   - crowdcode_files
   - crowdcode_download
+  - crowdcode_claim
 provides_hooks:
   - pre_tool_call
+# Login mode: Hermes runs the OAuth (PKCE) sign-in with `hermes auth add
+# crowdcode:crowdcode`, stores and refreshes the grant, and attaches the token
+# only to crowdcode.app. The plugin never sees it.
+optional_env:
+  - name: CROWDCODE_OAUTH_CLIENT_ID
+    description: >-
+      CrowdCode's public OAuth client id for Hermes ("hermes"; PKCE, no
+      secret). /crowdcode login sets it.
+oauth:
+  - id: crowdcode
+    authorize_url: https://crowdcode.app/connect
+    token_url: https://crowdcode.app/api/app/oauth/token
+    scopes: [read, tasks, transfers, withdraw_to_main, services, files]
+    client_id_env: CROWDCODE_OAUTH_CLIENT_ID
+    hosts: [crowdcode.app]
 config_schema:
+  mode:
+    type: str
+    default: auto
+    choices: [auto, account, wallet]
+    label: Credential
+    description: >-
+      account uses your CrowdCode account (sign in with /crowdcode login);
+      wallet uses this install's wallet key; auto uses the account when Hermes
+      is signed in to one, else the wallet.
   wallet_key:
     type: secret
     env: CROWDCODE_WALLET_KEY

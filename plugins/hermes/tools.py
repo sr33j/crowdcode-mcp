@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import account as accountlib
 from . import client as clientlib
 from . import files as fileslib
 from . import guard as guardlib
@@ -22,6 +23,8 @@ WITHDRAW_NETWORKS = ("base", "tempo")  # to the owner's EVM address; Tempo only 
 MIN_MOVE_USD = 0.50  # the platform's floor for relayed deposits, withdrawals and transfers
 CREATE_WAIT_SECONDS = 90
 TERMINAL = ("completed", "failed", "cancelled")
+MODES = ("auto", "account", "wallet")
+MODE_CACHE_SECONDS = 60
 FUND_HINT = ("Send USDC on Base to this address from any exchange or wallet (Coinbase, a Base wallet, etc.). "
              "No ETH is needed: agent creation is paid with a signed x402 authorization and deposits are gasless.")
 
@@ -53,7 +56,7 @@ def _definitely_failed(exc: Exception) -> bool:
     if isinstance(exc, clientlib.ApiError):
         return 400 <= exc.status < 500
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, ValueError, PermissionError,
-                            walletlib.WalletMissing))
+                            walletlib.WalletMissing, accountlib.NotSignedIn))
 
 
 def _file_summary(f: dict) -> dict:
@@ -71,6 +74,12 @@ def session_dir() -> Path:
 
 
 def _hint_for(exc: clientlib.ApiError) -> str:
+    if exc.status == 401 and exc.error == "invalid_token":
+        return f"The CrowdCode sign-in was revoked or expired. Sign in again: {accountlib.SIGN_IN}"
+    if exc.status == 403 and exc.error == "insufficient_scope":
+        return "Your CrowdCode sign-in does not allow this. Sign in again to grant it (/crowdcode login)."
+    if exc.status == 403 and exc.error == "daily_cap":
+        return "The daily cap you set when connecting Hermes is used up for today (UTC)."
     if exc.status == 401:
         return {"expired": "The request signature expired: check this machine's clock.",
                 "replayed": "The request nonce was reused; retry once.",
@@ -87,10 +96,12 @@ def _hint_for(exc: clientlib.ApiError) -> str:
 
 
 class Tools:
-    def __init__(self, ctx: Any, policy: guardlib.Policy, transport: Any = None):
+    def __init__(self, ctx: Any, policy: guardlib.Policy, transport: Any = None, account_request: Any = None):
         self.ctx = ctx
         self.policy = policy
         self.transport = transport
+        self.account_request = account_request  # tests stand in for Hermes's credentialed request
+        self._mode: tuple[str, float] | None = None
 
     # helpers -------------------------------------------------------------
     def setting(self, key: str, default: Any) -> Any:
@@ -108,8 +119,46 @@ class Tools:
             raise ValueError("base_url must be an https:// URL (plain http is allowed only for localhost)")
         return url
 
-    def api(self, need_wallet: bool = True) -> clientlib.CrowdCode:
-        return clientlib.CrowdCode(self.base_url(), walletlib.load() if need_wallet else None, transport=self.transport)
+    def account(self) -> accountlib.AccountClient:
+        return accountlib.AccountClient(self.base_url(), self.account_request)
+
+    def mode(self, refresh: bool = False) -> str:
+        """One credential per mode: ``account`` (the Hermes sign-in) or ``wallet`` (this install's key).
+
+        ``auto`` (the default) uses the account when this profile is signed in to one, else the wallet.
+        """
+        setting = str(self.setting("mode", "auto")).lower()
+        if setting not in MODES:
+            raise ValueError(f"the mode setting must be one of {', '.join(MODES)}")
+        if setting != "auto":
+            self.policy.account_mode = setting == "account"
+            return setting
+        if not refresh and self._mode and time.time() - self._mode[1] < MODE_CACHE_SECONDS:
+            return self._mode[0]
+        mode = "wallet"
+        if accountlib.client_id_ready():
+            try:
+                self.account().signed("GET", "/me")
+                mode = "account"
+            except accountlib.NotSignedIn:
+                mode = "wallet"
+            except clientlib.ApiError as exc:
+                if exc.status != 401:
+                    raise
+        self._mode = (mode, time.time())
+        self.policy.account_mode = mode == "account"
+        return mode
+
+    def api(self, need_wallet: bool = True) -> Any:
+        """The owner API client for the current mode; ``need_wallet=False`` is the unauthenticated one."""
+        if not need_wallet:
+            return clientlib.CrowdCode(self.base_url(), None, transport=self.transport)
+        if self.mode() == "account":
+            return self.account()
+        try:
+            return clientlib.CrowdCode(self.base_url(), walletlib.load(), transport=self.transport)
+        except walletlib.WalletMissing as exc:
+            raise walletlib.WalletMissing(f"{exc} Or sign in to your CrowdCode account instead: /crowdcode login.") from None
 
     def _state_list(self, key: str) -> list:
         value = self.ctx.state.get(key, default=[]) or []
@@ -136,7 +185,9 @@ class Tools:
             try:
                 return fn(args or {})
             except walletlib.WalletMissing as exc:
-                return _fail(str(exc), hint="Run /crowdcode wallet init (or call crowdcode_wallet with init=true).")
+                return _fail(str(exc), hint="Run /crowdcode wallet init, or /crowdcode login to use your CrowdCode account.")
+            except accountlib.NotSignedIn as exc:
+                return _fail(str(exc), hint=f"Sign in with: {accountlib.SIGN_IN} (in a terminal)")
             except clientlib.ApiError as exc:
                 return _fail(f"CrowdCode API: {exc.error}", status=exc.status, hint=_hint_for(exc), detail=exc.detail)
             except PermissionError as exc:
@@ -154,7 +205,7 @@ class Tools:
         return {name: self._guarded(getattr(self, name.removeprefix("crowdcode_"))) for name in (
             "crowdcode_wallet", "crowdcode_agents", "crowdcode_create_agent", "crowdcode_fund_agent",
             "crowdcode_run_task", "crowdcode_task_status", "crowdcode_services", "crowdcode_withdraw",
-            "crowdcode_transfer", "crowdcode_demand", "crowdcode_files", "crowdcode_download")}
+            "crowdcode_transfer", "crowdcode_demand", "crowdcode_files", "crowdcode_download", "crowdcode_claim")}
 
     # tools ---------------------------------------------------------------
     def wallet(self, args: dict) -> str:
@@ -162,13 +213,20 @@ class Tools:
         if args.get("init") and not walletlib.exists():
             walletlib.create()
             created = True
+        if not args.get("init") and self.mode() == "account":
+            me = self.account().signed("GET", "/me")
+            return _ok(mode="account", main_wallet=me.get("address"), agents=len(me.get("agents") or []),
+                       connection=me.get("connection") or {}, wallet_key=walletlib.exists(),
+                       spent_today_usd=self.policy.spent_today(), daily_cap_usd=self.policy.daily_cap,
+                       approve_above_usd=self.policy.approve_above,
+                       fund=f"Fund agents from your main wallet at {self.base_url()}/wallet; only you can sign for it.")
         w = walletlib.load()
         balance = None
         try:
             balance = round(self.api(False).usdc_balance(str(self.setting("base_rpc_url", DEFAULT_RPC)), w.address), 6)
         except Exception as exc:
             balance = f"unavailable ({type(exc).__name__})"
-        return _ok(created=created, address=w.address, owner=w.caip10, usdc_base=balance,
+        return _ok(mode="wallet", created=created, address=w.address, owner=w.caip10, usdc_base=balance,
                    spent_today_usd=self.policy.spent_today(), daily_cap_usd=self.policy.daily_cap,
                    approve_above_usd=self.policy.approve_above, fund=FUND_HINT)
 
@@ -200,6 +258,9 @@ class Tools:
                 raise ValueError("instructions must be at most 4000 characters")
             body["instructions"] = str(args["instructions"])
         max_price = float(args.get("max_price_usd") or guardlib.DEFAULT_CREATE_MAX)
+        if self.mode() == "account":
+            return _fail("In account mode, create agents at crowdcode.app (your main wallet pays for them); "
+                         "only the wallet mode pays for creation from Hermes.", create_at=f"{self.base_url()}/agents")
         api = self.api()
         url = self.base_url() + "/s/crowdcode/agents"
         quote = api.quote(url, body)
@@ -255,6 +316,18 @@ class Tools:
             raise ValueError(f"the minimum relayed deposit is ${MIN_MOVE_USD:.2f}; smaller amounts can be sent as a "
                              "plain USDC transfer to the agent's Base address")
         api = self.api()
+        if isinstance(api, accountlib.AccountClient):
+            # The main wallet is the owner's alone: CrowdCode answers with the page where they approve it.
+            try:
+                api.signed("POST", f"/agents/{agent_id}/deposits", {"amount_usd": amount})
+            except clientlib.ApiError as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                if exc.error == "browser_approval_required" and detail.get("approve_url"):
+                    return _ok(agent_id=agent_id, amount_usd=amount, moved=False, approve_url=detail["approve_url"],
+                               next=f"Open {detail['approve_url']} and approve ${amount:.2f} from your main wallet. "
+                                    "Nothing moves until you do.")
+                raise
+            return _fail("CrowdCode did not return an approval link; nothing was sent.")
         agent = api.signed("GET", f"/agents/{agent_id}")
         to = (agent.get("addresses") or {}).get("base")
         if not to:
@@ -371,8 +444,8 @@ class Tools:
         result = self._money_call(entry, lambda: api.signed(
             "POST", f"/agents/{agent_id}/withdraw", {"amount_usd": amount, "network": network}))
         self.policy.settle(entry, ref=str(result.get("tx_hash") or ""))
-        return _ok(agent_id=agent_id, amount_usd=amount, network=network, to=api.wallet.address,
-                   tx_hash=result.get("tx_hash"))
+        return _ok(agent_id=agent_id, amount_usd=amount, network=network,
+                   to=result.get("to") or (api.wallet.address if api.wallet else None), tx_hash=result.get("tx_hash"))
 
     def transfer(self, args: dict) -> str:
         source, target = _id(args, "from_agent_id"), _id(args, "to_agent_id")
@@ -451,12 +524,24 @@ class Tools:
         return _ok(agent_id=agent_id, directory=str(directory), downloaded=saved, failed=failed,
                    total_bytes=sum(s["size_bytes"] for s in saved))
 
-    def resolve_agent(self, ref: str) -> str:
-        """An agent id from an id, an id prefix or a name, among the agents this wallet owns."""
-        ref = (ref or "").strip()
-        if not ref:
-            raise ValueError("name an agent (its name or id)")
-        agents = self.api().signed("GET", "/me").get("agents") or []
+    def claim(self, args: dict) -> str:
+        """Ask to move this wallet's agents into a CrowdCode account; the account's owner approves in the browser."""
+        api = clientlib.CrowdCode(self.base_url(), walletlib.load(), transport=self.transport)
+        refs = args.get("agents") or []
+        if isinstance(refs, str):
+            refs = [r for r in refs.replace(",", " ").split() if r]
+        body: dict[str, Any] = {}
+        if refs:
+            mine = api.signed("GET", "/me").get("agents") or []
+            body["agent_ids"] = [self._match(mine, str(r)) for r in refs]
+        made = api.signed("POST", "/claims", body)
+        return _ok(approve_url=made.get("approve_url"), expires_at=made.get("expires_at"), agents=made.get("agents") or [],
+                   next=("Open the link while signed in to your CrowdCode account and approve. It works once and expires "
+                         "in 15 minutes. Withdrawals from these agents will then go only to that account's main wallet. "
+                         "Afterwards run /crowdcode login so Hermes keeps controlling them through the account."))
+
+    @staticmethod
+    def _match(agents: list, ref: str) -> str:
         for match in (lambda a: a.get("id") == ref,
                       lambda a: str(a.get("name", "")).lower() == ref.lower(),
                       lambda a: str(a.get("id", "")).startswith(ref)):
@@ -466,3 +551,10 @@ class Tools:
             if len(found) > 1:
                 raise ValueError(f"'{ref}' matches more than one agent; use its id")
         raise ValueError(f"no agent of yours is called '{ref}'")
+
+    def resolve_agent(self, ref: str) -> str:
+        """An agent id from an id, an id prefix or a name, among the agents this wallet owns."""
+        ref = (ref or "").strip()
+        if not ref:
+            raise ValueError("name an agent (its name or id)")
+        return self._match(self.api().signed("GET", "/me").get("agents") or [], ref)
