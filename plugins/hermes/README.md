@@ -7,9 +7,19 @@ CrowdCode's wallet API. It lives in the `crowdcode-mcp` repository next to the
 Codex plugin (`plugins/crowdcode`) and is MIT licensed with the rest of the
 repository.
 
-This plugin gives your Hermes install a Base wallet. With it, Hermes can
-create [CrowdCode](https://crowdcode.app) cloud agents that the wallet owns.
-No email account or sign-up is involved. You fund the agents with USDC and
+Use it in one of two modes:
+
+- **Your CrowdCode account** (`/crowdcode login`). Sign Hermes in to the
+  [CrowdCode](https://crowdcode.app) account you already have, the way Claude
+  Code and Codex sign in. Hermes then drives that account's agents. No wallet
+  key is needed. You choose which agents it can use, a daily cap and an
+  expiry, and you can revoke it from your wallet page.
+- **A wallet of its own** (`/crowdcode wallet init`). Hermes gets a Base
+  wallet and creates CrowdCode cloud agents that the wallet owns. No email
+  account or sign-up is involved. You can later **claim** those agents into
+  an account (`/crowdcode claim`).
+
+In wallet mode: You fund the agents with USDC and
 give them tasks. They work in the cloud and pay for what they use: other x402
 and MPP services, models, search. They can also **deploy paid services of
 their own** that other agents pay to call. You check results, receipts and
@@ -56,7 +66,57 @@ hermes plugins install sr33j/crowdcode-mcp/plugins/hermes --enable
 It needs Hermes 0.23.0 or newer. Python dependencies are `eth-account` and
 `httpx`; Hermes asks before installing them.
 
-## Walkthrough
+## Use your CrowdCode account
+
+1. `/crowdcode login` in Hermes. It prints one command to run in a terminal:
+
+   ```bash
+   hermes auth add crowdcode:crowdcode
+   ```
+
+2. Your browser opens `crowdcode.app/connect`. Sign in with your email if
+   you aren't already. You see what Hermes asks for:
+
+   | Permission | Lets Hermes |
+   |---|---|
+   | `read` | see your agents, balances, tasks with receipts, services |
+   | `tasks` | start and cancel tasks (budgets count toward the daily cap) |
+   | `transfers` | move USDC between agents it can use |
+   | `withdraw_to_main` | withdraw to your own main wallet, nowhere else |
+   | `services` | stop and start your agents' paid services |
+   | `files` | download files your agents produced |
+
+   Choose all agents or only some, a daily cap ($5 by default) and an expiry
+   (up to 90 days), then **allow Hermes**.
+3. Back in Hermes, `/crowdcode` shows your account's agents. Ask for tasks
+   as usual.
+
+Hermes does the sign-in and keeps the tokens. This plugin never sees them: it
+calls CrowdCode through Hermes, which attaches the token only for
+`crowdcode.app`. CrowdCode enforces the permissions, the chosen agents and
+the daily cap on its side. Money from your **main wallet** never moves from
+Hermes, because only you can sign for it. When you ask Hermes to fund an
+agent, it gives you the crowdcode.app link to approve it there.
+
+`/crowdcode logout` disconnects Hermes at once. Your wallet page lists every
+connected app with a revoke button.
+
+The `mode` setting picks the credential. `auto` (the default) uses your
+account when Hermes is signed in and the wallet otherwise. `account` and
+`wallet` pin one. `/crowdcode mode` says which one is in use.
+
+## Claim wallet-owned agents into your account
+
+`/crowdcode claim` (or `/crowdcode claim scout`) signs a claim with this
+install's wallet and prints a one-time link, valid for 15 minutes. Open it
+while signed in to crowdcode.app. The page shows the agents, their balances,
+services and earnings. When you approve, they become your account's agents,
+in your sidebar like any other, with their history intact. From then on
+withdrawals go only to your account's main wallet. Both proofs are required:
+the wallet's signature and your approval while signed in. Then run
+`/crowdcode login` to keep controlling them from Hermes.
+
+## Walkthrough (wallet mode)
 
 | Do this | See this |
 |---|---|
@@ -88,6 +148,7 @@ The skill `crowdcode:build-a-paid-service` gives Hermes the whole
 | `crowdcode_demand` | Public list of services agents want and would pay for | no |
 | `crowdcode_files` | Lists the files an agent produced, across tasks or for one task (id, name, size, type, date) | no |
 | `crowdcode_download` | Saves chosen files, or `all`, to `./crowdcode-files/<agent>/` (or `dest`); returns the local paths and sizes | no |
+| `crowdcode_claim` | Signs a claim of this wallet's agents into your CrowdCode account; returns the approval link | no |
 
 Files are never downloaded automatically. The same actions are available
 without the model:
@@ -170,6 +231,14 @@ Change these in the Desktop Plugins page, or with
   `deploy_service` to put up their own paid endpoints.
 
 ## Disclosures
+
+- **Account sign-in (login mode).** The plugin declares an OAuth client in
+  `plugin.yaml` (`oauth:`; authorize at `crowdcode.app/connect`, tokens for
+  `crowdcode.app` only, PKCE with CrowdCode's public client id `hermes`).
+  Hermes runs the sign-in, stores the grant in its profile and refreshes it.
+  The plugin calls CrowdCode through Hermes's `credentialed_provider_request`
+  and never holds a token. `/crowdcode login` writes the public client id
+  (not a secret) to `CROWDCODE_OAUTH_CLIENT_ID` in the profile's `.env`.
 
 - **Stored credential.** `wallet init` generates an EVM private key. It is
   stored in Hermes's credential store (`.env` of the active profile, mode

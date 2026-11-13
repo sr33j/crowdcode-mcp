@@ -1,6 +1,6 @@
 """CrowdCode for Hermes: cloud agents with their own wallets, owned by this install's wallet.
 
-``register(ctx)`` wires ten tools, a ``pre_tool_call`` spend guard, the
+``register(ctx)`` wires thirteen tools, a ``pre_tool_call`` spend guard, the
 ``/crowdcode`` slash command and the ``hermes crowdcode`` terminal command.
 """
 from __future__ import annotations
@@ -18,7 +18,8 @@ TOOLSET = "crowdcode"
 EMOJI = {"crowdcode_wallet": "👛", "crowdcode_agents": "🤖", "crowdcode_create_agent": "✨",
          "crowdcode_fund_agent": "💸", "crowdcode_run_task": "🚀", "crowdcode_task_status": "📋",
          "crowdcode_services": "🛠", "crowdcode_withdraw": "🏦", "crowdcode_transfer": "🔁",
-         "crowdcode_demand": "📈", "crowdcode_files": "🗂", "crowdcode_download": "⬇️"}
+         "crowdcode_demand": "📈", "crowdcode_files": "🗂", "crowdcode_download": "⬇️",
+         "crowdcode_claim": "🔑"}
 
 
 def _cli_setup(parser) -> None:
@@ -30,6 +31,10 @@ def _cli_setup(parser) -> None:
     export = wallet_sub.add_parser("export", help="Print the private key (to import it into another wallet)")
     export.add_argument("--yes-show-private-key", action="store_true", dest="confirm",
                         help="Required: confirms you want the key printed in this terminal")
+    sub.add_parser("login", help="Use your CrowdCode account (prints the Hermes sign-in command)")
+    sub.add_parser("logout", help="Disconnect Hermes from your CrowdCode account")
+    claim = sub.add_parser("claim", help="Move this wallet's agents into your CrowdCode account")
+    claim.add_argument("agents", nargs="*", help="Agent names or ids (default: all)")
     files = sub.add_parser("files", help="List the files an agent produced")
     files.add_argument("agent", help="Agent name or id")
     files.add_argument("--task", default="", help="Only files from this task id")
@@ -72,6 +77,9 @@ def _cli_handler(args, dashboard: Dashboard | None = None) -> int:
     command = getattr(args, "crowdcode_command", None)
     if command in ("files", "download") and dashboard is not None:
         return _cli_files(args, dashboard)
+    if command in ("login", "logout", "claim") and dashboard is not None:
+        print(dashboard(" ".join([command, *getattr(args, "agents", [])])))
+        return 0
     if command != "wallet":
         print(USAGE)
         return 0
@@ -115,8 +123,8 @@ def register(ctx) -> None:
     dashboard = Dashboard(tools)
     ctx.register_command("crowdcode", dashboard,
                          description="CrowdCode wallet, cloud agents, tasks and earnings",
-                         args_hint="[wallet|agents|tasks|services|demand|limits]")
-    ctx.register_cli_command(name="crowdcode", help="CrowdCode wallet and agent files",
+                         args_hint="[login|claim|wallet|agents|tasks|services|files|demand|limits]")
+    ctx.register_cli_command(name="crowdcode", help="CrowdCode wallet, account sign-in, claims and agent files",
                              setup_fn=_cli_setup, handler_fn=lambda args: _cli_handler(args, dashboard))
 
 

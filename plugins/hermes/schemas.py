@@ -12,13 +12,15 @@ def _tool(name: str, description: str, properties: dict, required: list[str] | N
 SCHEMAS = {
     "crowdcode_wallet": _tool(
         "crowdcode_wallet",
-        "Show this Hermes install's CrowdCode wallet: its Base address, USDC balance (one read-only Base RPC call), "
-        "today's spending against the daily cap, and how to fund it. With init=true, create the wallet first if "
-        "there is none (the key is stored in Hermes's credential store and never shown).",
+        "Show how this Hermes install reaches CrowdCode. In wallet mode: its Base address, USDC balance (one "
+        "read-only Base RPC call), today's spending against the daily cap, and how to fund it. In account mode "
+        "(signed in with /crowdcode login): the account's main wallet, what the sign-in allows and its daily cap. "
+        "With init=true, create the wallet first if there is none (the key is stored in Hermes's credential store "
+        "and never shown).",
         {"init": {"type": "boolean", "description": "Create the wallet if it does not exist yet."}}),
     "crowdcode_agents": _tool(
         "crowdcode_agents",
-        "List the CrowdCode cloud agents this wallet owns with their USDC balances on Base, Solana and Tempo, "
+        "List the CrowdCode cloud agents this wallet (or the signed-in account) owns with their USDC balances on Base, Solana and Tempo, "
         "or show one agent in detail. Read-only.",
         {"agent_id": _AGENT}),
     "crowdcode_create_agent": _tool(
@@ -35,7 +37,8 @@ SCHEMAS = {
         "crowdcode_fund_agent",
         "Send USDC on Base from this wallet to one of its agents. Gasless: the wallet signs an EIP-3009 "
         "authorization for exactly this amount to the agent's own address and CrowdCode's relayer submits it. "
-        "Minimum $0.50.",
+        "Minimum $0.50. In account mode nothing moves from Hermes: it returns the crowdcode.app link where the "
+        "owner approves the deposit from their main wallet; give the user that link.",
         {"agent_id": _AGENT, "amount_usd": {"type": "number", "description": "USDC to send, e.g. 1.00."}},
         ["agent_id", "amount_usd"]),
     "crowdcode_run_task": _tool(
@@ -68,7 +71,8 @@ SCHEMAS = {
     "crowdcode_withdraw": _tool(
         "crowdcode_withdraw",
         "Withdraw USDC from an agent. It can only go to this wallet (the agent's owner), never anywhere else. "
-        "Minimum $0.50.",
+        "Minimum $0.50. In account mode nothing moves from Hermes: it returns the crowdcode.app link where the "
+        "owner approves the deposit from their main wallet; give the user that link.",
         {"agent_id": _AGENT, "amount_usd": {"type": "number"},
          "network": {"type": "string", "enum": ["base", "tempo"], "description": "Default base."}},
         ["agent_id", "amount_usd"]),
@@ -100,4 +104,12 @@ SCHEMAS = {
          "task_id": {"type": "string", "description": "With \"all\": only that task's files."},
          "dest": {"type": "string", "description": "Folder to save into (created if missing)."}},
         ["agent_id", "file_ids"]),
+    "crowdcode_claim": _tool(
+        "crowdcode_claim",
+        "Move agents this wallet owns into the user's CrowdCode account (claim). Signs a claim request with the "
+        "wallet and returns a one-time link (valid 15 minutes) that the user opens while signed in to "
+        "crowdcode.app to approve. Nothing moves until they approve; after that the agents belong to the account "
+        "and withdraw only to its main wallet. Moves no money.",
+        {"agents": {"type": "array", "items": {"type": "string"},
+                    "description": "Agent names or ids; omit for every agent this wallet owns."}}),
 }

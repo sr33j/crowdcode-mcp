@@ -65,6 +65,9 @@ def today() -> str:
 class Policy:
     def __init__(self, ctx: Any):
         self._ctx = ctx
+        # Set by the tools once they know the mode. In account mode funding moves nothing from Hermes:
+        # CrowdCode answers with the page where the owner approves it from the main wallet.
+        self.account_mode = False
 
     def _get(self, key: str, default: Any = None) -> Any:
         return self._ctx.get_config(key, default=default)
@@ -170,6 +173,10 @@ class Policy:
         if spec is None:
             return None
         field, counts, verb = spec
+        if self.account_mode and tool_name == "crowdcode_fund_agent":
+            return None
+        if self.account_mode and tool_name == "crowdcode_withdraw":
+            verb = "withdraw from agent to your CrowdCode main wallet"
         for key in ID_FIELDS:
             if key in args and not ID_RE.match(str(args.get(key) or "")):
                 return {"action": "block", "message": f"{tool_name}: {key} is not a valid CrowdCode id."}

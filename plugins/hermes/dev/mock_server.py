@@ -42,6 +42,9 @@ class State:
         self.tasks: dict[str, dict] = {}
         self.used_auth_nonces: set[str] = set()
         self.wallet_balance: dict[str, float] = {}  # owner address -> fake USDC
+        # Login mode: bearer token -> the account's main wallet address (agents are owned by that address here).
+        self.bearers: dict[str, str] = {}
+        self.claims: dict[str, dict] = {}  # code -> {wallet, agent_ids}
 
     def new_agent(self, owner: str, name: str) -> dict:
         agent_id = "ag_" + secrets.token_hex(5)
@@ -111,6 +114,15 @@ class Handler(BaseHTTPRequestHandler):
     # -- auth --------------------------------------------------------------
     def _owner(self, method: str, raw_path: str, body: bytes) -> str | None:
         h = self.headers
+        self.bearer = False
+        auth = h.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            owner = STATE.bearers.get(auth[7:].strip())
+            if owner is None:
+                self._send(401, {"error": "invalid_token"})
+                return None
+            self.bearer = True
+            return owner
         address, ts, nonce, sig = (h.get("x-crowdcode-address"), h.get("x-crowdcode-timestamp"),
                                    h.get("x-crowdcode-nonce"), h.get("x-crowdcode-signature"))
         if not all((address, ts, nonce, sig)) or not address.lower().startswith("eip155:8453:0x"):
@@ -171,7 +183,30 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["me"]:
             mine = [{"id": a["id"], "name": a["name"], "status": a["status"]} for a in STATE.agents.values()
                     if a["owner"].split(":")[2].lower() == owner.lower()]
-            return self._send(200, {"address": f"eip155:8453:{owner}", "agents": mine})
+            me = {"address": f"eip155:8453:{owner}", "agents": mine}
+            if self.bearer:
+                me["connection"] = {"client": "hermes", "scopes": ["read", "tasks", "transfers", "withdraw_to_main", "services", "files"],
+                                    "agents": "all", "daily_cap_usd": "5.000000", "spent_today_usd": "0.000000",
+                                    "expires_at": "2026-12-13T00:00:00.000Z"}
+            return self._send(200, me)
+        if parts == ["connection", "revoke"] and method == "POST":
+            if not self.bearer:
+                return self._send(403, {"error": "app_only"})
+            token = (self.headers.get("authorization") or "")[7:].strip()
+            STATE.bearers.pop(token, None)
+            return self._send(200, {"revoked": True})
+        if parts == ["claims"] and method == "POST":
+            if self.bearer:
+                return self._send(403, {"error": "wallet_only"})
+            mine = [a for a in STATE.agents.values() if a["owner"].split(":")[2].lower() == owner.lower()]
+            wanted = payload.get("agent_ids") or [a["id"] for a in mine]
+            if not wanted or any(i not in {a["id"] for a in mine} for i in wanted):
+                return self._send(403, {"error": "not_owner"})
+            code = "cc_claim_" + secrets.token_urlsafe(32)[:43]
+            STATE.claims[code] = {"wallet": owner, "agent_ids": wanted}
+            return self._send(201, {"claim_id": secrets.token_hex(8), "code": code, "approve_url": f"https://crowdcode.app/claim#{code}",
+                                    "expires_at": "2026-11-13T12:15:00.000Z",
+                                    "agents": [{"id": a["id"], "name": a["name"]} for a in mine if a["id"] in wanted]})
         if parts[0] != "agents" or len(parts) < 2:
             return self._send(404, {"error": "not_found"})
         agent = self._agent(owner, parts[1])
@@ -181,6 +216,9 @@ class Handler(BaseHTTPRequestHandler):
         if not rest and method == "GET":
             return self._send(200, self._agent_view(agent))
         if rest == ["deposits"] and method == "POST":
+            if self.bearer:
+                url = f"https://crowdcode.app/agent/{agent['id']}?fund=1"
+                return self._send(409, {"error": "browser_approval_required", "approve_url": url, "message": f"Open {url}"})
             return self._deposit(agent, owner, payload)
         if rest == ["tasks"] and method == "POST":
             return self._start_task(agent, payload)
@@ -195,7 +233,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             return self._send(200, self._task_view(agent, task))
         if rest == ["withdraw"] and method == "POST":
-            return self._move(agent, payload, None)
+            if self.bearer and payload.get("network", "base") != "base":
+                return self._send(409, {"error": "bridge_required"})
+            return self._move(agent, payload, None, to=owner if self.bearer else None)
         if rest == ["transfer"] and method == "POST":
             target = STATE.agents.get(str(payload.get("to_agent_id")))
             if target is None or target["owner"] != agent["owner"]:
@@ -333,7 +373,7 @@ class Handler(BaseHTTPRequestHandler):
         return {"status": task["status"], "answer": task.get("answer"), "spent_usd": _dec(task.get("spent", 0.0)),
                 "purchases": task.get("purchases", []), "artifacts": files}
 
-    def _move(self, agent: dict, payload: dict, target: dict | None) -> None:
+    def _move(self, agent: dict, payload: dict, target: dict | None, to: str | None = None) -> None:
         amount = float(payload.get("amount_usd") or 0)
         network = payload.get("network", "base")
         if amount < 0.5:
@@ -343,7 +383,15 @@ class Handler(BaseHTTPRequestHandler):
         agent["balances"][network] -= amount
         if target is not None:
             target["balances"][network] += amount
-        return self._send(200, {"tx_hash": "0x" + secrets.token_hex(32)})
+        return self._send(200, {"tx_hash": "0x" + secrets.token_hex(32), **({"to": to} if to else {})})
+
+
+def approve_claim(code: str, main_wallet: str) -> list[str]:
+    """What the signed-in owner's approval on /claim does: the agents move to the account."""
+    claim = STATE.claims.pop(code)
+    for agent_id in claim["agent_ids"]:
+        STATE.agents[agent_id]["owner"] = f"eip155:8453:{main_wallet}"
+    return claim["agent_ids"]
 
 
 def serve(port: int = 0) -> ThreadingHTTPServer:

@@ -9,12 +9,17 @@ import json
 import time
 from typing import Any
 
+from . import account as accountlib
 from . import client as clientlib
 from . import wallet as walletlib
 
 USAGE = """CrowdCode: cloud agents with their own wallets.
 
-  /crowdcode                    wallet, agents, balances, recent tasks, services
+  /crowdcode                    wallet or account, agents, balances, recent tasks, services
+  /crowdcode login              use your CrowdCode account (sign in once with Hermes; no wallet key needed)
+  /crowdcode logout             disconnect Hermes from your CrowdCode account
+  /crowdcode claim [agent…]     move this wallet's agents into your CrowdCode account
+  /crowdcode mode               which credential is in use: account or wallet
   /crowdcode wallet             address, USDC balance and how to fund it
   /crowdcode wallet init        create this install's wallet (key kept in Hermes's credential store)
   /crowdcode agents             agents and their balances
@@ -73,6 +78,14 @@ class Dashboard:
                 return USAGE
             if head == "wallet":
                 return self.wallet(init=bool(rest and rest[0].lower() == "init"))
+            if head == "login":
+                return self.login()
+            if head == "logout":
+                return self.logout()
+            if head == "claim":
+                return self.claim(rest)
+            if head == "mode":
+                return self.mode_text()
             if head == "agents":
                 return self.agents_text(self._agents())
             if head == "tasks":
@@ -92,8 +105,11 @@ class Dashboard:
                 return self.limits_text()
             return f"Unknown subcommand '{head}'.\n\n{USAGE}"
         except walletlib.WalletMissing:
-            return ("No CrowdCode wallet yet.\n\n  /crowdcode wallet init   creates one for this Hermes install.\n\n"
+            return ("No CrowdCode wallet yet.\n\n  /crowdcode wallet init   creates one for this Hermes install.\n"
+                    "  /crowdcode login         or use your CrowdCode account instead.\n\n"
                     "Its key is stored through Hermes's credential store (CROWDCODE_WALLET_KEY) and never printed.")
+        except accountlib.NotSignedIn as exc:
+            return f"Not signed in to a CrowdCode account: {exc}\n\nSign in from a terminal: {accountlib.SIGN_IN}"
         except clientlib.ApiError as exc:
             return f"CrowdCode API error: {exc.status} {exc.error}"
         except Exception as exc:
@@ -101,6 +117,16 @@ class Dashboard:
 
     # sections ------------------------------------------------------------
     def _wallet_lines(self, data: dict) -> list[str]:
+        if data.get("mode") == "account":
+            c = data.get("connection") or {}
+            agents = c.get("agents")
+            lines = [f"Account  signed in through Hermes; main wallet {str(data.get('main_wallet') or 'not set up yet').split(':')[-1]}",
+                     f"         allows {' '.join(c.get('scopes') or [])}; agents {'all' if agents == 'all' else len(agents or [])}; "
+                     f"CrowdCode cap {_usd(c.get('daily_cap_usd'))}/day, {_usd(c.get('spent_today_usd'))} used; "
+                     f"until {str(c.get('expires_at') or '')[:10]}"]
+            lines.append(f"Today    {_usd(data['spent_today_usd'])} of {_usd(data['daily_cap_usd'])} local cap used; "
+                         + ("asks before every money move" if not data['approve_above_usd'] else f"asks at {_usd(data['approve_above_usd'])} or more"))
+            return lines
         lines = [f"Wallet   {data['address']}",
                  f"         {_usd(data['usdc_base']) if isinstance(data['usdc_base'], (int, float)) else data['usdc_base']} USDC on Base"]
         lines.append(f"Today    {_usd(data['spent_today_usd'])} of {_usd(data['daily_cap_usd'])} daily cap used; "
@@ -116,6 +142,65 @@ class Dashboard:
             raise walletlib.WalletMissing(data.get("error"))
         head = ["Created your CrowdCode wallet.", ""] if data.get("created") else []
         return "\n".join(head + self._wallet_lines(data) + ["", "Fund it: " + data["fund"]])
+
+    # account -------------------------------------------------------------
+    def login(self) -> str:
+        wrote = accountlib.prepare_client_id()
+        if not wrote:
+            try:
+                if self.tools.mode(refresh=True) == "account" or self.tools.setting("mode", "auto") == "account":
+                    data = json.loads(self.tools.wallet({}))
+                    if data.get("ok") and data.get("mode") == "account":
+                        return "\n".join(["Signed in to your CrowdCode account.", ""] + self._wallet_lines(data))
+            except Exception:
+                pass
+        return "\n".join([
+            "Sign Hermes in to your CrowdCode account from a terminal (not this chat):",
+            "",
+            f"  {accountlib.SIGN_IN}",
+            "",
+            "It opens crowdcode.app/connect. Sign in there with your email, choose which agents Hermes may use,",
+            "a daily cap and an expiry, and approve. Hermes keeps the sign-in; this plugin never sees the token.",
+            "Then come back and run /crowdcode: your account's agents are here, no wallet key needed.",
+        ] + (["", f"(Saved CrowdCode's public client id for Hermes as {accountlib.CLIENT_ID_ENV}.)"] if wrote else []))
+
+    def logout(self) -> str:
+        revoked = False
+        try:
+            self.tools.account().signed("POST", "/connection/revoke", {})
+            revoked = True
+        except accountlib.NotSignedIn:
+            pass
+        except clientlib.ApiError as exc:
+            if exc.status != 401:
+                raise
+        self.tools._mode = None
+        return ("Disconnected Hermes from your CrowdCode account; its tokens stopped working.\n" if revoked
+                else "Hermes was not signed in to a CrowdCode account.\n") + \
+            f"Remove the local sign-in too: {accountlib.SIGN_OUT}"
+
+    def claim(self, refs: list[str]) -> str:
+        data = json.loads(self.tools.claim({"agents": refs}))
+        if not data.get("ok"):
+            return f"CrowdCode: {data.get('error')}" + (f"\n{data['hint']}" if data.get("hint") else "")
+        names = ", ".join(a.get("name", a.get("id", "?")) for a in data.get("agents") or [])
+        return "\n".join([
+            f"Claim {names} into your CrowdCode account:",
+            "",
+            f"  {data.get('approve_url')}",
+            "",
+            "Open it while signed in to crowdcode.app and approve. It works once and expires in 15 minutes.",
+            "After that the agents belong to your account and withdraw only to its main wallet.",
+            "Then run /crowdcode login so Hermes keeps controlling them through the account.",
+        ])
+
+    def mode_text(self) -> str:
+        mode = self.tools.mode(refresh=True)
+        setting = self.tools.setting("mode", "auto")
+        if mode == "account":
+            return f"Using your CrowdCode account (Hermes sign-in). mode setting: {setting}."
+        return (f"Using this install's wallet. mode setting: {setting}. "
+                + ("Sign in to an account with /crowdcode login." if setting == "auto" else ""))
 
     def _agents(self) -> list[dict]:
         data = json.loads(self.tools.agents({}))

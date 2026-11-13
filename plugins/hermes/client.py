@@ -20,7 +20,7 @@ import httpx
 
 from . import wallet as walletlib
 
-USER_AGENT = "crowdcode-hermes/0.1"
+USER_AGENT = "crowdcode-hermes/0.3"
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 

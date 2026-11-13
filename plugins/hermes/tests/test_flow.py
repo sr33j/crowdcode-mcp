@@ -15,7 +15,7 @@ def call(ctx, tool, **args):
 
 
 def test_registers_everything(ctx):
-    assert len(ctx.tools) == 12
+    assert len(ctx.tools) == 13
     assert "pre_tool_call" in ctx.hooks and "crowdcode" in ctx.commands and "crowdcode" in ctx.cli
     assert "build-a-paid-service" in ctx.skills
 
