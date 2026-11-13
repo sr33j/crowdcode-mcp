@@ -1,6 +1,6 @@
 [project]
 name = "crowdcode-hermes"
-version = "0.3.0"
+version = "0.3.1"
 description = "CrowdCode plugin for Hermes Agent: cloud agents with their own wallets"
 readme = "README.md"
 license = "MIT"

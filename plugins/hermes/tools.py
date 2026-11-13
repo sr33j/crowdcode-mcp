@@ -64,13 +64,7 @@ def _file_summary(f: dict) -> dict:
 
 
 def session_dir() -> Path:
-    """The Hermes session's working directory (not the gateway's), else the process's."""
-    try:
-        from agent.runtime_cwd import resolve_agent_cwd
-
-        return Path(resolve_agent_cwd())
-    except Exception:
-        return Path.cwd()
+    return fileslib.session_dir()
 
 
 def _hint_for(exc: clientlib.ApiError) -> str:
@@ -481,7 +475,7 @@ class Tools:
                         "crowdcode:build-a-paid-service, or ask an agent to with crowdcode_run_task."))
 
     def files(self, args: dict) -> str:
-        agent_id = _id(args, "agent_id")
+        agent_id = self.resolve_agent(_id(args, "agent_id"))
         task_id = _id(args, "task_id") if args.get("task_id") else ""
         listed = fileslib.list_files(self.api(), agent_id, task_id)
         total = sum(int(f.get("size_bytes") or 0) for f in listed)
@@ -489,8 +483,9 @@ class Tools:
                    files=[_file_summary(f) for f in listed],
                    next="Save some or all of them with crowdcode_download." if listed else None)
 
-    def download(self, args: dict, base: Path | None = None) -> str:
-        agent_id = _id(args, "agent_id")
+    def download(self, args: dict, base: Path | None = None, allow_outside: bool = False) -> str:
+        """``allow_outside`` is only for a dest the human typed (``hermes crowdcode download --dest``)."""
+        agent_id = self.resolve_agent(_id(args, "agent_id"))
         task_id = _id(args, "task_id") if args.get("task_id") else ""
         wanted = args.get("file_ids")
         if isinstance(wanted, str):
@@ -513,7 +508,15 @@ class Tools:
         if not chosen:
             return _ok(agent_id=agent_id, downloaded=[], note="This agent has no files yet.")
         name = api.signed("GET", f"/agents/{agent_id}").get("name") or agent_id
-        directory = fileslib.resolve_dest(str(args.get("dest") or ""), name, base or session_dir())
+        root = base or session_dir()
+        target, inside = fileslib.plan_dest(str(args.get("dest") or ""), name, root)
+        if not inside and not allow_outside and not fileslib.consume_approval(target):
+            return _fail(f"Not saving to {target}: it is outside this session's folder ({Path(root).resolve()}) "
+                         "and was not approved. Leave dest empty to use ./crowdcode-files/<agent>/.")
+        try:
+            directory = fileslib.prepare_dest(target)
+        except PermissionError as exc:
+            return _fail(str(exc))
         max_bytes = int(float(self.setting("max_download_mb", 500)) * 1_000_000)
         saved, failed = [], []
         for f in chosen:
