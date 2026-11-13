@@ -103,6 +103,28 @@ characters. An existing file is never replaced: `-1`, `-2`… is added
 instead. A single file over `max_download_mb` (500 MB by default) is
 refused.
 
+**Where files may go.** The model can only save into the session's working
+directory: `./crowdcode-files/<agent>/` by default, or a `dest` inside that
+directory.
+- **Outside it,** whether an absolute path, `~/…` or `../…`, the call goes
+  through the plugin's `pre_tool_call` hook to Hermes's approval prompt,
+  which names the folder. The download runs only if that approval was given
+  for that exact folder. Cron and unattended runs fail closed. One-shot `-z`
+  runs follow your `approvals.single_query_mode` setting.
+- **Never, approved or not:**
+  - before creating a folder, and again before each file, the plugin checks
+    the path with Hermes's own `agent.file_safety.get_write_denied_error`,
+    the same check Hermes's file tools use (credential files such as
+    `~/.ssh/*` and `.env`, and Hermes's runtime). A folder whose files would
+    be refused, such as `~/.ssh`, is refused before anything is created;
+  - nothing is ever written inside Hermes's home (`HERMES_HOME`, which
+    includes the plugins folder), or into autostart and service folders
+    (`~/.config/autostart`, `~/.config/systemd`, `~/Library/LaunchAgents`,
+    `~/Library/LaunchDaemons`, the Windows Startup folder, `/etc`).
+- **A folder you type yourself** with `hermes crowdcode download --dest DIR`
+  in a terminal may be outside the current directory. It still gets the
+  same checks.
+
 ## Spending limits
 
 The plugin registers a `pre_tool_call` hook. It runs on every money-moving
@@ -193,8 +215,11 @@ Change these in the Desktop Plugins page, or with
 - **Files on disk.** `crowdcode_download`, `/crowdcode download` and
   `hermes crowdcode download` write an agent's files to your machine. They
   go into `./crowdcode-files/<agent>/` under the session's working
-  directory, or a `dest` you choose, and only when asked. They never
-  overwrite, and they keep paths inside that folder.
+  directory (or a `dest` inside it), and only when asked. A `dest` the model
+  picks outside that directory needs your approval in Hermes's prompt.
+  Hermes's protected paths, Hermes's home and autostart folders are always
+  refused. Downloads never overwrite, and each file stays inside the chosen
+  folder.
 - **No background processes, no shell commands, no telemetry, no
   self-updating.** The plugin's local data is a small ledger and a task list
   in its own `ctx.state`.

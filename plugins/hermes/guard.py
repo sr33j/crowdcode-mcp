@@ -29,6 +29,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 DEFAULT_APPROVE_ABOVE = 0.0  # ask for every money-moving call unless the user raises it
@@ -161,11 +162,13 @@ class Policy:
         try:
             return self._decide(tool_name, args or {})
         except Exception as exc:  # a policy hook must decide, never crash: fail closed
-            if tool_name in MONEY_TOOLS:
-                return {"action": "block", "message": f"CrowdCode spend guard could not check this call ({exc}); blocked."}
+            if tool_name in MONEY_TOOLS or tool_name == "crowdcode_download":
+                return {"action": "block", "message": f"CrowdCode guard could not check this call ({exc}); blocked."}
             return None
 
     def _decide(self, tool_name: str, args: dict) -> dict | None:
+        if tool_name == "crowdcode_download":
+            return self._download_dest(args)
         spec = MONEY_TOOLS.get(tool_name)
         if spec is None:
             return None
@@ -193,6 +196,26 @@ class Policy:
             return {"action": "approve", "message": self.summary(tool_name, args, amount, verb),
                     "rule_key": f"crowdcode:{tool_name}:{scope}"}
         return None
+
+    def _download_dest(self, args: dict) -> dict | None:
+        """Downloads stay in the session folder; a folder outside it needs the human, Hermes-protected paths never."""
+        from . import files as fileslib
+
+        dest = str(args.get("dest") or "").strip()
+        root = fileslib.session_dir()
+        target, inside = fileslib.plan_dest(dest, "agent", root)
+        if dest:
+            denied = fileslib.dest_denied(target)
+            if denied:
+                return {"action": "block", "message": f"crowdcode_download: {denied}"}
+        if inside:
+            return None
+        fileslib.note_approval_requested(target)
+        agent = clean(args.get("agent_id", "?"), 64)
+        which = "all files" if [str(i).lower() for i in (args.get("file_ids") or [])] == ["all"] else "files"
+        return {"action": "approve", "rule_key": f"crowdcode:download:{uuid.uuid4().hex}",
+                "message": (f"CrowdCode: save {which} from agent {agent} to {clean(str(target), 160)}, "
+                            f"outside this session's folder {clean(str(Path(root).resolve()), 120)}")}
 
     def summary(self, tool_name: str, args: dict, amount: float, verb: str) -> str:
         agent = clean(args.get("agent_id") or args.get("from_agent_id") or "", 64)

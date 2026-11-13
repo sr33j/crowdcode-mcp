@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,112 @@ def safe_name(name: object, fallback: str = "file") -> str:
     return text
 
 
+def session_dir() -> Path:
+    """The Hermes session's working directory (not the gateway's), else the process's."""
+    try:
+        from agent.runtime_cwd import resolve_agent_cwd
+
+        return Path(resolve_agent_cwd())
+    except Exception:
+        return Path.cwd()
+
+
+PROBE = ".crowdcode-write-check"
+
+
+def _never_roots() -> list[Path]:
+    """Folders a download never writes into, approved or not: Hermes's own home and autostart/service folders."""
+    home = Path.home()
+    roots = [home / ".config" / "autostart", home / ".config" / "systemd", home / "Library" / "LaunchAgents",
+             home / "Library" / "LaunchDaemons", Path("/etc"), Path("/Library/LaunchAgents"),
+             Path("/Library/LaunchDaemons")]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        roots.append(Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup")
+    try:
+        from hermes_constants import get_hermes_home
+
+        roots.append(Path(get_hermes_home()))
+    except Exception:  # outside Hermes: the same default it uses
+        roots.append(Path(os.environ.get("HERMES_HOME") or home / ".hermes"))
+    return [r.resolve() for r in roots]
+
+
+def write_denied(path: Path | str) -> str | None:
+    """Why ``path`` must not be written, or None.
+
+    First Hermes's own policy, ``agent.file_safety.get_write_denied_error`` (the check its file
+    tools apply: credential and key files, ``.env`` files, Hermes's own runtime), then the
+    folders in ``_never_roots``. A check that errors refuses the write.
+    """
+    try:
+        resolved = Path(path).resolve()
+        for root in _never_roots():
+            if resolved == root or root in resolved.parents:
+                return f"Write denied: '{path}' is inside {root}, where downloads are never saved."
+    except Exception as exc:
+        return f"Write denied: could not check '{path}' ({type(exc).__name__}: {exc})."
+    try:
+        from agent.file_safety import get_write_denied_error
+    except ImportError:  # outside Hermes (plain tests); the rest of the checks still apply
+        return None
+    try:
+        return get_write_denied_error(str(path))
+    except Exception as exc:
+        return f"Write denied: could not check '{path}' ({type(exc).__name__}: {exc})."
+
+
+def dest_denied(directory: Path) -> str | None:
+    """A folder is refused if writing it, or a file inside it, would be: some folders are only protected per file."""
+    return write_denied(directory) or write_denied(directory / PROBE)
+
+
+def plan_dest(dest: str, agent_name: str, base: Path) -> tuple[Path, bool]:
+    """The folder files would be saved into, fully resolved, and whether it is inside ``base``."""
+    root = Path(base).resolve()
+    if dest:
+        target = Path(os.path.expanduser(str(dest)))
+        target = target if target.is_absolute() else root / target
+    else:
+        target = root / DEFAULT_DIR / safe_name(agent_name, "agent")
+    target = target.resolve()  # follows symlinks in the parts that exist
+    return target, (target == root or root in target.parents)
+
+
+# Folders outside the session directory that the human approved through the pre_tool_call
+# prompt, keyed by resolved path. The download handler consumes one; nothing else adds them.
+_APPROVED: dict[str, float] = {}
+_APPROVED_LOCK = threading.Lock()
+APPROVAL_TTL = 600.0
+
+
+def note_approval_requested(target: Path) -> None:
+    with _APPROVED_LOCK:
+        now = time.time()
+        for key in [k for k, at in _APPROVED.items() if now - at > APPROVAL_TTL]:
+            _APPROVED.pop(key, None)
+        _APPROVED[str(target)] = now
+
+
+def consume_approval(target: Path) -> bool:
+    with _APPROVED_LOCK:
+        at = _APPROVED.pop(str(target), None)
+    return at is not None and time.time() - at <= APPROVAL_TTL
+
+
+def prepare_dest(target: Path) -> Path:
+    """Check the folder against Hermes's write policy, then create it and check it again."""
+    denied = dest_denied(target)
+    if denied:
+        raise PermissionError(denied)
+    target.mkdir(parents=True, exist_ok=True)
+    final = target.resolve()
+    denied = dest_denied(final) if final != target else None
+    if denied:
+        raise PermissionError(denied)
+    return final
+
+
 def unique_path(directory: Path, name: str) -> tuple[Path, Any]:
     """Create ``directory/name`` exclusively, adding ``-1``, ``-2``… when it exists. Returns (path, file)."""
     stem, dot, ext = name.rpartition(".")
@@ -45,6 +153,9 @@ def unique_path(directory: Path, name: str) -> tuple[Path, Any]:
         ext = "." + ext
     for n in range(0, 10000):
         candidate = directory / (name if n == 0 else f"{stem}-{n}{ext}")
+        denied = write_denied(candidate)
+        if denied:
+            raise PermissionError(denied)
         try:
             return candidate, open(candidate, "xb")
         except FileExistsError:
@@ -70,16 +181,6 @@ def list_files(api: Any, agent_id: str, task_id: str = "") -> list[dict]:
             break
         before = str(page[-1]["created_at"])
     return files
-
-
-def resolve_dest(dest: str, agent_name: str, base: Path) -> Path:
-    if dest:
-        target = Path(os.path.expanduser(dest))
-        target = target if target.is_absolute() else base / target
-    else:
-        target = base / DEFAULT_DIR / safe_name(agent_name, "agent")
-    target.mkdir(parents=True, exist_ok=True)
-    return target.resolve()
 
 
 def download(api: Any, agent_id: str, file: dict, directory: Path, max_bytes: int) -> dict:

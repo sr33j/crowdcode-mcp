@@ -50,7 +50,7 @@ def _cli_files(args, dashboard: Dashboard) -> int:
             tools = dashboard.tools
             agent_id = tools.resolve_agent(args.agent)
             result = tools.download({"agent_id": agent_id, "file_ids": args.ids, "task_id": args.task,
-                                     "dest": args.dest}, base=Path.cwd())
+                                     "dest": args.dest}, base=Path.cwd(), allow_outside=True)
             import json
 
             data = json.loads(result)

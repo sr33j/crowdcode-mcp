@@ -171,3 +171,97 @@ def test_safe_names():
     assert files.safe_name("a\x00b<c>.txt") == "a_b_c_.txt"
     assert files.safe_name("CON.txt") == "_CON.txt"
     assert len(files.safe_name("x" * 400 + ".pdf").encode()) <= 200 and files.safe_name("x" * 400 + ".pdf").endswith(".pdf")
+
+
+def _agent_with_files(ctx):
+    ctx.commands["crowdcode"]("wallet init")
+    agent = call(ctx, "crowdcode_create_agent", name="scout")["agent_id"]
+    call(ctx, "crowdcode_fund_agent", agent_id=agent, amount_usd=1)
+    call(ctx, "crowdcode_run_task", agent_id=agent, budget_usd=0.25, prompt="write a report")
+    return agent
+
+
+def test_download_dest_outside_session_needs_the_human(ctx, tmp_path, monkeypatch):
+    agent = _agent_with_files(ctx)
+    files = sys.modules["crowdcode_plugin.files"]
+    session = tmp_path / "session"
+    session.mkdir()
+    monkeypatch.setattr(files, "session_dir", lambda: session)
+    outside = tmp_path / "elsewhere"
+
+    # inside the session folder: no prompt, saved
+    assert ctx.hooks["pre_tool_call"](tool_name="crowdcode_download", args={"agent_id": agent, "file_ids": ["all"],
+                                      "dest": "out"}, task_id="t") is None
+    # outside it: the hook asks the human
+    decision = ctx.hooks["pre_tool_call"](tool_name="crowdcode_download",
+                                          args={"agent_id": agent, "file_ids": ["all"], "dest": str(outside)}, task_id="t")
+    assert decision["action"] == "approve" and str(outside) in decision["message"]
+
+    tools = sys.modules["crowdcode_plugin.tools"]
+    t = tools.Tools(ctx, ctx.hooks["pre_tool_call"].__self__)
+    # without the hook's approval (called directly), the handler refuses an outside folder ...
+    files.consume_approval(outside.resolve())
+    refused = json.loads(t.download({"agent_id": agent, "file_ids": ["all"], "dest": str(outside)}))
+    assert refused["ok"] is False and "outside this session's folder" in refused["error"] and not outside.exists()
+    # ... "~" and "../" count as outside too
+    for sneaky in ("~/crowdcode-test-should-not-exist", "../escape"):
+        out = json.loads(t.download({"agent_id": agent, "file_ids": ["all"], "dest": sneaky}))
+        assert out["ok"] is False, sneaky
+    assert not (tmp_path / "escape").exists()
+    # after the hook asked (and Hermes let the call through), it goes ahead once
+    ctx.hooks["pre_tool_call"](tool_name="crowdcode_download",
+                               args={"agent_id": agent, "file_ids": ["all"], "dest": str(outside)}, task_id="t")
+    ok = json.loads(t.download({"agent_id": agent, "file_ids": ["all"], "dest": str(outside)}))
+    assert ok["ok"] and len(ok["downloaded"]) == 3 and outside.is_dir()
+    again = json.loads(t.download({"agent_id": agent, "file_ids": ["all"], "dest": str(outside)}))
+    assert again["ok"] is False  # the approval was used up
+
+
+def test_download_respects_hermes_write_policy(ctx, tmp_path, monkeypatch):
+    agent = _agent_with_files(ctx)
+    files = sys.modules["crowdcode_plugin.files"]
+    monkeypatch.setattr(files, "session_dir", lambda: tmp_path)
+    protected = tmp_path / "keys"
+    calls = []
+
+    def denied(path):
+        calls.append(str(path))
+        return f"Write denied: '{path}' is a protected system/credential file." if "keys" in Path(path).parts else None
+
+    monkeypatch.setattr(files, "write_denied", denied)
+    decision = ctx.hooks["pre_tool_call"](tool_name="crowdcode_download",
+                                          args={"agent_id": agent, "file_ids": ["all"], "dest": "keys"}, task_id="t")
+    assert decision["action"] == "block" and "protected" in decision["message"]
+    tools = sys.modules["crowdcode_plugin.tools"]
+    t = tools.Tools(ctx, ctx.hooks["pre_tool_call"].__self__)
+    out = json.loads(t.download({"agent_id": agent, "file_ids": ["all"], "dest": "keys"}))
+    assert out["ok"] is False and "protected" in out["error"] and not protected.exists()
+    # the default folder is checked too, and so is every file before it is created
+    ok = json.loads(t.download({"agent_id": agent, "file_ids": ["all"]}))
+    assert ok["ok"] and len(ok["downloaded"]) == 3
+    saved = {s["path"] for s in ok["downloaded"]}
+    assert str((tmp_path / "crowdcode-files" / "scout").resolve()) in calls and saved <= set(calls)
+
+
+def test_write_denied_uses_hermes_file_safety():
+    files = sys.modules["crowdcode_plugin.files"]
+    try:
+        import agent.file_safety  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("Hermes not installed")
+    runtime = Path(sys.prefix)  # Hermes protects its own interpreter/venv
+    assert files.write_denied(runtime / "lib" / "planted.py")
+    assert files.dest_denied(runtime / "new-folder")
+    assert files.write_denied(Path.home() / "crowdcode-files" / "ok.txt") is None
+
+
+def test_never_roots(monkeypatch, tmp_path):
+    files = sys.modules["crowdcode_plugin.files"]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
+    for bad in (tmp_path / ".config" / "autostart" / "x.desktop", tmp_path / "Library" / "LaunchAgents" / "x.plist",
+                tmp_path / ".config" / "systemd" / "user" / "x.service", tmp_path / "hermes-home" / "plugins" / "x"):
+        assert files.write_denied(bad), bad
+    assert files.dest_denied(tmp_path / ".config" / "autostart")
+    assert files.write_denied(tmp_path / "Downloads" / "x.txt") is None
