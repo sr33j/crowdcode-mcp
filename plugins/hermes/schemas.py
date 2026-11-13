@@ -1,6 +1,7 @@
 """Tool schemas (OpenAI function format) shown to the model."""
 
 _AGENT = {"type": "string", "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."}
+_AGENT_REF = {"type": "string", "description": "The agent's id or its name."}
 _NETWORK = {"type": "string", "enum": ["base", "solana", "tempo"], "description": "Chain the USDC is on. Default base."}
 
 
@@ -91,18 +92,19 @@ SCHEMAS = {
         "crowdcode_files",
         "List the files an agent has produced across its tasks (newest first): id, name, size, type, task. "
         "Read-only; nothing is downloaded.",
-        {"agent_id": _AGENT, "task_id": {"type": "string", "description": "Only files from this task."}},
+        {"agent_id": _AGENT_REF, "task_id": {"type": "string", "description": "Only files from this task."}},
         ["agent_id"]),
     "crowdcode_download": _tool(
         "crowdcode_download",
         "Download an agent's files to this machine, only when the user asks for them. Saves into "
         "./crowdcode-files/<agent name>/ under the session's working directory unless dest is given, keeps the "
         "file names (made safe), never overwrites (adds -1, -2…), and returns the local paths and sizes.",
-        {"agent_id": _AGENT,
+        {"agent_id": _AGENT_REF,
          "file_ids": {"type": "array", "items": {"type": "string"},
                       "description": 'File ids from crowdcode_files, or ["all"] for every file.'},
          "task_id": {"type": "string", "description": "With \"all\": only that task's files."},
-         "dest": {"type": "string", "description": "Folder to save into (created if missing)."}},
+         "dest": {"type": "string", "description": "Folder to save into, inside the session's working directory "
+                  "(created if missing). A folder outside it asks the user first."}},
         ["agent_id", "file_ids"]),
     "crowdcode_claim": _tool(
         "crowdcode_claim",
