@@ -440,6 +440,8 @@ def directory_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
                metadata->>'description' as description, metadata->>'listing_text' as listing_text,
                review_summary->'pros' as review_pros
         from services
+        -- A hosted service its owner deleted is not offered (hosted_services.py).
+        where coalesce(metadata->>'hosted_status', '') <> 'deleted'
         """
     ).fetchall()
 
