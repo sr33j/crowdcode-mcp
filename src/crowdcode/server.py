@@ -23,6 +23,7 @@ from starlette.routing import Route
 from crowdcode.advertised import learn_advertised_payee
 from crowdcode.agent_listings import agent_service_slug, refresh_in_background
 from crowdcode.db import connect
+from crowdcode.hosted_services import SyncError, parse_services, sync_hosted_services
 from crowdcode.demand import validate_request_fields
 from crowdcode.discovery import find_services, warm_search
 from crowdcode.listing_metadata import fill_in_background
@@ -1201,6 +1202,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.canonical_endpoint,
           s.payment_provider,
           s.metadata->>'description' as description,
+          s.metadata->>'crowdcode_service_id' as crowdcode_service_id,
           s.score,
           s.n_eff,
           s.n_eff_legacy,
@@ -1209,6 +1211,8 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           {review_counts('r')}
         from services s
         left join reviews r on r.service_id = s.id
+        -- A hosted service its owner deleted leaves the rankings (hosted_services.py).
+        where coalesce(s.metadata->>'hosted_status', '') <> 'deleted'
         group by s.id
         order by s.score desc, s.n_eff desc, num_weighted_reviews desc, num_reviews desc, s.name asc
         """
@@ -1227,6 +1231,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "directory_slug": row.get("directory_slug"),
             "canonical_endpoint": row.get("canonical_endpoint"),
             "payment_provider": row.get("payment_provider"),
+            "crowdcode_service_id": row.get("crowdcode_service_id"),
             "score": as_float(row["score"]),
             "n_eff": as_float(row["n_eff"]),
             "unproven": is_unproven(as_float(row["n_eff"]) or 0.0),
@@ -1264,7 +1269,8 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """
             select id, name, directory_slug, canonical_endpoint,
                    payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
-                   review_summary, metadata->>'description' as description
+                   review_summary, metadata->>'description' as description,
+                   metadata->>'crowdcode_service_id' as crowdcode_service_id
             from services
             where id = %s
             """,
@@ -1324,6 +1330,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             "directory_slug": service.get("directory_slug"),
             "canonical_endpoint": service.get("canonical_endpoint"),
             "payment_provider": service.get("payment_provider"),
+            "crowdcode_service_id": service.get("crowdcode_service_id"),
         },
         **networks,
         "score": as_float(service["score"]),
@@ -1456,6 +1463,38 @@ async def receipt_keys(_: Request) -> JSONResponse:
                         headers={"Cache-Control": "public, max-age=300"})
 
 
+async def hosted_services_sync(request: Request) -> JSONResponse:
+    """CrowdCode's control plane pushes its hosted services (hosted_services.py)."""
+    token = get_settings().hosted_sync_token
+    if not token:
+        return JSONResponse({"ok": False, "error": "hosted service sync is not enabled"}, status_code=404)
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_request")
+    try:
+        services = parse_services(body)
+    except SyncError as exc:
+        return _json_error(str(exc), status_code=400, error_code="invalid_request")
+
+    def apply() -> dict[str, int]:
+        with connect() as conn:
+            with conn.transaction():
+                stats = sync_hosted_services(conn, services)
+        return stats
+
+    try:
+        stats = await run_in_threadpool(apply)
+    except Exception:
+        return _unexpected_json_error("hosted_services_sync")
+    # Names and descriptions from the manifests too, as at registration.
+    refresh_in_background()
+    return JSONResponse({"ok": True, **stats})
+
+
 async def health(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "crowdcode-backend",
                          "version": version("crowdcode-mcp"),
@@ -1585,6 +1624,7 @@ def create_app() -> Starlette:
             Route("/api/services/find", find_services_route, methods=["POST"]),
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
+            Route("/api/internal/hosted-services/sync", hosted_services_sync, methods=["POST"]),
             *mcp_app.routes,
         ],
         lifespan=mcp_app.router.lifespan_context,

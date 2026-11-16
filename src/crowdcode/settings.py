@@ -50,6 +50,9 @@ class Settings:
     # Bearer token for GET /api/knowledge/evidence (full review evidence export
     # consumed by the OpenCrowd knowledge-tree generator). Unset disables it.
     knowledge_export_token: str | None = None
+    # Bearer token CrowdCode's control plane uses to push its hosted services
+    # (POST /api/internal/hosted-services/sync). Unset disables the endpoint.
+    hosted_sync_token: str | None = None
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -127,4 +130,5 @@ def get_settings() -> Settings:
         ),
         knowledge_export_token=os.environ.get("CROWDCODE_KNOWLEDGE_EXPORT_TOKEN", "").strip()
         or None,
+        hosted_sync_token=os.environ.get("CROWDCODE_HOSTED_SYNC_TOKEN", "").strip() or None,
     )

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- CrowdCode's hosted services are kept in the index by CrowdCode itself
+  (SRI-111). They used to enter it only when first reviewed, under whatever
+  URL the reviewer used, so a service nobody had reviewed (`/s/crowdcode`) was
+  missing from the rankings, and a renamed one (`venice-reseller` →
+  `venice-proxy`) kept its review under the old URL, where its owner's page
+  found nothing. Control now pushes its whole list after every deploy, rename,
+  stop and delete to `POST /api/internal/hosted-services/sync` (bearer
+  `CROWDCODE_HOSTED_SYNC_TOKEN`; unset disables it). Each route's row is found
+  by a stable key (`crowdcode_service` identifier: CrowdCode service id and
+  route), else by any URL it has had; its canonical endpoint moves to the
+  current URL and every old URL stays an `api_endpoint` identifier, so reviews
+  naming it still land there. Live services are created without waiting for a
+  review; deleted ones (`metadata.hosted_status`) leave the rankings and
+  search, and keep their reviews. `/api/services` and `/api/services/{id}`
+  now name the `crowdcode_service_id`.
+
 - A service that collects at more than one payee per address family can be
   reviewed at any of them. Exa (`https://api.exa.ai/search`) advertises two
   Base payees in one 402 and was registered on the one the hosted gateway does
