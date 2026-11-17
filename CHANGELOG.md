@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **The reliability rule** (SRI-115 ticket 6, contract C3). Every tracked
+  service now has a state: `reliable`, `unverified` or `unreliable`.
+  - **The rule:** `reliability-v1`, in `crowdcode.reliability`, with every
+    threshold in one place. The state comes with plain-sentence reasons and
+    every input the rule read, so anyone can recompute it.
+  - **Evidence:** daily probes (a refused probe body is inconclusive),
+    payee changes from `index_changes` (addresses the service already
+    advertised, and rotating payees, do not count), judged purchases from
+    gateway attestations (`partial` counts as not delivered; CrowdCode's
+    test purchases count and are labelled), and crowdcode-mcp observations
+    (payers and liveness, never delivery).
+  - **Storage:** `service_reliability`, one row per tracked or blocked
+    service, rewritten only when its answer changes. The cron recomputes
+    every hour after the probes (`reliability` in `/api/cron/status`), and
+    a judged review refreshes its service at once.
+  - **Blocking:** `scripts/block_service.py` blocks or unblocks a service
+    with a public note. Blocked forces `unreliable`. Every change is in
+    `service_block_audit`.
+  - **API:** `GET /api/services/{id}/reliability`,
+    `GET /api/reliability?url=&method=` (resolved through the index and the
+    registry's aliases; an unknown endpoint is `unverified`, "not in
+    CrowdCode's index"), and `GET /api/reliability?state=reliable`.
+  - **Schema:** apply `supabase/reliability.sql` before deploying.
 - **The services index** (SRI-115 tickets 1 and 2, contract C1). The backend
   now keeps its own index of the x402 and MPP services that matter, and
   checks each of them once a day.

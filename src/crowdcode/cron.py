@@ -65,6 +65,7 @@ from crowdcode.review_sql import public_reviews
 from crowdcode.settings import get_settings
 from crowdcode import index as services_index
 from crowdcode import proposals
+from crowdcode import reliability
 from crowdcode.summaries import SUMMARY_VERSION, summarize_service_reviews
 
 DRIFT_TOLERANCE = 0.01
@@ -586,6 +587,11 @@ def run_index_probes(now: datetime) -> None:
     services_index.run_probes(connect, now)
 
 
+def run_reliability(now: datetime) -> None:
+    """reliability-v1 (C3) over every tracked service, after the hour's probes and purchases."""
+    reliability.run(connect, utc_now())
+
+
 def jobs() -> tuple:
     return (
         run_agent_listings,
@@ -593,6 +599,7 @@ def jobs() -> tuple:
         run_index_sweep,
         run_index_purchases,
         run_index_probes,
+        run_reliability,
         run_listing_descriptions,
         run_payment_reverification,
         run_consistency_sweep,
