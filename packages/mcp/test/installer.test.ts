@@ -189,7 +189,7 @@ describe("completion hook installation", () => {
       expect(await readFile(join(hooksDir, name), "utf8")).toContain("CrowdCode");
     }
     const [doctor] = await doctorClients(["claude-code"], env);
-    expect(doctor.completionHookCurrent).toBe(true);
+    expect(doctor!.completionHookCurrent).toBe(true);
   });
 
   it("upgrades the old unconditional Stop entry in place", async () => {
@@ -220,6 +220,6 @@ describe("completion hook installation", () => {
       hooks: [{ type: "command", command: `node ${JSON.stringify(paid)}`, timeout: 5 }] }]);
     expect(hooks.Stop).toHaveLength(1);
     const [doctor] = await doctorClients(["codex"], env);
-    expect(doctor.completionHookCurrent).toBe(true);
+    expect(doctor!.completionHookCurrent).toBe(true);
   });
 });

@@ -68,7 +68,7 @@ describe("submitting pending paid calls", () => {
     const backend = fakeBackend([{ status: 200, body: { accepted: true, observation_id: 1 } }]);
     const outcome = await flushPending({ dir, walletDir, url: "https://backend.test/api/observations", fetch: backend.fetchFn });
     expect(outcome).toEqual({ sent: 1, duplicate: 0, retry: 0, dropped: 0 });
-    const [{ body, raw, url }] = backend.sent;
+    const { body, raw, url } = backend.sent[0]!;
     expect(url).toBe("https://backend.test/api/observations");
     expect(Object.keys(body).sort()).toEqual(["observation", "signature"]);
     expect(Object.keys(body.observation)).toEqual([...OBSERVATION_FIELDS]);
