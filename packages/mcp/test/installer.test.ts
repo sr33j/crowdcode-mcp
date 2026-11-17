@@ -217,7 +217,7 @@ describe("completion hook installation", () => {
     const hooks = JSON.parse(await readFile(join(codexHome, "hooks.json"), "utf8")).hooks;
     const paid = join(env.homeDir, ".crowdcode", "hooks", "paid-call.cjs");
     expect(hooks.PostToolUse).toEqual([other, { matcher: "mcp__.*",
-      hooks: [{ type: "command", command: `node ${JSON.stringify(paid)}`, timeout: 5 }] }]);
+      hooks: [{ type: "command", command: `node '${paid}'`, timeout: 5 }] }]);
     expect(hooks.Stop).toHaveLength(1);
     const [doctor] = await doctorClients(["codex"], env);
     expect(doctor!.completionHookCurrent).toBe(true);

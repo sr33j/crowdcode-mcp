@@ -395,13 +395,19 @@ function claudeHook(path: string): Record<string, unknown> {
 
 /** Codex has no exec form: a shell command with the path quoted. */
 function codexHook(path: string, platform: InstallerPlatform): Record<string, unknown> {
-  return { type: "command", command: `node ${platform === "win32" ? `"${path}"` : JSON.stringify(path)}`, timeout: 5 };
+  return { type: "command", command: codexCommand(path, platform), timeout: 5 };
 }
 
+function codexCommand(path: string, platform: InstallerPlatform): string {
+  return platform === "win32" ? `node "${path}"` : `node '${path.replace(/'/g, "'\\''")}'`;
+}
+
+/** Our entry in either form: exec (`node` + [path]) or the quoted shell command. */
 function isOurHook(hook: any, path: string): boolean {
   if (!hook || hook.type !== "command") return false;
   if (hook.command === "node" && Array.isArray(hook.args)) return hook.args.length === 1 && hook.args[0] === path;
-  return typeof hook.command === "string" && hook.command.startsWith("node ") && hook.command.includes(path);
+  return typeof hook.command === "string" &&
+    (["darwin", "linux", "win32"] as const).some((platform) => hook.command === codexCommand(path, platform));
 }
 
 /** Add (once) or refresh our entry for one event, leaving every other hook alone. */
