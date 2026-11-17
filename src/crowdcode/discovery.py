@@ -41,7 +41,7 @@ import psycopg
 
 from crowdcode.review_sql import directory_listed
 
-from crowdcode import semantic
+from crowdcode import offerings, semantic
 from crowdcode.identity import normalize_api_endpoint
 from crowdcode.networks import fetch_service_networks
 from crowdcode.scoring import as_float, is_unproven
@@ -651,7 +651,17 @@ def find_services(
     conn_factory: Callable[[], Any] | None = None,
     catalogs: CatalogClient | None = None,
     embedder: semantic.Embedder | None = None,
+    seed: Any = None,
+    detail: Any = None,
+    index: offerings.OfferingIndex | None = None,
 ) -> dict[str, Any]:
+    """C13: search the whole index in memory; the live catalogs only when the index has no match.
+
+    ``index`` is the offering index to search (tests, the evaluation set);
+    by default the process's shared one, refreshed in the background from
+    ``conn_factory``. ``seed`` reproduces a ranking (the response returns the
+    one it used); ``detail="full"`` adds each result's evidence.
+    """
     query = (query or "").strip()[:500]
     embedder = embedder if embedder is not None else (semantic.EMBEDDER if semantic.enabled() else None)
     if not query:
@@ -662,6 +672,101 @@ def find_services(
         size = max(1, min(MAX_LIMIT, int(limit))) if limit is not None else DEFAULT_LIMIT
     except (TypeError, ValueError):
         size = DEFAULT_LIMIT
+    if index is None and conn_factory is not None:
+        offerings.SHARED.refresh_due(conn_factory, embedder)
+        index = offerings.SHARED.get()
+    if index is not None and len(index):
+        found = find_in_index(index, query, payer_networks, payer_balances, candidates, size, embedder,
+                              seed=seed, detail=detail == "full")
+        if found is not None:
+            return found
+    return find_live(query, payer_networks, payer_balances, candidates, size, conn_factory, catalogs, embedder)
+
+
+_PLATFORM = re.compile(r"\b(?:on |in |from |via )?(?:crowd ?code|open ?crowd)(?:\.app)?\b", re.IGNORECASE)
+
+
+def find_in_index(index: offerings.OfferingIndex, query: str, networks: tuple[str, ...],
+                  balances: dict[str, float] | None, candidates: Any, size: int,
+                  embedder: semantic.Embedder | None, *, seed: Any = None, detail: bool = False) -> dict[str, Any] | None:
+    """Ranked offerings from the index, or None when nothing in it matches above the floor."""
+    asked = query
+    started = time.perf_counter()
+    # "Is there a service on CrowdCode that…": the platform's name says nothing about the capability.
+    query = _PLATFORM.sub(" ", query).strip() or query
+    matches = index.match(query, embedder)
+    seen = {id(m.offering) for m in matches}
+    extra = _caller_offerings(index, candidates, networks, query, embedder, seen)
+    if not extra and (not matches or matches[0].strength < offerings.INDEX_FLOOR):
+        return None
+    matches = sorted([*matches, *extra], key=lambda m: (-m.strength, m.offering.id))
+    model_rows, model = index.models_in(query)
+    used = offerings.parse_seed(seed)
+    used = used if used is not None else offerings.new_seed()
+    leaf_similarity = index.leaf_similarity(index.query_vector(query, embedder))
+    ranked, info = offerings.rank(matches, networks=networks, balances=balances, seed=used,
+                                  model_rows=model_rows or None, model=model, leaf_similarity=leaf_similarity)
+    services = [offerings.describe(r, position, detail, info.get("capability"))
+                for position, r in enumerate(ranked[:size], start=1)]
+    left_out = {k: v for k, v in info["left_out"].items() if v}
+    return {
+        "ok": True,
+        "query": asked,
+        "source": "index",
+        "seed": used,
+        **({"networks": list(networks)} if networks != DEFAULT_NETWORKS else {}),
+        **({"balances_considered": True} if balances is not None else {}),
+        **({"capability": info["capability"]} if info.get("capability") else {}),
+        **({"model": model} if model else {}),
+        "ranking": offerings.RANKING,
+        "services": services,
+        "total_matches": len(ranked),
+        **({"left_out": left_out} if left_out else {}),
+        **({"index": {"offerings": len(index), "age_s": int(time.time() - index.built_at),
+                      "ms": round((time.perf_counter() - started) * 1000, 1)}} if detail else {}),
+    }
+
+
+def _caller_offerings(index: offerings.OfferingIndex, raw: Any, networks: tuple[str, ...], query: str,
+                      embedder: semantic.Embedder | None, seen: set[int]) -> list[offerings.Match]:
+    """Candidates the caller found elsewhere (AgentCash), as index offerings when the index has them."""
+    out: list[offerings.Match] = []
+    fresh: list[offerings.Offering] = []
+    for candidate in caller_candidates(raw, networks):
+        known = index.find(candidate.endpoint, candidate.method)
+        if known is not None:
+            if id(known) not in seen:
+                seen.add(id(known))
+                fresh.append(known)
+            continue
+        price = next((o.price_usd for o in candidate.offers if o.price_usd is not None), None)
+        listed = tuple(dict.fromkeys(o.network for o in candidate.offers if o.network in networks))
+        unknown = tuple(n for n in networks if n != "tempo") if any(o.network is None for o in candidate.offers) else ()
+        # Not in the index: a new offering with no evidence, Beta(1,1), on the networks the caller saw.
+        o = offerings.Offering(id=-(len(out) + len(fresh) + 1), method=candidate.method or "POST",
+                               endpoint=candidate.endpoint, name=candidate.name, description=candidate.description,
+                               networks=listed or unknown, payable=bool(listed or unknown), price_usd=price,
+                               payers=candidate.unique_payers, sources=tuple(candidate.sources))
+        o.alpha, o.beta, kind = offerings.prior(candidate.unique_payers, None, False)
+        o.reason = (f"found by {candidate.sources[0]}; not in CrowdCode's index yet" if candidate.sources
+                    else "not in CrowdCode's index yet")
+        fresh.append(o)
+    if not fresh:
+        return out
+    documents = [o.document() for o in fresh]
+    query_tokens = tokens(query)
+    similarities = embedder.similarities(query, documents) if embedder is not None and index.semantic else None
+    for i, o in enumerate(fresh):
+        keyword = relevance(query_tokens, f"{documents[i]} {o.endpoint}")
+        similarity = similarities[i] if similarities is not None else None
+        out.append(offerings.Match(o, keyword, similarity, match_strength(keyword, similarity)))
+    return out
+
+
+def find_live(query: str, payer_networks: tuple[str, ...], payer_balances: dict[str, float] | None, candidates: Any,
+              size: int, conn_factory: Callable[[], Any] | None, catalogs: CatalogClient | None,
+              embedder: semantic.Embedder | None) -> dict[str, Any]:
+    """The live federated search: the fallback for a query the index cannot match, or before it has loaded."""
     catalogs = catalogs or CATALOGS
     sources: dict[str, dict[str, Any]] = {}
 
@@ -702,6 +807,7 @@ def find_services(
     return {
         "ok": True,
         "query": query,
+        "source": "live",
         "networks": list(payer_networks),
         "balances_considered": payer_balances is not None,
         "ranking": RANKING if by_meaning else RANKING_BY_QUALITY,
@@ -712,7 +818,7 @@ def find_services(
 
 
 def warm_search(embedder: semantic.Embedder | None = None) -> threading.Thread | None:
-    """Load the model and embed every listing in the background, so no search waits for either."""
+    """Load the model, the offering index and every listing in the background, so no search waits for them."""
     if embedder is None and not semantic.enabled():
         return None
     embedder = embedder or semantic.EMBEDDER
@@ -724,6 +830,8 @@ def warm_search(embedder: semantic.Embedder | None = None) -> threading.Thread |
             embedder.warm(wait=True)
             if not embedder.ready():
                 return
+            # The whole index first (C13): searches answer from it as soon as it is in.
+            offerings.SHARED.refresh(connect, embedder)
             with connect() as conn:
                 rows = directory_rows(conn)
             embedder.encode([listing_document(row) for row in rows])

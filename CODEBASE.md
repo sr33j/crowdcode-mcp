@@ -73,8 +73,36 @@ the nightly cron; never replaces a description an agent or a person declared.
 
 Matching by meaning for `find_service`: the pinned `minishlab/potion-base-8M`
 static-embedding model, loaded in the background, and the text each listing
-is matched on. `discovery.py` blends its similarity with keyword overlap and
-quality. `CROWDCODE_SEMANTIC_SEARCH=0` turns it off.
+is matched on. `discovery.py` and `offerings.py` blend its similarity with
+keyword overlap. `CROWDCODE_SEMANTIC_SEARCH=0` turns it off.
+
+## `src/crowdcode/offerings.py`, `discovery.py`
+
+`POST /api/services/find` (SRI-115 C13). `offerings.py` holds every offering
+in the index (~48k) in memory: one document each (name, description, input
+field names, CrowdCode's listing text, host and path words), a CSR word index,
+the pinned embedding matrix, and each offering's tier, delivery Beta and
+quality from W6's `value_ranking.estimate` (reliability-v2 when stored).
+`SharedIndex` refreshes it in the background every 15 minutes, streaming rows;
+an unchanged listing keeps its object and only its prices, payers and tier are
+re-read, and a changed listing rebuilds the index after letting the old one
+go (the live catalogs answer meanwhile). A query:
+
+1. **matches** offerings by shared words and meaning (`discovery.match_strength`);
+   CrowdCode's listed services are matched among themselves, as the directory was;
+2. **finds what was asked for**: a named model's sellers (C9), else the capability
+   leaf the strongest matches and the leaf labels agree on (C7), which gates out
+   neighbours that share words ("video transcript" for "generate a video");
+3. **ranks** the matching set by a seeded Thompson draw of delivery × quality ×
+   fit per effective dollar (price, a transfer when short, plus ~$0.05 of the
+   agent's own cost per call). Offerings with evidence all compete; only the
+   two most relevant with none are drawn against them (`EXPLORE_SLOTS`). `bad`
+   is left out.
+
+Each result carries `tier`, `why`, `model`, `price_usd`, `networks` and, when
+the draw lifted it above a better-known offering, `explore: true`; the
+response returns its `seed`. With no match above `INDEX_FLOOR`, or before the
+index has loaded, `discovery.find_live` runs the old federated search.
 
 ## `src/crowdcode/index.py`, `index_feeds.py`, `index_probe.py`
 
