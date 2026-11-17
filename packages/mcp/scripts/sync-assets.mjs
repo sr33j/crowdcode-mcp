@@ -49,6 +49,13 @@ if (claudeManifest.version !== packageJson.version) {
     `Claude Code plugin version ${claudeManifest.version} must match package version ${packageJson.version}`,
   );
 }
+const pluginMcp = JSON.parse(await readFile(resolve(repoRoot, "plugins/crowdcode/.mcp.json"), "utf8"));
+const pluginArgs = JSON.stringify(pluginMcp.mcpServers?.crowdcode?.args);
+if (pluginArgs !== JSON.stringify(["-y", `crowdcode-mcp@${packageJson.version}`])) {
+  throw new Error(
+    `plugins/crowdcode/.mcp.json must launch crowdcode-mcp@${packageJson.version} (an exact version starts fast enough for Codex), not ${pluginArgs}`,
+  );
+}
 const serverSource = await readFile(serverSourcePath, "utf8");
 if (!serverSource.includes(`{ name: "crowdcode", version: "${packageJson.version}" }`)) {
   throw new Error(

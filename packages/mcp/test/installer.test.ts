@@ -55,15 +55,21 @@ describe("installer config merging", () => {
       "apps = true",
       "",
     ].join("\n");
-    const merged = mergeCodexConfig(input);
+    const merged = mergeCodexConfig(input, "9.9.9");
     expect(merged).toContain("# keep this comment");
     expect(merged).toContain("[mcp_servers.other]");
     expect(merged).toContain("[features]");
     expect(merged).not.toContain('command = "old"');
     expect(merged).not.toContain("STALE");
     expect(merged).toContain("[mcp_servers.crowdcode]");
-    expect(merged).toContain('args = ["-y","crowdcode-mcp@latest"]');
-    expect(mergeCodexConfig(merged)).toBe(merged);
+    expect(merged).toContain('args = ["-y","crowdcode-mcp@9.9.9"]');
+    expect(merged).toContain("startup_timeout_sec = 60");
+    expect(merged).toContain("tool_timeout_sec = 900");
+    expect(mergeCodexConfig(merged, "9.9.9")).toBe(merged);
+    // A newer install moves the pin and keeps exactly one crowdcode section.
+    const moved = mergeCodexConfig(merged, "9.9.10");
+    expect(moved).toContain('args = ["-y","crowdcode-mcp@9.9.10"]');
+    expect(moved.match(/\[mcp_servers\.crowdcode\]/g)).toHaveLength(1);
   });
 
   it("preserves unrelated JSON MCP servers and rejects malformed files", () => {
