@@ -264,6 +264,8 @@ def test_proposals_say_who_found_the_demand_and_in_how_many_runs():
     assert by_title["DNS checks"]["source"] == "agents" and by_title["DNS checks"]["demand"]["runs"] == 0
     assert by_title["Mixed"]["source"] == "both"
     assert by_title["Mixed"]["demand"]["mined"] == 1 and by_title["Mixed"]["demand"]["requesters"] == 2
+    assert by_title["Licensed articles"]["inferred_requests"] == 0
+    assert by_title["Licensed articles"]["confidence"] == "low"  # nobody stated a price
     assert payload["listed_by_source"] == {"miner": 3, "agent": 2}
     items = proposals._model_items(rows)
     assert items[0]["source"] == "miner" and items[0]["runs"] == 3 and not items[0]["low_confidence"]

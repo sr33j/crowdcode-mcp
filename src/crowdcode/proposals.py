@@ -400,7 +400,9 @@ def build_payload(
 
         prices = [float(m["price_per_call_usd"]) for m in members
                   if m.get("price_per_call_usd") is not None]
-        low = sum(1 for m in members if _is_low_confidence(m))
+        # Mapped from old free text; a miner request is not that (its price is
+        # an estimate, which `stated` below already leaves out).
+        low = sum(1 for m in members if _is_low_confidence(m) and not _is_miner(m))
         stated = [float(m["price_per_call_usd"]) for m in members
                   if m.get("price_per_call_usd") is not None and not _is_low_confidence(m)]
         last = max(m["created_at"] for m in members)
