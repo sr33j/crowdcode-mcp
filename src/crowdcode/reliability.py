@@ -1,55 +1,51 @@
-"""reliability-v1: one state per tracked service, with its reasons (SRI-115 C3).
+"""reliability-v2: a delivery estimate, a quality estimate and a tier per offering (SRI-115 C10).
 
-The rule, as the parent repository's design-docs/RELIABLE_SERVICES_BUILD.md
-(contract C3) states it:
+Contract C10 in the parent repository's design-docs/RELIABLE_SERVICES_BUILD.md.
+An *offering* is one paid endpoint of one seller; in the index every tracked
+resource links to its own ``services`` row, so the result is stored per
+service and keyed by ``service_id``.
 
-=============  =============================================================
-``unreliable``  blocked by an operator; or the last 3 probes all failed; or
-                the payee changed in the last 7 days to one the service's own
-                402 had not advertised; or >= 4 judged purchases in 30 days
-                with < 50% delivered
-``reliable``    not unreliable; and a valid 402 in >= 2 of the last 3
-                probes; and the latest price <= 2x the 7-day median; and
-                >= 3 judged purchases in 30 days with >= 80% delivered
-``unverified``  everything else, including services the index does not track
-=============  =============================================================
+**Delivery** is ``Beta(alpha, beta)``:
 
-Every threshold is a constant below, and nothing else in the codebase
-restates one. :func:`evaluate` is pure: it reads only the ``inputs`` document
-that is stored and published beside each state, so anyone can recompute a
-state from what ``GET /api/services/{id}/reliability`` returns.
+- the prior comes from outside evidence: >= 10 Bazaar payers in 30 days with
+  >= 1.5 calls per payer gives ``Beta(8, 1)``; >= 3 payers ``Beta(3, 1)``; a
+  curated mpp.dev listing with no payer data ``Beta(3, 1)``; otherwise
+  ``Beta(1, 1)``;
+- each judged purchase in 30 days adds 1 to alpha (delivered) or beta (not
+  delivered). A pre-rubric ``partial`` verdict counts once C11's re-read has
+  resolved it (``reviews.delivery_reread``), and not before;
+- each paid call that failed before settlement through the seller's fault
+  (W2's signed failure records) adds 1 to beta.
 
-How the evidence is read:
+**Quality** is the judge ratings behind the v3.1 review score
+(crowdcode.scoring), re-shrunk to the offering's quality prior: the
+leaderboard prior of the model it sells (``model_quality_priors``, C9), or 3.0.
+Because v3.1 is ``(sum(w*r) + 2*3.0) / (n_eff + 2)``, that is exactly
+``v3.1 + 2*(prior - 3.0) / (n_eff + 2)``.
 
-- **Probes** are the index's daily unpaid requests (``index_resource_signals``
-  ``last_probes``). A probe is *valid* when it got a payment challenge. A probe
-  whose request body the seller refused (``probe_body_rejected``) is
-  inconclusive: neither a failure nor a valid 402.
-- **Liveness from paid calls:** a successful paid call (a gateway purchase or
-  a crowdcode-mcp observation, C5) at or after the oldest of three failed
-  probes means the service answered a buyer, so it is not counted as down.
-  Paid calls never stand in for a valid 402 and never count as delivery.
-- **Payee changes** come from ``index_changes``. Only addresses that appear in
-  a change count, and only if the service had not advertised them: neither
-  in the 402 answer before the change nor among the payees CrowdCode has
-  registered for it before the change (learned from its own 402,
-  ``crowdcode.advertised``).
-  Services an operator marked ``payee_rotates`` issue a fresh payee per
-  request, so their payee changes are not counted.
-- **Judged purchases** are reviews carrying a valid gateway attestation, from
-  any owner, whose attestation names the judge's ``delivery``. ``partial``
-  counts as not delivered. CrowdCode's own test purchases count and are
-  labelled (the attestation's ``traffic``); attestations issued before
-  ``traffic`` existed are reported as unlabelled. Reviews excluded as a
-  CrowdCode platform defect are not evidence about the provider and are not
-  counted.
-- **A service with several tracked endpoints** is reliable only when every
-  endpoint passes the probe and price conditions, and is down only when every
-  endpoint is down. A payee change on any endpoint counts.
+**One score:** ``score = delivery mean x quality``, the expected judge rating of
+one call, on the 1-5 scale. It replaces the review score on CrowdCode's pages.
 
-Results are stored in ``service_reliability`` (supabase/reliability.sql) by
-the hourly cron, after the probe sweep (cron.jobs), and for one service right
-after it receives a judged review.
+**Tiers:**
+
+==========  ==============================================================
+``bad``     blocked; dead (the last 3 probes failed, no paid call since);
+            payee changed in 7 days to one not advertised; latest price
+            above 2x its 7-day median; or >= 4 judged with mean < 0.5
+``proven``  >= 5 judged purchases and posterior mean >= 0.85
+``popular`` a ``Beta(8, 1)`` or curated prior, and healthy probes (the latest
+            conclusive probe was a valid 402, on every endpoint)
+``new``     everything else, including untracked and unknown endpoints
+==========  ==============================================================
+
+For readers of v1, ``state`` stays: ``bad`` is ``unreliable``, ``proven`` and
+``popular`` are ``reliable``, ``new`` is ``unverified``.
+
+:func:`evaluate` is pure and reads only the published ``inputs``, so anyone can
+recompute a tier from what ``GET /api/services/{id}/reliability`` returns.
+The evidence rules carried over from v1 (inconclusive probes, liveness from
+paid calls, which payee changes count, several endpoints) are described where
+they are applied below.
 """
 
 from __future__ import annotations
@@ -57,34 +53,53 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable
 
 import psycopg
 from psycopg.types.json import Jsonb
 
-RULE_VERSION = "reliability-v1"
+from crowdcode.review_sql import public_reviews
+
+RULE_VERSION = "reliability-v2"
 STATES = ("reliable", "unverified", "unreliable")
+TIERS = ("bad", "proven", "popular", "new")
+TIER_STATE = {"bad": "unreliable", "proven": "reliable", "popular": "reliable", "new": "unverified"}
 
 # --- The rule's constants: the only copy -------------------------------------------
+# Probes
 PROBE_WINDOW = 3  # the probes the rule reads, newest first
-DOWN_AFTER_FAILED = 3  # unreliable: this many failed probes in a row (the whole window)
-RELIABLE_VALID_PROBES = 2  # reliable: at least this many valid 402s in the window
+DOWN_AFTER_FAILED = 3  # bad: this many failed probes in a row (the whole window)
 INCONCLUSIVE_PROBE_ERRORS = frozenset({"probe_body_rejected"})
 PAYEE_WINDOW = timedelta(days=7)
 PRICE_MAX_MULTIPLE = Decimal(2)
-JUDGED_WINDOW = timedelta(days=30)
-UNRELIABLE_MIN_JUDGED = 4
-UNRELIABLE_DELIVERED_BELOW = Decimal("0.5")
-RELIABLE_MIN_JUDGED = 3
-RELIABLE_DELIVERED_AT_LEAST = Decimal("0.8")
-PAYERS_WINDOW = timedelta(days=30)
+# The delivery prior from outside evidence: (alpha, beta)
+PRIOR_STRONG = (8, 1)  # >= STRONG_MIN_PAYERS payers and >= STRONG_MIN_REPEAT calls per payer
+PRIOR_SOME = (3, 1)  # >= SOME_MIN_PAYERS payers
+PRIOR_CURATED = (3, 1)  # mpp.dev's curated catalog, no payer data
+PRIOR_NONE = (1, 1)
+STRONG_MIN_PAYERS = 10
+STRONG_MIN_REPEAT = Decimal("1.5")
+SOME_MIN_PAYERS = 3
+# Evidence
+EVIDENCE_WINDOW = timedelta(days=30)
+SELLER_FAILURES = ("seller_error", "seller_rejected", "no_receipt", "authorization_expired")
+# Tiers
+BAD_MIN_JUDGED = 4
+BAD_MEAN_BELOW = Decimal("0.5")
+PROVEN_MIN_JUDGED = 5
+PROVEN_MEAN_AT_LEAST = Decimal("0.85")
+# Quality: v3.1's shrinkage (crowdcode.scoring.KAPPA, MU0), re-centred on the offering's prior
+QUALITY_KAPPA = Decimal(2)
+QUALITY_V31_PRIOR = Decimal(3)
+QUALITY_DEFAULT_PRIOR = Decimal(3)
 # What the gateway shows an owner (C4 caps reasons at 8).
 MAX_REASONS = 8
+MAX_MODELS = 12
 
 NOT_INDEXED = "not in CrowdCode's index"
-NOT_TRACKED = "not tracked by CrowdCode's index, so CrowdCode has not checked it"
+NOT_TRACKED = "not tracked by CrowdCode's index, so it is not probed"
 
 # USDC, the only asset hosted agents hold (index_feeds.USDC), shown in dollars.
 _USDC = {
@@ -92,7 +107,6 @@ _USDC = {
     "epjfwdd5aufqssqem2qn1xzybapc8g4wewggkzwytdt1v",
     "0x20c000000000000000000000b9537d11c60e8b50",
 }
-_DELIVERY = ("delivered", "partial", "not_delivered")
 STATUS_CACHE_KEY = "reliability_status"
 
 
@@ -161,82 +175,121 @@ def _payees(values: Any) -> set[str]:
 # --- The rule ------------------------------------------------------------------------
 
 
-def evaluate(inputs: dict[str, Any]) -> tuple[str, list[str]]:
-    """reliability-v1 over one service's ``inputs``: ``(state, reasons)``.
+def prior_for(outside: dict[str, Any]) -> dict[str, Any]:
+    """The delivery prior from outside evidence: ``{alpha, beta, kind, source}``."""
+    payers = int(outside.get("bazaar_payers_30d") or 0)
+    calls = _dec(outside.get("bazaar_calls_30d"))
+    repeat = (calls / payers) if payers and calls is not None else None
+    if payers >= STRONG_MIN_PAYERS and repeat is not None and repeat >= STRONG_MIN_REPEAT:
+        (a, b), kind = PRIOR_STRONG, "bazaar_strong"
+        source = f"{payers} payers on the x402 Bazaar in 30 days, {repeat:.1f} calls per payer"
+    elif payers >= SOME_MIN_PAYERS:
+        (a, b), kind = PRIOR_SOME, "bazaar"
+        source = f"{payers} payers on the x402 Bazaar in 30 days" + (
+            f", {repeat:.1f} calls per payer" if repeat is not None else "")
+    elif outside.get("curated"):
+        (a, b), kind = PRIOR_CURATED, "curated"
+        source = "listed in mpp.dev's curated catalog"
+    else:
+        (a, b), kind = PRIOR_NONE, "none"
+        source = "no outside evidence"
+    return {"alpha": a, "beta": b, "kind": kind, "source": source}
 
-    Reasons come in order: what decided the state first, then the conditions
-    that held, then context (payers). Each is a sentence a reader can check
+
+def quality_for(q: dict[str, Any]) -> Decimal:
+    """Judge ratings (v3.1, weighted) shrunk to the offering's quality prior."""
+    prior = _dec(q.get("prior_rating")) or QUALITY_DEFAULT_PRIOR
+    v31 = _dec(q.get("v31_score"))
+    n_eff = _dec(q.get("n_eff")) or Decimal(0)
+    if v31 is None:
+        return prior
+    return v31 + QUALITY_KAPPA * (prior - QUALITY_V31_PRIOR) / (QUALITY_KAPPA + n_eff)
+
+
+def _r(value: Decimal, places: int = 2) -> str:
+    return f"{value:.{places}f}"
+
+
+def evaluate(inputs: dict[str, Any]) -> dict[str, Any]:
+    """reliability-v2 over one offering's ``inputs``.
+
+    Returns ``{state, tier, reasons, posterior, quality, score}``. Reasons come
+    in order: what decided the tier first, then the estimate, the probes, price
+    and payee, the score, and context. Each is a sentence a reader can check
     against ``inputs``.
     """
     as_of = _ts(inputs.get("as_of")) or datetime.now(UTC)
     endpoints = list(inputs.get("endpoints") or [])
     multi = len(endpoints) > 1
-    triggers: list[str] = []  # unreliable
-    unmet: list[str] = []  # a reliable condition that does not hold
-    met: list[str] = []
+    tracked = bool(inputs.get("tracked"))
+    bad: list[str] = []
+    health: list[str] = []
     context: list[str] = []
 
     blocked = inputs.get("blocked")
     if blocked:
-        triggers.append(f"blocked by a CrowdCode operator on {_day(blocked.get('at'))}: {blocked.get('note')}")
-    if not inputs.get("tracked"):
-        state = "unreliable" if triggers else "unverified"
-        return state, [*triggers, NOT_TRACKED][:MAX_REASONS]
+        bad.append(f"blocked by a CrowdCode operator on {_day(blocked.get('at'))}: {blocked.get('note')}")
 
-    # Probes: liveness and a valid 402.
+    # Probes. A probe whose request body the seller refused is inconclusive:
+    # neither a failure nor a valid 402. A successful paid call since the oldest
+    # of three failures means the service answered a buyer, so it is not down.
+    healthy = tracked and bool(endpoints)
     down: list[str] = []
     for ep in endpoints:
         label = f"{ep.get('method')} {ep.get('url')}: " if multi else ""
         probes = list(ep.get("last_probes") or [])[:PROBE_WINDOW]
         valid = sum(1 for p in probes if p.get("ok"))
         failed = [p for p in probes if not p.get("ok") and p.get("error_code") not in INCONCLUSIVE_PROBE_ERRORS]
-        inconclusive = len(probes) - valid - len(failed)
+        conclusive = [p for p in probes if p.get("ok") or p.get("error_code") not in INCONCLUSIVE_PROBE_ERRORS]
         latest = _when(probes[0].get("at")) if probes else None
-        note = (f"; {_plural(inconclusive, 'probe')} inconclusive (the seller refused the request body CrowdCode built)"
-                if inconclusive else "")
+        if not (conclusive and conclusive[0].get("ok")):
+            healthy = False
         if not probes:
-            unmet.append(f"{label}not probed yet; reliable needs a valid 402 in "
-                         f"{RELIABLE_VALID_PROBES} of the last {PROBE_WINDOW} daily probes")
+            health.append(f"{label}not probed yet")
         elif len(failed) >= DOWN_AFTER_FAILED:
             codes = ", ".join(str(p.get("error_code") or p.get("http_status") or "failed") for p in failed)
             oldest = _ts(failed[-1].get("at"))
             paid = _ts(ep.get("last_paid_ok_at"))
             if paid is not None and oldest is not None and paid >= oldest:
-                unmet.append(f"{label}the last {len(failed)} daily probes failed ({codes}; latest {latest}), "
-                             f"but a paid call succeeded on {_when(paid)}, so it is not counted as down")
+                health.append(f"{label}the last {len(failed)} daily probes failed ({codes}; latest {latest}), "
+                              f"but a paid call succeeded on {_when(paid)}, so it is not counted as down")
             else:
                 down.append(f"{label}the last {len(failed)} daily probes all failed ({codes}; latest {latest})")
-        elif valid >= RELIABLE_VALID_PROBES:
-            met.append(f"{label}valid 402 in {valid} of the last {len(probes)} daily probes (latest {latest}){note}")
+        elif conclusive and conclusive[0].get("ok"):
+            health.append(f"{label}probes healthy: valid 402 in {valid} of the last "
+                          f"{_plural(len(probes), 'daily probe')} (latest {latest})")
+        elif conclusive:
+            p = conclusive[0]
+            health.append(f"{label}probes not healthy: the latest conclusive probe failed "
+                          f"({p.get('error_code') or p.get('http_status')}, {_when(p.get('at'))}); "
+                          f"valid 402 in {valid} of the last {_plural(len(probes), 'daily probe')}")
         else:
-            unmet.append(f"{label}valid 402 in {valid} of the last {_plural(len(probes), 'daily probe')} "
-                         f"(latest {latest}); reliable needs {RELIABLE_VALID_PROBES} of the last {PROBE_WINDOW}{note}")
-
-        # Price: only meaningful once the endpoint has quoted one.
-        if valid:
-            price = _dec(ep.get("latest_price_atomic"))
-            median = _dec(ep.get("median_price_7d_atomic"))
-            asset = ep.get("latest_price_asset")
-            if price is None or median is None:
-                unmet.append(f"{label}no price quoted in a valid probe in the last 7 days")
-            elif price <= PRICE_MAX_MULTIPLE * median:
-                met.append(f"{label}latest price {_price(price, asset)} is within {PRICE_MAX_MULTIPLE}× "
+            health.append(f"{label}probes inconclusive: the seller refused the request body CrowdCode built "
+                          f"in the last {_plural(len(probes), 'daily probe')}")
+        price = _dec(ep.get("latest_price_atomic"))
+        median = _dec(ep.get("median_price_7d_atomic"))
+        asset = ep.get("latest_price_asset")
+        if valid and price is not None and median is not None:
+            if price > PRICE_MAX_MULTIPLE * median:
+                bad.append(f"{label}latest price {_price(price, asset)} is more than {PRICE_MAX_MULTIPLE}× "
                            f"its 7-day median of {_price(median, asset)}")
             else:
-                unmet.append(f"{label}latest price {_price(price, asset)} is more than {PRICE_MAX_MULTIPLE}× "
-                             f"its 7-day median of {_price(median, asset)}")
+                health.append(f"{label}latest price {_price(price, asset)} is within {PRICE_MAX_MULTIPLE}× "
+                              f"its 7-day median of {_price(median, asset)}")
+    # A service is dead only when every tracked endpoint is.
     if down and len(down) == len(endpoints):
-        triggers.extend(down)
+        bad.extend(down)
     else:
-        unmet.extend(down)
-    if not endpoints:
-        unmet.append("no tracked endpoint to probe")
+        health.extend(down)
+    if not tracked:
+        health.insert(0, NOT_TRACKED)
 
-    # Payee changes in the last 7 days.
+    # Payee changes in the last 7 days. Only addresses the service had not
+    # advertised before the change count: neither in the previous 402 nor among
+    # the payees CrowdCode had registered for it by then. Rotating payees are exempt.
     registered = [(_norm_payee(r.get("payee")), _ts(r.get("since"))) for r in inputs.get("registered_payees") or []
                   if isinstance(r, dict)]
-    rotates = bool(inputs.get("payee_rotates"))
-    if rotates:
+    if inputs.get("payee_rotates"):
         context.append("the payee rotates per request (confirmed by an operator), so payee changes are not counted")
     else:
         for ep in endpoints:
@@ -247,60 +300,68 @@ def evaluate(inputs: dict[str, Any]) -> tuple[str, list[str]]:
             for change in changes:
                 at = _ts(change.get("at")) or as_of
                 known = {p for p, since in registered if p and (since is None or since <= at)}
-                new = _payees(change.get("to")) - _payees(change.get("from"))
-                unadvertised = sorted(new - known)
+                unadvertised = sorted(_payees(change.get("to")) - _payees(change.get("from")) - known)
                 if unadvertised:
                     counted = True
-                    triggers.append(f"{label}payee changed on {_when(change.get('at'))} to "
-                                    f"{', '.join(unadvertised)}, which the service's own 402 had not advertised before")
+                    bad.append(f"{label}payee changed on {_when(change.get('at'))} to {', '.join(unadvertised)}, "
+                               "which the service's own 402 had not advertised before")
             if counted:
                 continue
             if changes:
-                met.append(f"{label}payee changed on {_when(changes[0].get('at'))} only to addresses the service "
-                           "already advertised; not counted as a change")
+                health.append(f"{label}payee changed on {_when(changes[0].get('at'))} only to addresses the "
+                              "service already advertised; not counted as a change")
             elif ep.get("payees"):
                 since = ep.get("payee_since")
-                met.append(f"{label}payee unchanged in the last 7 days" + (f" (current since {_day(since)})" if since else ""))
+                health.append(f"{label}payee unchanged in the last 7 days"
+                              + (f" (current since {_day(since)})" if since else ""))
 
-    # Judged purchases.
+    # The delivery estimate.
+    prior = prior_for(inputs.get("outside") or {})
     judged = inputs.get("judged_30d") or {}
-    total = int(judged.get("total") or 0)
+    failures = inputs.get("failures_30d") or {}
     delivered = int(judged.get("delivered") or 0)
-    partial = int(judged.get("partial") or 0)
     not_delivered = int(judged.get("not_delivered") or 0)
-    if total == 0:
-        unmet.append(f"no judged purchases in the last 30 days; reliable needs at least {RELIABLE_MIN_JUDGED}, "
-                     f"with {RELIABLE_DELIVERED_AT_LEAST:.0%} delivered")
-    else:
-        rate = Decimal(delivered) / Decimal(total)
-        details = []
-        if partial:
-            details.append(f"{partial} partial, counted as not delivered")
-        if not_delivered:
-            details.append(f"{not_delivered} not delivered")
-        test = int(judged.get("test") or 0)
-        unlabelled = int(judged.get("unlabelled") or 0)
-        if test:
-            details.append(f"{test} of them CrowdCode test purchases")
-        if unlabelled:
-            details.append(f"{unlabelled} from before test purchases were labelled")
-        if judged.get("last_at"):
-            details.append(f"last {_day(judged['last_at'])}")
-        sentence = (f"{delivered} of {_plural(total, 'judged purchase')} in the last 30 days delivered "
-                    f"({rate:.0%}{'; ' + '; '.join(details) if details else ''})")
-        if total >= UNRELIABLE_MIN_JUDGED and rate < UNRELIABLE_DELIVERED_BELOW:
-            triggers.append(f"{sentence}; below {UNRELIABLE_DELIVERED_BELOW:.0%} once there are "
-                            f"{UNRELIABLE_MIN_JUDGED} or more")
-        elif total >= RELIABLE_MIN_JUDGED and rate >= RELIABLE_DELIVERED_AT_LEAST:
-            met.append(sentence)
-        elif total < RELIABLE_MIN_JUDGED:
-            unmet.append(f"{sentence}; reliable needs at least {RELIABLE_MIN_JUDGED}")
-        else:
-            unmet.append(f"{sentence}; reliable needs {RELIABLE_DELIVERED_AT_LEAST:.0%} delivered")
+    failed_calls = int(failures.get("total") or 0)
+    n_judged = delivered + not_delivered
+    alpha = prior["alpha"] + delivered
+    beta = prior["beta"] + not_delivered + failed_calls
+    mean = Decimal(alpha) / Decimal(alpha + beta)
+    details = []
+    if judged.get("test"):
+        details.append(f"{judged['test']} of the judged purchases were CrowdCode test purchases")
+    if judged.get("unlabelled"):
+        details.append(f"{judged['unlabelled']} from before test purchases were labelled")
+    if judged.get("reread"):
+        details.append(f"{judged['reread']} old partial verdicts re-read under the new rubric")
+    if judged.get("unresolved"):
+        details.append(f"{judged['unresolved']} partial verdicts not counted until they are re-read")
+    if failures.get("test"):
+        details.append(f"{failures['test']} of the failed calls were CrowdCode test purchases")
+    estimate = (f"delivery estimate Beta({alpha}, {beta}), mean {_r(mean)}: prior Beta({prior['alpha']}, "
+                f"{prior['beta']}) ({prior['source']}), plus {delivered} delivered and {not_delivered} not "
+                f"delivered judged purchases and {_plural(failed_calls, 'paid call')} that failed before "
+                f"settlement in 30 days" + (f" ({'; '.join(details)})" if details else ""))
+
+    # Quality and the one score.
+    q = inputs.get("quality") or {}
+    quality = quality_for(q)
+    score = mean * quality
+    prior_rating = _dec(q.get("prior_rating")) or QUALITY_DEFAULT_PRIOR
+    v31 = _dec(q.get("v31_score"))
+    n_eff = _dec(q.get("n_eff")) or Decimal(0)
+    rating_part = (f"judge ratings {_r(v31)} over {_r(n_eff, 1)} weighted reviews (review score v3.1)"
+                   if v31 is not None and n_eff > 0 else "no weighted ratings yet")
+    score_reason = (f"score {_r(score)} = delivery {_r(mean)} × quality {_r(quality)}: {rating_part}, shrunk to "
+                    f"{_r(prior_rating, 1)} from {q.get('prior_source') or 'the default prior'}")
+
+    if n_judged >= BAD_MIN_JUDGED and mean < BAD_MEAN_BELOW:
+        bad.append(f"delivery estimate mean {_r(mean)} is below {BAD_MEAN_BELOW} after "
+                   f"{_plural(n_judged, 'judged purchase')}")
 
     payers = []
-    if inputs.get("bazaar_payers_30d"):
-        payers.append(f"{inputs['bazaar_payers_30d']} on the x402 Bazaar")
+    outside = inputs.get("outside") or {}
+    if outside.get("bazaar_payers_30d"):
+        payers.append(f"{outside['bazaar_payers_30d']} on the x402 Bazaar")
     if inputs.get("external_payers_30d"):
         payers.append(f"{inputs['external_payers_30d']} through crowdcode-mcp")
     if judged.get("owner_buyers"):
@@ -308,11 +369,36 @@ def evaluate(inputs: dict[str, Any]) -> tuple[str, list[str]]:
     if payers:
         context.append("payers in the last 30 days: " + ", ".join(payers))
 
-    if triggers:
-        return "unreliable", [*triggers, *unmet, *met, *context][:MAX_REASONS]
-    if not unmet:
-        return "reliable", [*met, *context][:MAX_REASONS]
-    return "unverified", [*unmet, *met, *context][:MAX_REASONS]
+    if bad:
+        tier, headline = "bad", []
+    elif n_judged >= PROVEN_MIN_JUDGED and mean >= PROVEN_MEAN_AT_LEAST:
+        tier = "proven"
+        headline = [f"proven: {delivered} of {_plural(n_judged, 'judged purchase')} in 30 days delivered, and the "
+                    f"delivery estimate's mean {_r(mean)} is at least {PROVEN_MEAN_AT_LEAST}"]
+    elif prior["kind"] in ("bazaar_strong", "curated") and healthy:
+        tier = "popular"
+        headline = [f"popular: {prior['source']}, and its probes are healthy"]
+    else:
+        tier = "new"
+        if prior["kind"] in ("bazaar_strong", "curated"):
+            why = f"{prior['source']}, but its probes are not healthy"
+        else:
+            why = (f"{prior['source']}; popular needs {STRONG_MIN_PAYERS} or more Bazaar payers with "
+                   f"{STRONG_MIN_REPEAT} calls per payer, or mpp.dev's curated catalog")
+        headline = [f"new: {why}; proven needs {PROVEN_MIN_JUDGED} judged purchases with a mean of "
+                    f"{PROVEN_MEAN_AT_LEAST} ({n_judged} so far)"]
+    reasons = [*headline, *bad, estimate, *health, score_reason, *context][:MAX_REASONS]
+    return {
+        "state": TIER_STATE[tier],
+        "tier": tier,
+        "reasons": reasons,
+        "posterior": {"alpha": alpha, "beta": beta, "mean": float(round(mean, 4)),
+                      "prior": {k: prior[k] for k in ("alpha", "beta", "kind", "source")},
+                      "judged": n_judged, "delivered": delivered, "not_delivered": not_delivered,
+                      "failed_calls": failed_calls},
+        "quality": float(round(quality, 4)),
+        "score": float(round(score, 4)),
+    }
 
 
 # --- The evidence --------------------------------------------------------------------
@@ -325,6 +411,8 @@ def _jsonable(value: Any) -> Any:
         return [_jsonable(v) for v in value]
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, Decimal):
         return str(int(value)) if value == value.to_integral_value() else str(value)
     if isinstance(value, float):
@@ -336,27 +424,48 @@ def _probe(p: dict[str, Any]) -> dict[str, Any]:
     return {k: p.get(k) for k in ("at", "ok", "http_status", "error_code", "quoted_amount_atomic", "asset")}
 
 
+def _probe(p: dict[str, Any]) -> dict[str, Any]:
+    return {k: p.get(k) for k in ("at", "ok", "http_status", "error_code", "quoted_amount_atomic", "asset")}
+
+
+def _columns(conn: psycopg.Connection, table: str) -> set[str]:
+    """The columns a table has here (empty when it does not exist). Lets this
+    rule read W1's and W2's additions whichever side's migration ran first."""
+    return {r["column_name"] for r in conn.execute(
+        "select column_name from information_schema.columns where table_schema = current_schema() and table_name = %s",
+        (table,),
+    ).fetchall()}
+
+
 def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str] | None = None) -> dict[str, dict[str, Any]]:
-    """Every input reliability-v1 reads, per service: the tracked services plus
-    any blocked one (``service_ids`` limits it to those services)."""
+    """Every input reliability-v2 reads, per service: the tracked, blocked and
+    reviewed services (``service_ids`` limits it to those)."""
     ids = None if service_ids is None else sorted(set(service_ids))
     only = "" if ids is None else "and service_id = any(%(ids)s)"
-    params = {"ids": ids, "payee_since": as_of - PAYEE_WINDOW, "judged_since": as_of - JUDGED_WINDOW,
-              "payers_since": as_of - PAYERS_WINDOW}
+    since = as_of - EVIDENCE_WINDOW
+    params: dict[str, Any] = {"ids": ids, "payee_since": as_of - PAYEE_WINDOW, "since": since}
+    review_cols = _columns(conn, "reviews")
+    observation_cols = _columns(conn, "index_observations")
+    has_models = bool(_columns(conn, "index_offering_models"))
+    has_priors = bool(_columns(conn, "model_quality_priors"))
 
     signals = conn.execute(
         f"""
-        select resource_id, service_id, method, probe_url, last_probes, latest_price_atomic, latest_price_asset,
-               median_price_7d_atomic, payees, payee_since, bazaar_payers_30d
-        from index_resource_signals
-        where tracked and service_id is not null {only}
-        order by service_id, resource_id
+        select s.resource_id, s.service_id, s.method, s.probe_url, s.last_probes, s.latest_price_atomic,
+               s.latest_price_asset, s.median_price_7d_atomic, s.payees, s.payee_since, s.bazaar_payers_30d,
+               s.bazaar_calls_30d, r.sources
+        from index_resource_signals s join index_resources r on r.id = s.resource_id
+        where s.tracked and s.service_id is not null {only.replace('service_id', 's.service_id')}
+        order by s.service_id, s.resource_id
         """,
         params,
     ).fetchall()
     blocks = {r["service_id"]: r for r in conn.execute(
         f"select service_id, note, blocked_by, blocked_at from service_blocks where true {only}", params).fetchall()}
-    services = sorted({r["service_id"] for r in signals} | set(blocks))
+    # Reviewed services are on CrowdCode's pages, tracked or not: each gets the one score.
+    reviewed = {r["service_id"] for r in conn.execute(
+        f"select distinct service_id from reviews where {public_reviews()} {only}", params).fetchall()}
+    services = sorted({r["service_id"] for r in signals} | set(blocks) | reviewed)
     if not services:
         return {}
     params["services"] = services
@@ -364,16 +473,16 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
     params["resources"] = resources
 
     flags = {r["id"]: r for r in conn.execute(
-        "select id, payee_rotates, payment_target_ref, created_at from services where id = any(%(services)s)",
+        "select id, payee_rotates, payment_target_ref, created_at, score, n_eff from services where id = any(%(services)s)",
         params).fetchall()}
     # Each registered payee with when CrowdCode first knew it: only a payee known
     # before a change can excuse that change.
     registered: dict[str, dict[str, datetime]] = {}
 
-    def remember(sid: str, value: Any, since: datetime) -> None:
+    def remember(sid: str, value: Any, at: datetime) -> None:
         for payee in _payees([value]):
             known = registered.setdefault(sid, {})
-            known[payee] = min(known.get(payee, since), since)
+            known[payee] = min(known.get(payee, at), at)
 
     for sid, row in flags.items():
         remember(sid, row.get("payment_target_ref"), row["created_at"])
@@ -406,25 +515,30 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
         changes.setdefault(row["resource_id"], []).append({
             "at": row["at"], "from": sorted(_payees(row["old_value"])), "to": sorted(_payees(row["new_value"])),
         })
+
+    # Judged purchases. C11's re-read (W2) resolves an old `partial`; until it
+    # has, a partial counts as neither delivered nor not delivered.
+    attested = "gateway_attestation->'review'->>'delivery'"
+    delivery = f"coalesce(delivery_reread, {attested})" if "delivery_reread" in review_cols else attested
+    reread = (f"delivery_reread is not null and {attested} = 'partial'" if "delivery_reread" in review_cols
+              else "false")
     judged = {r["service_id"]: r for r in conn.execute(
         f"""
         select service_id,
-               count(*)::int as total,
                count(*) filter (where delivery = 'delivered')::int as delivered,
-               count(*) filter (where delivery = 'partial')::int as partial,
                count(*) filter (where delivery = 'not_delivered')::int as not_delivered,
-               count(*) filter (where traffic = 'test')::int as test,
-               count(*) filter (where traffic = 'test' and delivery = 'delivered')::int as test_delivered,
-               count(*) filter (where traffic is null)::int as unlabelled,
+               count(*) filter (where delivery = 'partial')::int as unresolved,
+               count(*) filter (where reread)::int as reread,
+               count(*) filter (where traffic = 'test' and delivery <> 'partial')::int as test,
+               count(*) filter (where traffic is null and delivery <> 'partial')::int as unlabelled,
                count(distinct owner_ref) filter (where traffic is distinct from 'test')::int as owner_buyers,
                max(created_at) as last_at
         from (
-          select service_id, created_at, owner_ref,
-                 gateway_attestation->'review'->>'delivery' as delivery,
+          select service_id, created_at, owner_ref, {delivery} as delivery, ({reread}) as reread,
                  gateway_attestation->'review'->>'traffic' as traffic
           from reviews
           where receipt_key_id is not null
-            and created_at > %(judged_since)s
+            and created_at > %(since)s
             and service_id = any(%(services)s)
             and weight_exclusion is distinct from 'platform_defect'
         ) j
@@ -433,15 +547,58 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
         """,
         params,
     ).fetchall()}
+
+    # Paid calls that failed before settlement through the seller's fault (W2's
+    # signed records): kind 'purchase', no review, an attempt reference.
+    failures: dict[str, dict[str, Any]] = {}
+    if "attempt_ref" in observation_cols:
+        traffic = "o.traffic" if "traffic" in observation_cols else "null::text"
+        for row in conn.execute(
+            f"""
+            select r.service_id, o.detail, count(*)::int as n,
+                   count(*) filter (where {traffic} = 'test')::int as test
+            from index_observations o join index_resources r on r.id = o.resource_id
+            where o.kind = 'purchase' and o.review_id is null and o.attempt_ref is not null
+              and o.detail = any(%(kinds)s) and o.at > %(since)s and r.service_id = any(%(services)s)
+            group by 1, 2
+            """,
+            {**params, "kinds": list(SELLER_FAILURES)},
+        ).fetchall():
+            f = failures.setdefault(row["service_id"], {"total": 0, "test": 0, "by": {}})
+            f["total"] += row["n"]
+            f["test"] += row["test"]
+            f["by"][row["detail"]] = row["n"]
+
     external = {r["service_id"]: r["n"] for r in conn.execute(
         """
         select r.service_id, count(distinct o.observer_wallet)::int as n
         from index_observations o join index_resources r on r.id = o.resource_id
-        where o.kind = 'observation' and o.at > %(payers_since)s and r.service_id = any(%(services)s)
+        where o.kind = 'observation' and o.at > %(since)s and r.service_id = any(%(services)s)
         group by 1
         """,
         params,
     ).fetchall()}
+
+    # Models (C9) and their leaderboard quality priors.
+    models: dict[int, list[dict[str, Any]]] = {}
+    if has_models:
+        prior_cols = ("q.prior_rating, q.source as prior_source, q.as_of as prior_as_of" if has_priors
+                      else "null::numeric as prior_rating, null::text as prior_source, null::date as prior_as_of")
+        join = "left join model_quality_priors q on q.model = m.model" if has_priors else ""
+        for row in conn.execute(
+            f"""
+            select m.resource_id, m.model, m.model_family, m.modality, {prior_cols}
+            from index_offering_models m {join}
+            where m.resource_id = any(%(resources)s)
+            order by m.resource_id, m.model
+            """,
+            params,
+        ).fetchall():
+            models.setdefault(row["resource_id"], []).append({
+                "model": row["model"], "family": row["model_family"], "modality": row["modality"],
+                "prior_rating": row["prior_rating"], "prior_source": row["prior_source"],
+                "prior_as_of": row["prior_as_of"],
+            })
 
     by_service: dict[str, list[dict[str, Any]]] = {}
     for r in signals:
@@ -458,6 +615,9 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
             "payee_since": r["payee_since"],
             "payee_changes_7d": changes.get(r["resource_id"], []),
             "bazaar_payers_30d": r["bazaar_payers_30d"],
+            "bazaar_calls_30d": r["bazaar_calls_30d"],
+            "curated": "mpp" in (r["sources"] or []),
+            "models": models.get(r["resource_id"], [])[:MAX_MODELS],
         })
 
     out: dict[str, dict[str, Any]] = {}
@@ -465,22 +625,42 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
         endpoints = by_service.get(sid, [])
         block = blocks.get(sid)
         j = judged.get(sid) or {}
-        bazaar = [e["bazaar_payers_30d"] for e in endpoints if e["bazaar_payers_30d"] is not None]
+        flag = flags.get(sid) or {}
+        # Outside evidence: the endpoint with the most Bazaar payers speaks for the offering.
+        busiest = max(endpoints, key=lambda e: e["bazaar_payers_30d"] or 0, default=None)
+        has_payers = any(e["bazaar_payers_30d"] for e in endpoints)
+        # The quality prior: the leaderboard rating of the model sold, or the mean
+        # over the models a multi-model offering sells that have one.
+        rated = [m for e in endpoints for m in e["models"] if m.get("prior_rating") is not None]
+        if rated:
+            prior_rating = sum(Decimal(str(m["prior_rating"])) for m in rated) / len(rated)
+            first = rated[0]
+            prior_source = (f"{first['model']} on {first['prior_source']} ({_day(first['prior_as_of'])})"
+                            if len(rated) == 1 else
+                            f"the mean of {len(rated)} models' leaderboard ratings ({first['prior_source']})")
+        else:
+            prior_rating, prior_source = QUALITY_DEFAULT_PRIOR, "the default prior"
         out[sid] = _jsonable({
             "as_of": as_of,
             "tracked": bool(endpoints),
             "blocked": {"note": block["note"], "by": block["blocked_by"], "at": block["blocked_at"]} if block else None,
-            "payee_rotates": bool((flags.get(sid) or {}).get("payee_rotates")),
+            "payee_rotates": bool(flag.get("payee_rotates")),
             "registered_payees": [{"payee": p, "since": at} for p, at in sorted(registered.get(sid, {}).items())],
             "endpoints": endpoints,
-            "judged_30d": {
-                "total": j.get("total", 0), "delivered": j.get("delivered", 0), "partial": j.get("partial", 0),
-                "not_delivered": j.get("not_delivered", 0), "test": j.get("test", 0),
-                "test_delivered": j.get("test_delivered", 0), "unlabelled": j.get("unlabelled", 0),
-                "owner_buyers": j.get("owner_buyers", 0), "last_at": j.get("last_at"),
+            "outside": {
+                "bazaar_payers_30d": busiest["bazaar_payers_30d"] if busiest else None,
+                "bazaar_calls_30d": busiest["bazaar_calls_30d"] if busiest else None,
+                "curated": any(e["curated"] for e in endpoints) and not has_payers,
             },
-            # Several endpoints of one service can share payers; the largest is the honest floor.
-            "bazaar_payers_30d": max(bazaar) if bazaar else None,
+            "judged_30d": {
+                "delivered": j.get("delivered", 0), "not_delivered": j.get("not_delivered", 0),
+                "unresolved": j.get("unresolved", 0), "reread": j.get("reread", 0), "test": j.get("test", 0),
+                "unlabelled": j.get("unlabelled", 0), "owner_buyers": j.get("owner_buyers", 0),
+                "last_at": j.get("last_at"),
+            },
+            "failures_30d": failures.get(sid, {"total": 0, "test": 0, "by": {}}),
+            "quality": {"v31_score": flag.get("score"), "n_eff": flag.get("n_eff"),
+                        "prior_rating": prior_rating, "prior_source": prior_source},
             "external_payers_30d": external.get(sid, 0),
         })
     return out
@@ -489,47 +669,53 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
 # --- Storing results -----------------------------------------------------------------
 
 
-def _same(row: dict[str, Any], state: str, reasons: list[str], inputs: dict[str, Any]) -> bool:
+def _same(row: dict[str, Any], result: dict[str, Any], inputs: dict[str, Any]) -> bool:
     old = dict(row["inputs"] or {})
     new = dict(inputs)
     old.pop("as_of", None)
     new.pop("as_of", None)
-    return (row["state"] == state and row["rule_version"] == RULE_VERSION and list(row["reasons"] or []) == reasons
+    return (row["state"] == result["state"] and row.get("tier") == result["tier"]
+            and row["rule_version"] == RULE_VERSION and list(row["reasons"] or []) == result["reasons"]
             and json.dumps(old, sort_keys=True) == json.dumps(new, sort_keys=True))
 
 
 def recompute(connect: Callable[[], Any], now: datetime, service_ids: Iterable[str] | None = None) -> dict[str, Any]:
-    """Run the rule over every tracked or blocked service (or just ``service_ids``).
+    """Run the rule over every tracked, blocked or reviewed service (or just ``service_ids``).
 
-    A row is rewritten only when its answer changed (state, reasons or any
+    A row is rewritten only when its answer changed (tier, state, reasons or any
     input besides ``as_of``), so ``computed_at`` is when the current answer was
-    first produced. Rows of services that are no longer tracked or blocked are
-    removed: those read ``unverified`` (not tracked) without one.
+    first produced. Rows of services that drop out are removed; they read
+    ``new`` without one.
     """
     ids = None if service_ids is None else sorted(set(service_ids))
     with connect() as conn:
         gathered = gather(conn, now, ids)
         only = "" if ids is None else "where service_id = any(%s)"
         existing = {r["service_id"]: r for r in conn.execute(
-            f"select service_id, state, rule_version, reasons, inputs from service_reliability {only}",
+            f"select service_id, state, tier, rule_version, reasons, inputs from service_reliability {only}",
             () if ids is None else (ids,)).fetchall()}
-        counts = {s: 0 for s in STATES}
+        counts = {t: 0 for t in TIERS}
         writes = []
         for sid, inputs in gathered.items():
-            state, reasons = evaluate(inputs)
-            counts[state] += 1
+            result = evaluate(inputs)
+            counts[result["tier"]] += 1
             row = existing.get(sid)
-            if row is None or not _same(row, state, reasons, inputs):
-                writes.append((sid, state, RULE_VERSION, _ts(inputs["as_of"]), Jsonb(reasons), Jsonb(inputs)))
+            if row is None or not _same(row, result, inputs):
+                p = result["posterior"]
+                writes.append((sid, result["state"], result["tier"], p["alpha"], p["beta"], result["quality"],
+                               result["score"], RULE_VERSION, _ts(inputs["as_of"]), Jsonb(result["reasons"]),
+                               Jsonb(inputs)))
         if writes:
             with conn.cursor() as cur:
                 cur.executemany(
                     """
-                    insert into service_reliability (service_id, state, rule_version, computed_at, reasons, inputs)
-                    values (%s, %s, %s, %s, %s, %s)
-                    on conflict (service_id) do update set state = excluded.state,
-                      rule_version = excluded.rule_version, computed_at = excluded.computed_at,
-                      reasons = excluded.reasons, inputs = excluded.inputs
+                    insert into service_reliability (service_id, state, tier, alpha, beta, quality, score,
+                      rule_version, computed_at, reasons, inputs)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (service_id) do update set state = excluded.state, tier = excluded.tier,
+                      alpha = excluded.alpha, beta = excluded.beta, quality = excluded.quality,
+                      score = excluded.score, rule_version = excluded.rule_version,
+                      computed_at = excluded.computed_at, reasons = excluded.reasons, inputs = excluded.inputs
                     """,
                     writes,
                 )
@@ -568,23 +754,37 @@ def recompute_in_background(connect: Callable[[], Any], service_id: str) -> None
 
 # --- Reading results -----------------------------------------------------------------
 
+_DEFAULT = evaluate({"tracked": False, "endpoints": []})
 
-def _payload(row: dict[str, Any] | None, service_id: str | None, checked_at: str | None = None) -> dict[str, Any]:
-    if row is None:
-        return {"service_id": service_id, "state": "unverified", "rule_version": RULE_VERSION, "computed_at": None,
-                "checked_at": checked_at,
-                "reasons": [NOT_TRACKED if service_id else NOT_INDEXED],
-                "inputs": {"tracked": False, "indexed": service_id is not None}}
-    return _jsonable({
+
+def _unknown(service_id: str | None, checked: str | None, reason: str) -> dict[str, Any]:
+    """An offering without a row: no outside evidence and nothing judged, so `new`."""
+    return {"service_id": service_id, "state": _DEFAULT["state"], "tier": _DEFAULT["tier"],
+            "rule_version": RULE_VERSION, "computed_at": None, "checked_at": checked,
+            "reasons": [reason, f"new: {_DEFAULT['posterior']['prior']['source']}"],
+            "posterior": _DEFAULT["posterior"], "quality": _DEFAULT["quality"], "score": _DEFAULT["score"],
+            "inputs": {"tracked": False, "indexed": service_id is not None}}
+
+
+def _payload(row: dict[str, Any], checked: str | None = None) -> dict[str, Any]:
+    inputs = row["inputs"] or {}
+    result = evaluate(inputs) if row.get("rule_version") == RULE_VERSION else None
+    payload = _jsonable({
         "service_id": row["service_id"],
+        **({"name": row["name"]} if row.get("name") is not None else {}),
         "state": row["state"],
+        "tier": row.get("tier") or (result or {}).get("tier"),
         "rule_version": row["rule_version"],
         "computed_at": row["computed_at"],
-        "checked_at": checked_at,
+        "checked_at": checked,
         "reasons": row["reasons"],
-        "inputs": row["inputs"],
-        **({"name": row["name"]} if row.get("name") is not None else {}),
+        "inputs": inputs,
     })
+    # Numbers stay numbers (``_jsonable`` writes inputs' decimals as strings).
+    payload["posterior"] = result["posterior"] if result else None
+    payload["quality"] = float(row["quality"]) if row.get("quality") is not None else None
+    payload["score"] = float(row["score"]) if row.get("score") is not None else None
+    return payload
 
 
 def checked_at(conn: psycopg.Connection) -> str | None:
@@ -594,19 +794,21 @@ def checked_at(conn: psycopg.Connection) -> str | None:
     return payload.get("checked_at") if isinstance(payload, dict) else None
 
 
+_ROW = ("r.service_id, r.state, r.tier, r.alpha, r.beta, r.quality, r.score, r.rule_version, r.computed_at, "
+        "r.reasons, r.inputs")
+
+
 def for_service(conn: psycopg.Connection, service_id: str) -> dict[str, Any] | None:
     """``GET /api/services/{id}/reliability``. None when no such service exists."""
     row = conn.execute(
-        """
-        select s.id as sid, s.name, r.service_id, r.state, r.rule_version, r.computed_at, r.reasons, r.inputs
-        from services s left join service_reliability r on r.service_id = s.id
-        where s.id = %s
-        """,
+        f"select s.id as sid, s.name, {_ROW} from services s left join service_reliability r on r.service_id = s.id "
+        "where s.id = %s",
         (service_id,),
     ).fetchone()
     if row is None:
         return None
-    payload = _payload(row if row["service_id"] else None, row["sid"], checked_at(conn))
+    payload = (_payload(row, checked_at(conn)) if row["service_id"]
+               else _unknown(row["sid"], checked_at(conn), NOT_TRACKED))
     payload["name"] = row["name"]
     return payload
 
@@ -641,16 +843,14 @@ def _service_for_url(conn: psycopg.Connection, url: str, method: str | None) -> 
 
 
 def for_url(conn: psycopg.Connection, url: str, method: str | None) -> dict[str, Any]:
-    """``GET /api/reliability?url=&method=``: always an answer; unknown is ``unverified``."""
+    """``GET /api/reliability?url=&method=``: always an answer; unknown is ``new``."""
     service_id, resource = _service_for_url(conn, url, method)
     if service_id is None:
-        payload = _payload(None, None)
-        if resource is not None:  # listed in the index, but too little traffic to track
-            payload["reasons"] = [NOT_TRACKED]
-            payload["inputs"]["indexed"] = True
+        payload = _unknown(None, None, NOT_TRACKED if resource is not None else NOT_INDEXED)
+        payload["inputs"]["indexed"] = resource is not None
         payload["resolved"] = None
         return payload
-    payload = for_service(conn, service_id) or _payload(None, service_id)
+    payload = for_service(conn, service_id) or _unknown(service_id, None, NOT_TRACKED)
     payload["resolved"] = {
         "service_id": service_id,
         "resource_id": resource["id"] if resource else None,
@@ -660,25 +860,33 @@ def for_url(conn: psycopg.Connection, url: str, method: str | None) -> dict[str,
     return payload
 
 
-def by_state(conn: psycopg.Connection, state: str, limit: int = 500, offset: int = 0) -> dict[str, Any]:
-    """``GET /api/reliability?state=…``: the services in one state, and the counts of all three."""
-    counts = {s: 0 for s in STATES}
-    for row in conn.execute("select state, count(*)::int as n from service_reliability group by 1").fetchall():
-        counts[row["state"]] = row["n"]
+def listing(conn: psycopg.Connection, *, state: str | None = None, tier: str | None = None,
+            limit: int = 500, offset: int = 0) -> dict[str, Any]:
+    """``GET /api/reliability?state=…`` or ``?tier=…``: one group, and the counts of every state and tier."""
+    states = {s: 0 for s in STATES}
+    tiers = {t: 0 for t in TIERS}
+    for row in conn.execute("select state, tier, count(*)::int as n from service_reliability group by 1, 2").fetchall():
+        states[row["state"]] = states.get(row["state"], 0) + row["n"]
+        if row["tier"]:
+            tiers[row["tier"]] = tiers.get(row["tier"], 0) + row["n"]
+    column, value = ("tier", tier) if tier else ("state", state)
     rows = conn.execute(
-        """
-        select r.service_id, s.name, r.state, r.rule_version, r.computed_at, r.reasons, r.inputs
+        f"""
+        select s.name, {_ROW}
         from service_reliability r join services s on s.id = r.service_id
-        where r.state = %s
-        order by coalesce((r.inputs->'judged_30d'->>'total')::int, 0) desc,
-                 coalesce((r.inputs->>'bazaar_payers_30d')::int, 0) desc, r.service_id
+        where r.{column} = %s
+        order by r.score desc nulls last, r.service_id
         limit %s offset %s
         """,
-        (state, limit, offset),
+        (value, limit, offset),
     ).fetchall()
     at = checked_at(conn)
-    return {"ok": True, "rule_version": RULE_VERSION, "checked_at": at, "state": state, "counts": counts,
-            "limit": limit, "offset": offset, "services": [_payload(r, r["service_id"], at) for r in rows]}
+    return {"ok": True, "rule_version": RULE_VERSION, "checked_at": at, column: value, "counts": states,
+            "tier_counts": tiers, "limit": limit, "offset": offset, "services": [_payload(r, at) for r in rows]}
+
+
+def by_state(conn: psycopg.Connection, state: str, limit: int = 500, offset: int = 0) -> dict[str, Any]:
+    return listing(conn, state=state, limit=limit, offset=offset)
 
 
 # --- Blocking ------------------------------------------------------------------------

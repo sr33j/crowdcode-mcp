@@ -1257,6 +1257,10 @@ def _project_ideas_payload() -> dict[str, Any]:
     return as_project_ideas(_service_proposals_payload())
 
 
+def _has_reliability(conn: Any) -> bool:
+    return bool(conn.execute("select to_regclass('service_reliability') is not null as ok").fetchone()["ok"])
+
+
 def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
     # Canonical score (docs/SCORING.md v1): stored on the services row,
     # refreshed by the review write path and the nightly consistency sweep.
@@ -1276,9 +1280,11 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.n_eff_legacy,
           s.n_eff_hosted,
           (s.review_summary->>'version' = '{SUMMARY_VERSION}') as has_summary,
+          {{reliability_columns}}
           {review_counts('r')}
         from services s
         left join reviews r on r.service_id = s.id
+        {{reliability_join}}
         -- A hosted service its owner deleted leaves the rankings (hosted_services.py).
         where coalesce(s.metadata->>'hosted_status', '') <> 'deleted'
           and {directory_listed('s')}
@@ -1286,6 +1292,12 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
         order by s.score desc, s.n_eff desc, num_weighted_reviews desc, num_reviews desc, s.name asc
         """
     with connect() as conn:
+        # reliability-v2's tier and score, where supabase/reliability.sql is applied.
+        has_reliability = _has_reliability(conn)
+        sql = sql.replace("{reliability_columns}", (
+            "max(sr.tier) as tier, max(sr.score) as reliability_score, max(sr.state) as reliability_state,"
+            if has_reliability else "")).replace("{reliability_join}", (
+            "left join service_reliability sr on sr.service_id = s.id" if has_reliability else ""))
         if limit is None:
             rows = conn.execute(sql).fetchall()
         else:
@@ -1318,6 +1330,12 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "n_eff_hosted": as_float(row["n_eff_hosted"]) or 0.0,
             # Deprecated alias of the canonical score (pre-scoring-v1 field).
             "rank_score": as_float(row["score"]),
+            # reliability-v2 (C10): the tier and the one score CrowdCode's pages show
+            # (delivery estimate x quality). `score` above stays the v3.1 review
+            # score, the quality input, because clients validate it as 2-5.
+            "tier": row.get("tier") or "new",
+            "reliability_score": as_float(row.get("reliability_score")),
+            "reliability_state": row.get("reliability_state") or "unverified",
             **networks.get(row["service_id"], EMPTY_NETWORKS),
         }
         for row in rows
@@ -1345,6 +1363,12 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """,
             (service_id,),
         ).fetchone()
+        verdict = conn.execute(
+            "select tier, score as reliability_score, state as reliability_state from service_reliability "
+            "where service_id = %s", (service_id,),
+        ).fetchone() if service is not None and _has_reliability(conn) else None
+        if verdict:
+            service = {**service, **verdict}
         if service is None:
             return {
                 "ok": False,
@@ -1406,6 +1430,9 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "n_eff": n_eff,
         "unproven": is_unproven(n_eff),
         "score_algorithm": SCORE_ALGORITHM,
+        "tier": service.get("tier") or "new",
+        "reliability_score": as_float(service.get("reliability_score")),
+        "reliability_state": service.get("reliability_state") or "unverified",
         "num_reviews": counts["num_reviews"],
         "num_verified_reviews": counts["num_verified_reviews"],
         "num_onchain_verified_reviews": counts["num_onchain_verified_reviews"],
@@ -1771,7 +1798,7 @@ def _service_reliability_payload(service_id: str) -> dict[str, Any] | None:
 
 
 async def service_reliability(request: Request) -> JSONResponse:
-    """`GET /api/services/{service_id}/reliability`: reliability-v1's state, reasons and inputs (C3)."""
+    """`GET /api/services/{service_id}/reliability`: reliability-v2's tier, posterior, score, reasons and inputs (C3, C10)."""
     service_id = request.path_params["service_id"]
     try:
         payload = await run_in_threadpool(_service_reliability_payload, service_id)
@@ -1782,17 +1809,18 @@ async def service_reliability(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **payload}, headers={"Cache-Control": "public, max-age=60"})
 
 
-def _reliability_by_state_payload(state: str, limit: int, offset: int) -> dict[str, Any]:
+def _reliability_listing_payload(state: str | None, tier: str | None, limit: int, offset: int) -> dict[str, Any]:
     with connect() as conn:
-        return reliability.by_state(conn, state, limit, offset)
+        return reliability.listing(conn, state=state, tier=tier, limit=limit, offset=offset)
 
 
 async def reliability_lookup(request: Request) -> JSONResponse:
     """`GET /api/reliability?url=<endpoint>&method=<M>` (what the gateway asks before paying), or
-    `GET /api/reliability?state=reliable[&limit=&offset=]` (the bulk list) (C3)."""
+    `GET /api/reliability?state=reliable` or `?tier=proven` `[&limit=&offset=]` (the bulk list) (C3, C10)."""
     params = request.query_params
     url = (params.get("url") or "").strip()
     state = (params.get("state") or "").strip().lower()
+    tier = (params.get("tier") or "").strip().lower()
     method = (params.get("method") or "").strip().upper() or None
     if url:
         if len(url) > 2000 or (method and method not in _HTTP_METHODS):
@@ -1804,10 +1832,11 @@ async def reliability_lookup(request: Request) -> JSONResponse:
         except Exception:
             return _unexpected_json_error("reliability_lookup")
         return JSONResponse({"ok": True, **payload}, headers={"Cache-Control": "public, max-age=30"})
-    if state:
-        if state not in reliability.STATES:
+    if state or tier:
+        if (state and state not in reliability.STATES) or (tier and tier not in reliability.TIERS):
             return JSONResponse({"ok": False, "error_code": "invalid_request",
-                                 "error": "state must be reliable, unverified or unreliable"}, status_code=400)
+                                 "error": "state must be reliable, unverified or unreliable; "
+                                          "tier must be bad, proven, popular or new"}, status_code=400)
         try:
             limit = min(max(int(params.get("limit") or 500), 1), 1000)
             offset = max(int(params.get("offset") or 0), 0)
@@ -1815,11 +1844,11 @@ async def reliability_lookup(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error_code": "invalid_request",
                                  "error": "limit and offset must be integers"}, status_code=400)
         try:
-            payload = await run_in_threadpool(_reliability_by_state_payload, state, limit, offset)
+            payload = await run_in_threadpool(_reliability_listing_payload, state or None, tier or None, limit, offset)
         except Exception:
             return _unexpected_json_error("reliability_list")
         return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
-    return JSONResponse({"ok": False, "error_code": "invalid_request", "error": "pass url (and method) or state"},
+    return JSONResponse({"ok": False, "error_code": "invalid_request", "error": "pass url (and method), state or tier"},
                         status_code=400)
 
 def _tree_row(which: str | None) -> dict[str, Any] | None:
