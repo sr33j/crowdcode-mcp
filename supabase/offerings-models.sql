@@ -32,7 +32,7 @@ create table if not exists index_offering_models (
   modality text not null,
   -- The seller's own id for it ('kwaivgi/kling-v3.0-pro'), from its catalog.
   seller_model_id text,
-  source text not null check (source in ('models_endpoint', 'route', 'description')),
+  source text not null check (source in ('models_endpoint', 'schema', 'route', 'description')),
   -- The seller's own pricing for this model, as published (pricing_skus etc).
   pricing jsonb,
   usd_per_second numeric,
@@ -66,3 +66,19 @@ create index if not exists model_quality_priors_modality_idx on model_quality_pr
 
 alter table index_offering_models enable row level security;
 alter table model_quality_priors enable row level security;
+
+-- A seller's input schema can list the models one endpoint sells (a `model`
+-- enum): source 'schema', between the catalog and the route (W6, for routers
+-- such as Treza's /api/x402/video). Re-create the check on databases that
+-- already have the table.
+do $$
+declare c text;
+begin
+  for c in select conname from pg_constraint
+           where conrelid = 'index_offering_models'::regclass and contype = 'c'
+             and pg_get_constraintdef(oid) like '%models_endpoint%' loop
+    execute format('alter table index_offering_models drop constraint %I', c);
+  end loop;
+  alter table index_offering_models add constraint index_offering_models_source_check
+    check (source in ('models_endpoint', 'schema', 'route', 'description'));
+end $$;

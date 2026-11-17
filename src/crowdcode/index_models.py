@@ -206,6 +206,47 @@ def offering_model(route_path: str, description: str | None, service_name: str |
     return None
 
 
+def _model_fields(value: Any) -> list[dict[str, Any]]:
+    """Every `model` property (body or query) of an input schema."""
+    found: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        props = value.get("properties")
+        if isinstance(props, dict):
+            for name, prop in props.items():
+                if str(name).lower() in ("model", "model_id", "modelid") and isinstance(prop, dict):
+                    found.append(prop)
+        for inner in value.values():
+            found.extend(_model_fields(inner))
+    elif isinstance(value, list):
+        for inner in value:
+            found.extend(_model_fields(inner))
+    return found
+
+
+def schema_models(schema: Any) -> list[tuple[Model, str, dict[str, Any] | None]]:
+    """The models a router endpoint sells, from its own input schema's `model`
+    enum: [(model, the seller's id, {"clip_seconds", "clip_usd"} or None)].
+
+    The clip price is the first "<id> <N>s $<price>" the field's description
+    gives for that id (Treza: "veo-3.1 4s $2.24, 6s $3.36"); per-model prices
+    differ far more than the listing's single price says."""
+    out: dict[str, tuple[Model, str, dict[str, Any] | None]] = {}
+    for field in _model_fields(schema):
+        description = str(field.get("description") or "")
+        for value in field.get("enum") or []:
+            if not isinstance(value, str):
+                continue
+            model = normalize_model(value)
+            if model is None or model.model in out:
+                continue
+            price = None
+            match = re.search(rf"(?<![\w.-]){re.escape(value)}(?![\w.-])[^;]*?(\d+)\s*s\s*\$(\d+(?:\.\d+)?)", description)
+            if match:
+                price = {"clip_seconds": int(match[1]), "clip_usd": float(match[2])}
+            out[model.model] = (model, value, price)
+    return list(out.values())
+
+
 _MODALITY_WORDS = (
     ("video", r"\b(text|image|reference)-to-video\b|\bvideo-generation\b|\bgenerate-(a-)?videos?\b|\bt2v\b|\bi2v\b"),
     ("image", r"\btext-to-image\b|\bimage-generation\b|\bgenerate-(an-)?images?\b|\bimage-editing\b"),
