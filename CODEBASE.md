@@ -76,6 +76,35 @@ static-embedding model, loaded in the background, and the text each listing
 is matched on. `discovery.py` blends its similarity with keyword overlap and
 quality. `CROWDCODE_SEMANTIC_SEARCH=0` turns it off.
 
+## `src/crowdcode/index.py`, `index_feeds.py`, `index_probe.py`
+
+The services index (SRI-115 tickets 1 and 2; contract C1 in the parent
+repository's `design-docs/RELIABLE_SERVICES_BUILD.md`). Three hourly cron
+jobs:
+
+- `index_sweep` reads the CDP x402 Bazaar and mpp.dev in full once a day, and
+  our own records every hour: hosted services, gateway-attested purchases and
+  reviewed endpoints. It folds them into `index_resources`, one row per
+  `(method, route template)`. Network ids become CAIP-2, Base/Solana/Tempo
+  only, with a `payable` flag. Parameter and identifier path segments collapse
+  into templates. A resource is `tracked` if it has ≥ 3 Bazaar payers, a
+  gateway purchase, is a hosted service, or matches a proposal. Every tracked
+  resource links to one `services` row. Rows the index creates have
+  `metadata.listing_source = 'index'` and `created_from_review = false`. They
+  stay out of the directory and search until reviewed
+  (`review_sql.directory_listed`).
+- `index_purchases` records each gateway purchase as an observation.
+- `index_probes` sends one unpaid request per tracked resource per day,
+  spread across the hours. It uses the `CrowdCodeIndex/1` User-Agent, sends
+  the seller's example body (never an empty one), follows no redirects, and
+  calls public hosts only. Results go to `index_observations`. Price, payee
+  and liveness changes go to `index_changes`. `index_resource_signals` is what
+  the reliability rule reads.
+
+`GET /api/index/health` reports tracked count, share probed in 24 h and feed
+sweep ages. `GET /api/index/resource?url=&method=` returns one resource with
+its probes and changes. Schema: `supabase/services-index.sql`.
+
 ## `src/crowdcode/search_eval.py`
 
 recall@3 and MRR for the evaluation set in `tests/search_eval/cases.json`,

@@ -81,6 +81,7 @@ from crowdcode.proposals import PAYLOAD_VERSION as PROPOSALS_VERSION
 from crowdcode.proposals import as_project_ideas
 from crowdcode.proposals import empty_payload as empty_proposals
 from crowdcode.review_sql import (
+    directory_listed,
     legacy_reviews,
     public_reviews,
     review_counts,
@@ -1285,6 +1286,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
         left join reviews r on r.service_id = s.id
         -- A hosted service its owner deleted leaves the rankings (hosted_services.py).
         where coalesce(s.metadata->>'hosted_status', '') <> 'deleted'
+          and {directory_listed('s')}
         group by s.id
         order by s.score desc, s.n_eff desc, num_weighted_reviews desc, num_reviews desc, s.name asc
         """
@@ -1434,11 +1436,12 @@ def _knowledge_evidence_payload() -> dict[str, Any]:
     observation) and the generated summary. Review text is never exported."""
     with connect() as conn:
         services = conn.execute(
-            """
+            f"""
             select id, name, directory_slug, canonical_endpoint,
                    payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
                    review_summary
             from services
+            where {directory_listed()}
             order by score desc, n_eff desc, name asc
             """
         ).fetchall()
@@ -1655,6 +1658,45 @@ async def cron_status(_: Request) -> JSONResponse:
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
+def _index_health_payload() -> dict[str, Any]:
+    from crowdcode import index as services_index
+    with connect() as conn:
+        return services_index.health(conn, datetime.now(UTC))
+
+
+async def index_health(_: Request) -> JSONResponse:
+    """The services index: tracked count, share probed in 24 h, feed sweep ages (C1)."""
+    try:
+        payload = await run_in_threadpool(_index_health_payload)
+    except Exception:
+        return _unexpected_json_error("index_health")
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
+
+
+def _index_resource_payload(url: str, method: str | None) -> dict[str, Any] | None:
+    from crowdcode import index as services_index
+    with connect() as conn:
+        return services_index.resource_detail(conn, url, method)
+
+
+async def index_resource(request: Request) -> JSONResponse:
+    """`GET /api/index/resource?url=<endpoint>[&method=POST]`: one indexed resource,
+    its probe evidence and its change history."""
+    url = (request.query_params.get("url") or "").strip()
+    method = (request.query_params.get("method") or "").strip().upper() or None
+    if not url or len(url) > 2000 or (method and method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}):
+        return JSONResponse({"ok": False, "error_code": "invalid_request",
+                             "error": "url is required; method must be an HTTP method"}, status_code=400)
+    try:
+        payload = await run_in_threadpool(_index_resource_payload, url, method)
+    except Exception:
+        return _unexpected_json_error("index_resource")
+    if payload is None:
+        return JSONResponse({"ok": False, "error_code": "not_indexed", "error": "no indexed resource matches this URL"},
+                            status_code=404)
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
+
+
 async def service_proposals(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_service_proposals_payload)
@@ -1757,6 +1799,8 @@ def create_app() -> Starlette:
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/service-proposals", service_proposals, methods=["GET"]),
             Route("/api/cron/status", cron_status, methods=["GET"]),
+            Route("/api/index/health", index_health, methods=["GET"]),
+            Route("/api/index/resource", index_resource, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),

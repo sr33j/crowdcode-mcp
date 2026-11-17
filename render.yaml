@@ -61,13 +61,14 @@ services:
       - key: SOLANA_RPC_URL
         sync: false
 
-  # Nightly batch (docs/SCORING.md §8.2): consistency sweep, per-service
-  # review summaries, service proposals.
+  # Hourly batch (docs/SCORING.md §8.2): consistency sweep, per-service
+  # review summaries, service proposals, and the services index (its feed
+  # sweep runs once a day; its probes are spread across the hours).
   - type: cron
     name: crowdcode-cron
     runtime: python
     plan: starter
-    schedule: "30 6 * * *"
+    schedule: "0 * * * *"
     buildCommand: pip install -e .
     startCommand: crowdcode-cron
     envVars:

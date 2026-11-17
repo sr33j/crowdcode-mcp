@@ -39,6 +39,8 @@ from typing import Any, Callable, Iterable
 import httpx
 import psycopg
 
+from crowdcode.review_sql import directory_listed
+
 from crowdcode import semantic
 from crowdcode.identity import normalize_api_endpoint
 from crowdcode.networks import fetch_service_networks
@@ -435,13 +437,14 @@ CATALOGS = CatalogClient()
 
 def directory_rows(conn: psycopg.Connection) -> list[dict[str, Any]]:
     return conn.execute(
-        """
+        f"""
         select id, name, directory_slug, canonical_endpoint, payment_provider,
                metadata->>'description' as description, metadata->>'listing_text' as listing_text,
                review_summary->'pros' as review_pros
         from services
         -- A hosted service its owner deleted is not offered (hosted_services.py).
         where coalesce(metadata->>'hosted_status', '') <> 'deleted'
+          and {directory_listed()}
         """
     ).fetchall()
 

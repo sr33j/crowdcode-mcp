@@ -47,7 +47,7 @@ DESCRIPTION_MAX = 600
 FETCH_TIMEOUT = 5.0
 LISTING_SOURCE = "crowdcode-agent-service"
 
-Listing = dict[str, str]
+Listing = dict[str, Any]
 Fetcher = Callable[[str], "Listing | None"]
 
 
@@ -102,7 +102,32 @@ def parse_manifest(slug: str, payload: Any, origin: str | None = None) -> Listin
     description = _clean(payload.get("description"), DESCRIPTION_MAX)
     if description:
         listing["description"] = description
+    bodies = _route_bodies(payload.get("routes"))
+    if bodies:
+        listing["route_bodies"] = bodies
     return listing
+
+
+def _route_bodies(routes: Any) -> dict[str, Any]:
+    """The smallest valid request body for each route that takes one, from the
+    route's own input schema and examples. The services index sends it as its
+    daily unpaid probe, so the 402 quotes a real request rather than a 400 for
+    an empty one (services priced per request need the request to quote)."""
+    from crowdcode.identity import normalize_api_endpoint
+    from crowdcode.index_probe import body_from_schema
+
+    bodies: dict[str, Any] = {}
+    for route in routes if isinstance(routes, list) else []:
+        if not isinstance(route, dict) or str(route.get("method") or "").upper() not in ("POST", "PUT", "PATCH"):
+            continue
+        try:
+            url = normalize_api_endpoint(str(route.get("url") or ""))
+        except ValueError:
+            continue
+        body = body_from_schema(route.get("input_schema"))
+        if url and body and len(str(body)) <= 4000:
+            bodies[url] = body
+    return bodies
 
 
 def fetch_listing(slug: str, *, origin: str | None = None, client: httpx.Client | None = None) -> Listing | None:
@@ -187,12 +212,17 @@ def refresh_agent_listings(
                         stats["updated"] += 1
                     continue
                 metadata = dict(row["metadata"] or {})
-                if row["name"] == listing["name"] and metadata.get("description") == listing.get("description"):
+                probe_body = (listing.get("route_bodies") or {}).get(row["canonical_endpoint"])
+                if (row["name"] == listing["name"] and metadata.get("description") == listing.get("description")
+                        and metadata.get("probe_body") == probe_body):
                     stats["unchanged"] += 1
                     continue
                 metadata.pop("description", None)
                 if listing.get("description"):
                     metadata["description"] = listing["description"]
+                metadata.pop("probe_body", None)
+                if probe_body:
+                    metadata["probe_body"] = probe_body
                 metadata["listing_source"] = LISTING_SOURCE
                 metadata["listing_refreshed_at"] = now
                 conn.execute(

@@ -98,3 +98,18 @@ def review_counts(alias: str = "") -> str:
               count({p}id) filter (where {legacy})::int as num_legacy_reviews,
               count({p}id) filter (where {public} and not {weighted}
                 and not {legacy})::int as num_community_reviews"""
+
+
+def directory_listed(alias: str = "services") -> str:
+    """Which services rows the public directory and search show.
+
+    The services index (crowdcode.index) creates a row for every tracked
+    resource that had none, so its evidence has a service to attach to. Until
+    one of those rows is reviewed it stays out of the directory, the rankings
+    and search: the index tracks thousands of resources, and which of them
+    agents should see is the reliability rule's call, not the crawler's.
+    """
+    return (
+        f"not (coalesce({alias}.metadata->>'listing_source', '') = 'index'"
+        f" and not exists (select 1 from reviews listed_r where listed_r.service_id = {alias}.id))"
+    )
