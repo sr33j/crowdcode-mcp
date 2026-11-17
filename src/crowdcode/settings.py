@@ -55,6 +55,10 @@ class Settings:
     hosted_sync_token: str | None = None
     # Shared with CrowdCode's reconciler: the nightly demand miner's batches (C8).
     demand_miner_token: str | None = None
+    # Bearer token the hosted reconciler's tree gate (W8) uses to publish a
+    # capability-tree version that passed (POST /api/internal/tree/publish).
+    # Unset disables the endpoint.
+    tree_gate_token: str | None = None
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -134,4 +138,5 @@ def get_settings() -> Settings:
         or None,
         hosted_sync_token=os.environ.get("CROWDCODE_HOSTED_SYNC_TOKEN", "").strip() or None,
         demand_miner_token=os.environ.get("CROWDCODE_DEMAND_MINER_TOKEN", "").strip() or None,
+        tree_gate_token=os.environ.get("CROWDCODE_TREE_GATE_TOKEN", "").strip() or None,
     )

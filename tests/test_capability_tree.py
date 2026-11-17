@@ -483,3 +483,88 @@ def test_old_versions_are_pruned_but_the_published_one_is_kept(db, monkeypatch):
             ct.store_version(conn, {"nodes": []}, fingerprint=str(i), trigger="changed", now=NOW, stats={})
         versions = [r["version"] for r in conn.execute("select version from capability_tree_versions order by 1")]
         assert 1 in versions and len(versions) == ct.KEEP_VERSIONS + 1
+
+
+# --- W8: the gate's publish seam and test fixtures ---------------------------------
+
+
+def _store(conn, n: int, monkeypatch) -> list[int]:
+    monkeypatch.setenv("CROWDCODE_TREE_AUTO_PUBLISH", "0")
+    tree = video_fixture({"svc_x": reliable("svc_x")})
+    return [ct.store_version(conn, tree, fingerprint=f"f{i}", trigger="nightly", now=NOW + timedelta(hours=i),
+                             stats={"built": i}) for i in range(n)]
+
+
+def test_the_gate_publishes_only_a_newer_real_candidate_and_keeps_its_evidence(db, monkeypatch):
+    with db() as conn:
+        v1, v2, v3 = _store(conn, 3, monkeypatch)
+        assert ct.latest(conn, published_only=True) is None
+        evidence = {"baseline": None, "candidate": v2, "tasks": [{"task": "free_math", "outcome": "pass"}]}
+        assert ct.publish_gated(conn, v2, by="tree-gate 2026-11-18", evidence=evidence, now=NOW) == "published"
+        current = ct.latest(conn, published_only=True)
+        assert current["version"] == v2 and current["published_by"] == "tree-gate 2026-11-18"
+        assert current["stats"]["gate"]["tasks"][0]["task"] == "free_math" and current["stats"]["built"] == 1
+        # A retry is not an error; an older version is never served again by the gate.
+        assert ct.publish_gated(conn, v2, by="again", evidence={}, now=NOW) == "already_published"
+        assert ct.publish_gated(conn, v1, by="gate", evidence={}, now=NOW) == "not_newer"
+        assert ct.publish_gated(conn, 99, by="gate", evidence={}, now=NOW) == "not_found"
+        # Oversized evidence keeps the comparison and drops the task list.
+        huge = {"decision": "publish", "tasks": [{"detail": "x" * 500}] * 40}
+        assert ct.publish_gated(conn, v3, by="gate", evidence=huge, now=NOW) == "published"
+        gate = ct.get_version(conn, v3)["stats"]["gate"]
+        assert gate == {"truncated": True, "decision": "publish"}
+
+
+def test_a_fixture_is_worse_advice_on_the_same_shape_and_is_never_published(db, monkeypatch):
+    with db() as conn:
+        [v1] = _store(conn, 1, monkeypatch)
+        base = ct.get_version(conn, v1)
+        fixture = ct.store_fixture(conn, v1, "buy_first", now=NOW + timedelta(days=1))
+        row = ct.get_version(conn, fixture)
+        assert fixture == v1 + 1 and not row["published"]
+        assert row["trigger"] == f"fixture:buy_first:v{v1}"
+        # Same fingerprint and build time: the hourly cron neither rebuilds for it nor counts it as fresh.
+        assert row["fingerprint"] == base["fingerprint"] and row["built_at"] == base["built_at"]
+        # Every node and leaf is still there; only the policy changed.
+        assert [n["id"] for n in row["tree"]["nodes"]] == [n["id"] for n in base["tree"]["nodes"]]
+        l0 = ct.render_l0(row["tree"])
+        assert l0.splitlines()[1].startswith("Buy first") and "Free first" not in l0
+        assert row["tree"]["version"] == fixture
+        assert ct.summary_payload(row)["trigger"].startswith("fixture:")
+        assert ct.latest(conn, published_only=False)["version"] == fixture
+        assert ct.publish_gated(conn, fixture, by="gate", evidence={}, now=NOW) == "fixture"
+        assert ct.latest(conn, published_only=True) is None
+    dropped = ct.degrade(base["tree"], "drop_free_first")
+    assert "free-first" not in [n["id"] for n in dropped["nodes"]]
+    assert "Free first" not in ct.render_l0(dropped) and len(dropped["nodes"]) == len(base["tree"]["nodes"]) - 1
+    with pytest.raises(ValueError, match="unknown fixture"):
+        ct.degrade({"nodes": []}, "nonsense")
+
+
+def test_the_publish_endpoint_needs_the_gate_token_and_a_well_formed_body(db, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from crowdcode import server
+
+    with db() as conn:
+        [v1, v2] = _store(conn, 2, monkeypatch)
+        conn.commit()
+    monkeypatch.setattr(server, "connect", db)
+    client = TestClient(Starlette(routes=[Route("/api/internal/tree/publish", server.tree_publish, methods=["POST"])]))
+    body = {"version": v2, "by": "tree-gate test", "evidence": {"decision": "publish"}}
+    monkeypatch.delenv("CROWDCODE_TREE_GATE_TOKEN", raising=False)
+    assert client.post("/api/internal/tree/publish", json=body).status_code == 404
+    monkeypatch.setenv("CROWDCODE_TREE_GATE_TOKEN", "gate-token-0123456789abcdef0123456789")
+    auth = {"authorization": "Bearer gate-token-0123456789abcdef0123456789"}
+    assert client.post("/api/internal/tree/publish", json=body).status_code == 401
+    assert client.post("/api/internal/tree/publish", json=body, headers={"authorization": "Bearer nope"}).status_code == 401
+    for bad in [{**body, "version": "2"}, {**body, "version": True}, {**body, "by": " "}, {**body, "evidence": []}, []]:
+        assert client.post("/api/internal/tree/publish", json=bad, headers=auth).status_code == 400
+    ok = client.post("/api/internal/tree/publish", json=body, headers=auth)
+    assert ok.status_code == 200 and ok.json() == {"ok": True, "result": "published", "version": v2}
+    older = client.post("/api/internal/tree/publish", json={**body, "version": v1}, headers=auth)
+    assert older.status_code == 409 and older.json()["result"] == "not_newer"
+    with db() as conn:
+        assert ct.latest(conn, published_only=True)["version"] == v2
