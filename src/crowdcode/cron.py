@@ -432,6 +432,7 @@ def run_service_summaries(now: datetime) -> None:
 
     settings = get_settings()
     summarized = 0
+    attempted = 0
     for service_id, service_name, reviews, revision in inputs:
         if not reviews:
             continue
@@ -460,6 +461,7 @@ def run_service_summaries(now: datetime) -> None:
                 }
             )
 
+        attempted += 1
         summary = summarize_service_reviews(service_name, clean_reviews)
         if summary is None:
             continue
@@ -487,6 +489,11 @@ def run_service_summaries(now: datetime) -> None:
             conn.commit()
         summarized += 1
     print(f"summaries: {summarized}/{len(inputs)} service(s) summarized")
+    # Every model call failing is an outage (an exhausted key, a dead model), not
+    # "nothing to say": it printed "0/23 summarized" and exited cleanly for 16
+    # days from 2026-10-31. Raise so the run, and the status page, say so.
+    if attempted and not summarized:
+        raise RuntimeError(f"summaries: all {attempted} summary call(s) failed")
 
 
 def run_service_proposals(now: datetime) -> None:
@@ -537,34 +544,98 @@ def run_listing_descriptions(now: datetime) -> None:
     print(f"listing descriptions: {stats}")
 
 
-def main() -> None:
-    settings = get_settings()
-    now = utc_now()
-    failed = False
+STATUS_CACHE_KEY = "cron_status"
+STATUS_HISTORY = 24
 
-    try:
-        with connect() as conn:
-            sync_seed_owners(conn, settings.seed_owners)
-            conn.commit()
-        print(f"seeds: synced {len(settings.seed_owners)} explicit root owner(s)")
-    except Exception:
-        traceback.print_exc()
-        failed = True
 
-    for job in (
+def error_label(error: BaseException) -> str:
+    """A short, public description of why a job failed.
+
+    The class name and, for an HTTP error, the status code: enough to tell an
+    exhausted API key (429) from a dead database, and never a message, which can
+    carry a connection string or a key.
+    """
+    label = type(error).__name__
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        label += f" {status}"
+    return label[:80]
+
+
+def jobs() -> tuple:
+    return (
         run_agent_listings,
         run_listing_descriptions,
         run_payment_reverification,
         run_consistency_sweep,
         run_service_summaries,
         run_service_proposals,
-    ):
-        try:
-            job(now)
-        except Exception:
-            traceback.print_exc()
-            failed = True
+    )
 
+
+def record_status(run: dict[str, Any]) -> None:
+    """Keep the last runs in app_cache, newest first, for `/api/cron/status`.
+
+    Best effort: a run whose status cannot be written must still do its jobs,
+    and the reconciler treats a status that stops moving as a failure anyway.
+    """
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "select payload from app_cache where key = %s", (STATUS_CACHE_KEY,)
+            ).fetchone()
+            previous = row["payload"].get("runs", []) if row and isinstance(row["payload"], dict) else []
+            payload = {"version": 1, "runs": [run, *previous][:STATUS_HISTORY]}
+            conn.execute(
+                """
+                insert into app_cache (key, payload, generated_at)
+                values (%s, %s::jsonb, now())
+                on conflict (key)
+                do update set payload = excluded.payload, generated_at = excluded.generated_at
+                """,
+                (STATUS_CACHE_KEY, _as_json(payload)),
+            )
+            conn.commit()
+    except Exception:
+        traceback.print_exc()
+
+
+def main() -> None:
+    settings = get_settings()
+    now = utc_now()
+    results: list[dict[str, Any]] = []
+
+    def attempt(name: str, fn) -> None:
+        started = utc_now()
+        try:
+            fn()
+            results.append({"job": name, "ok": True,
+                            "seconds": round((utc_now() - started).total_seconds(), 1)})
+        except Exception as error:
+            traceback.print_exc()
+            results.append({"job": name, "ok": False, "error": error_label(error),
+                            "seconds": round((utc_now() - started).total_seconds(), 1)})
+
+    def seeds() -> None:
+        with connect() as conn:
+            sync_seed_owners(conn, settings.seed_owners)
+            conn.commit()
+        print(f"seeds: synced {len(settings.seed_owners)} explicit root owner(s)")
+
+    attempt("seed_owners", seeds)
+    # One job raising never stops the next: each is attempted and recorded.
+    for job in jobs():
+        attempt(job.__name__.removeprefix("run_"), lambda job=job: job(now))
+
+    failed = [result["job"] for result in results if not result["ok"]]
+    record_status({
+        "started_at": now.isoformat(),
+        "finished_at": utc_now().isoformat(),
+        "ok": not failed,
+        "failed": failed,
+        "jobs": results,
+    })
     if failed:
         sys.exit(1)
 
