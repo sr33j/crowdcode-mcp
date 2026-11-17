@@ -1,0 +1,33 @@
+name: Install smoke
+
+# A fresh, lockfile-free install of what users actually install, from the
+# registry, every night. On 2026-11-17 an upstream binary download
+# (onnxruntime-node 1.21's GPU tarball on GitHub) started returning 404 and
+# every fresh Linux install of crowdcode-mcp failed while CI, installing from
+# its lockfile cache, stayed green. This catches that the same day.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  fresh-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm i crowdcode-mcp@latest into an empty project
+        shell: bash
+        run: |
+          mkdir fresh && cd fresh
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund crowdcode-mcp@latest @crowdcode/redaction@latest
+          npx --no-install crowdcode-mcp status
+      - name: npx -y crowdcode-mcp@latest
+        shell: bash
+        run: npx -y crowdcode-mcp@latest status

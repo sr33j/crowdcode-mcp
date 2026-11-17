@@ -40,3 +40,19 @@ jobs:
       - run: npm test
       - run: npm run check:assets -w crowdcode-mcp
       - run: npm publish --workspace crowdcode-mcp --provenance --access public
+      # @crowdcode/redaction has its own version. Publish it when this release
+      # carries a version npm does not have yet: a redaction fix (0.1.1, the
+      # transformers ^4 move) also repairs crowdcode-mcp installs pinned to an
+      # older version, which resolve ^0.1.x. Needs npm trusted publishing set
+      # for @crowdcode/redaction (this repository, release.yml); without it the
+      # step fails visibly and crowdcode-mcp, already published above, is
+      # unaffected.
+      - name: Publish @crowdcode/redaction if its version is new
+        continue-on-error: true
+        run: |
+          version=$(node -p 'require("./packages/redaction/package.json").version')
+          if npm view "@crowdcode/redaction@${version}" version >/dev/null 2>&1; then
+            echo "@crowdcode/redaction ${version} is already published"
+          else
+            npm publish --workspace @crowdcode/redaction --provenance --access public
+          fi
