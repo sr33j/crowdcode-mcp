@@ -68,6 +68,9 @@ BATCH_SIZE = 50
 # pass (5,300) spreads over three hourly runs.
 MAX_BATCHES_PER_RUN = 40
 REBUILD_EVERY = timedelta(hours=20)
+# Bumped when how a tree is assembled changes (ranking, leaves, renderings), so
+# a deploy rebuilds at the next run instead of at the nightly one.
+BUILD_LOGIC = "quality-first-1"
 # Past this, a build goes ahead even without reliability data (ticket 9 wants
 # the served tree under 36 h old).
 STALE_AFTER = timedelta(hours=30)
@@ -1863,11 +1866,25 @@ def build_fingerprint(conn: Any, reliability: ReliabilityView) -> str:
     leaves = conn.execute(
         "select md5(coalesce(string_agg(id || array_to_string(facets, '|'), ',' order by id), '')) as l from capability_leaves"
     ).fetchone()
-    tracked = conn.execute(
+    offered = conn.execute(
         "select md5(coalesce(string_agg(id::text || coalesce(service_id, ''), ',' order by id), '')) as t "
-        "from index_resources where tracked"
+        "from index_resources where payable"
     ).fetchone()
-    raw = "|".join([row["c"], leaves["l"], tracked["t"], reliability.fingerprint()])
+    # C9: which models are sold and how they are rated change picks as much as tiers do.
+    models = "none"
+    conn.execute("savepoint tree_fingerprint")
+    try:
+        models = conn.execute(
+            """
+            select md5(coalesce((select string_agg(resource_id::text || model || coalesce(pricing::text, ''), ','
+                                                   order by resource_id, model) from index_offering_models), '')
+                       || coalesce((select string_agg(model || prior_rating::text, ',' order by model)
+                                    from model_quality_priors), '')) as m
+            """
+        ).fetchone()["m"]
+    except Exception:  # W1's tables are absent: the tree still builds
+        conn.execute("rollback to savepoint tree_fingerprint")
+    raw = "|".join([BUILD_LOGIC, row["c"], leaves["l"], offered["t"], models, reliability.fingerprint()])
     return hashlib.sha1(raw.encode()).hexdigest()[:20]
 
 
