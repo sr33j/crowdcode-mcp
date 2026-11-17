@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Delivery evidence for reliability-v2 (SRI-115 Phase 2, C10 and C11).** Backend only; apply `supabase/judge-v2-evidence.sql` (idempotent) before deploying.
+  - **Old `partial` verdicts re-read (C11).** The hosted gateway's judge now grades `delivered` or `not_delivered` against the request the endpoint received, with `task_fit` apart (`opencrowd.judge.v2`). A new cron step, `partial_reread`, re-reads each `opencrowd.judge.v1` `partial` once with `crowdcode.rubric.reread_partial`: delivered unless the judge's own text names an endpoint defect (an error status or body, a failed call, a timeout, an empty or malformed body, the wrong thing, a mock, a charge with no result). It writes `reviews.delivery_reread` and `delivery_reread_note` beside the signed attestation, which is never altered; reliability-v2 reads `coalesce(delivery_reread, attestation delivery)`.
+  - **`POST /api/purchase-failures` (C10, beta+1).** The hosted gateway reports a paid call the seller broke before settlement, signed with its receipt key (`opencrowd.purchase_failure.v1`). It is stored as an `index_observations` row with `kind = 'purchase'`, `ok = false`, no review, `detail` set to `seller_error`, `seller_rejected`, `no_receipt` or `authorization_expired`, plus `attempt_ref` (unique) and `traffic`. Unsigned, tampered, stale or unknown records are refused.
+
 - **The capability tree, Phase 2** (SRI-115 C10, C13, C14). The tree now
   covers every payable listing, not only tracked ones. Each offering has a
   tier (`proven`, `popular`, `new`, `bad`) from C10's Beta estimate. Leaves

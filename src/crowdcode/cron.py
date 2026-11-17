@@ -587,6 +587,13 @@ def run_index_probes(now: datetime) -> None:
     services_index.run_probes(connect, now)
 
 
+def run_partial_reread(now: datetime) -> None:
+    """C11's back-fill: each judge.v1 `partial` verdict re-read once, before the rule reads it."""
+    from crowdcode.purchase_failures import reread_partials
+
+    reread_partials(connect)
+
+
 def run_reliability(now: datetime) -> None:
     """reliability-v1 (C3) over every tracked service, after the hour's probes and purchases."""
     reliability.run(connect, utc_now())
@@ -606,6 +613,8 @@ def jobs() -> tuple:
         # Before the model-backed jobs, so a slow model call never delays the probes.
         run_index_sweep,
         run_index_purchases,
+        # C11: old `partial` verdicts re-read before the rule reads them.
+        run_partial_reread,
         run_index_probes,
         run_reliability,
         run_listing_descriptions,

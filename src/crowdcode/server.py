@@ -1990,6 +1990,24 @@ async def observations_route(request: Request) -> JSONResponse:
     return JSONResponse(outcome.body, status_code=outcome.http_status)
 
 
+async def purchase_failures_route(request: Request) -> JSONResponse:
+    """C10: a paid call the seller broke before settlement, signed by the hosted gateway's receipt key."""
+    from crowdcode.purchase_failures import MAX_BYTES, submit_failure
+
+    raw = await request.body()
+    if len(raw) > MAX_BYTES:
+        return _json_error("failure record too large", status_code=413, error_code="invalid_failure")
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_failure")
+    try:
+        outcome = await run_in_threadpool(submit_failure, body, lambda: connect())
+    except Exception:
+        return _unexpected_json_error("purchase_failures")
+    return JSONResponse(outcome.body, status_code=outcome.http_status)
+
+
 async def service_detail(request: Request) -> JSONResponse:
     service_id = request.path_params["service_id"]
     try:
@@ -2043,6 +2061,7 @@ def create_app() -> Starlette:
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),
             Route("/api/observations", observations_route, methods=["POST"]),
+            Route("/api/purchase-failures", purchase_failures_route, methods=["POST"]),
             Route("/api/reliability", reliability_lookup, methods=["GET"]),
             Route("/api/services/{service_id}/reliability", service_reliability, methods=["GET"]),
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
