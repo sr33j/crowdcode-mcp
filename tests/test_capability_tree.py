@@ -884,3 +884,24 @@ def test_new_model_rows_priors_or_build_logic_rebuild_at_the_next_run(db, monkey
     monkeypatch.setattr(ct, "BUILD_LOGIC", "next")
     assert ct.run(db, NOW + timedelta(hours=3), chat=model, reliability=ct.ReliabilityView(),
                   settings=Settings())["built"]["trigger"] == "changed"
+
+
+def test_a_quality_first_leaf_shows_picks_before_a_compact_model_list():
+    text = ct.render_entry(video_fixture(PRIORS), "video.generate")
+    lines = text.splitlines()
+    first_pick = next(i for i, l in enumerate(lines) if l.startswith("Pick: "))
+    models = next(i for i, l in enumerate(lines) if l.startswith("Models ("))
+    assert first_pick < models
+    assert "- Veo 3.1 (4.3/5; 2 sellers, $0.30–$0.40): best treza.example $0.30 new" not in text  # Treza has no host here
+    assert any(l.startswith("- Seedance 2.5 (4.9/5; 2 sellers") for l in lines)
+    assert "- Wan 2.6 (5.0/5; 1 seller, $0.01): no eligible seller" in text
+
+
+def test_models_that_do_not_fit_are_still_named():
+    tree = big_tree()
+    leaf = next(l for n in tree["nodes"] if n["id"] == "video" for l in n["leaves"] if l["id"] == "video.generate")
+    text = ct.render_entry(tree, "video.generate")
+    shown = [m for m in leaf["models"] if f"- {m['label']} (" in text]
+    rest = [m for m in leaf["models"] if m not in shown]
+    if rest:
+        assert f"{len(rest)} more: {rest[0]['label']}" in text and not text.endswith("…")
