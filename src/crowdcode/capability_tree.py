@@ -2054,11 +2054,14 @@ def entry_payload(row: dict[str, Any], entry_id: str) -> dict[str, Any] | None:
     if not found:
         return None
     node, leaf = found
+    # A model id (video.generate.veo-3.1) renders that model's sellers, not its leaf.
+    model = (leaf or {}).get("model_view")
+    target = model["id"] if model else (leaf or node)["id"]
     payload = {
         "ok": True,
         "version": row["version"],
-        "id": (leaf or node)["id"],
-        "kind": "leaf" if leaf else "node",
+        "id": target,
+        "kind": "model" if model else "leaf" if leaf else "node",
         "node": node["id"],
         "leaves": [x["id"] for x in node["leaves"]] if not leaf else None,
         "text": "",
@@ -2066,7 +2069,7 @@ def entry_payload(row: dict[str, Any], entry_id: str) -> dict[str, Any] | None:
     envelope = token_bound(json.dumps(payload, ensure_ascii=False)) + 2
     # JSON doubles each newline and quote: leave room so the text is trimmed by
     # the renderer (whole lines) and not cut mid-line below.
-    text = render_entry(tree, (leaf or node)["id"], budget=ENTRY_TOKENS - envelope - 25) or ""
+    text = render_entry(tree, target, budget=ENTRY_TOKENS - envelope - 25) or ""
     # JSON escapes newlines and quotes: budget the escaped form.
     while token_bound(json.dumps(text, ensure_ascii=False)) > ENTRY_TOKENS - envelope:
         text = _truncate(text, max(1, token_bound(text) - 20))

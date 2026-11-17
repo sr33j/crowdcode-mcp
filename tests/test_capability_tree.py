@@ -905,3 +905,11 @@ def test_models_that_do_not_fit_are_still_named():
     rest = [m for m in leaf["models"] if m not in shown]
     if rest:
         assert f"{len(rest)} more: {rest[0]['label']}" in text and not text.endswith("…")
+
+
+def test_the_api_serves_a_model_s_own_view():
+    tree = video_fixture(PRIORS)
+    body = ct.entry_payload({"version": 3, "published": False, "tree": tree}, "video.generate.veo-3.1")
+    assert body["id"] == "video.generate.veo-3.1" and body["kind"] == "model"
+    assert "## video.generate.veo-3.1 — Veo 3.1, 2 seller(s)" in body["text"]
+    assert "Pick: Veo 3.1 via Treza video" in body["text"] and "Models (" not in body["text"]
