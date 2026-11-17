@@ -380,7 +380,11 @@ def evaluate(inputs: dict[str, Any]) -> dict[str, Any]:
         headline = [f"popular: {prior['source']}, and its probes are healthy"]
     else:
         tier = "new"
-        if prior["kind"] in ("bazaar_strong", "curated"):
+        if prior["kind"] in ("bazaar_strong", "curated") and not tracked:
+            why = f"{prior['source']}, but CrowdCode does not probe it yet"
+        elif prior["kind"] in ("bazaar_strong", "curated") and not any(ep.get("last_probes") for ep in endpoints):
+            why = f"{prior['source']}, but it has not been probed yet (probes run once a day)"
+        elif prior["kind"] in ("bazaar_strong", "curated"):
             why = f"{prior['source']}, but its probes are not healthy"
         else:
             why = (f"{prior['source']}; popular needs {STRONG_MIN_PAYERS} or more Bazaar payers with "
@@ -437,6 +441,64 @@ def _columns(conn: psycopg.Connection, table: str) -> set[str]:
     ).fetchall()}
 
 
+def _models(conn: psycopg.Connection, resources: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """The models each offering sells (``index_offering_models``, C9), with their leaderboard priors."""
+    has_priors = bool(_columns(conn, "model_quality_priors"))
+    prior_cols = ("q.prior_rating, q.source as prior_source, q.as_of as prior_as_of" if has_priors
+                  else "null::numeric as prior_rating, null::text as prior_source, null::date as prior_as_of")
+    join = "left join model_quality_priors q on q.model = m.model" if has_priors else ""
+    models: dict[int, list[dict[str, Any]]] = {}
+    for row in conn.execute(
+        f"""
+        select m.resource_id, m.model, m.model_family, m.modality, {prior_cols}
+        from index_offering_models m {join}
+        where m.resource_id = any(%s)
+        order by m.resource_id, m.model
+        """,
+        (resources,),
+    ).fetchall():
+        models.setdefault(row["resource_id"], []).append({
+            "model": row["model"], "family": row["model_family"], "modality": row["modality"],
+            "prior_rating": row["prior_rating"], "prior_source": row["prior_source"],
+            "prior_as_of": row["prior_as_of"],
+        })
+    return models
+
+
+def _quality_prior(models: list[dict[str, Any]]) -> tuple[Decimal, str]:
+    """The leaderboard rating of the model an offering sells, or the mean over the
+    models a multi-model offering sells that have one; 3.0 without any."""
+    rated = [m for m in models if m.get("prior_rating") is not None]
+    if not rated:
+        return QUALITY_DEFAULT_PRIOR, "the default prior"
+    rating = sum(Decimal(str(m["prior_rating"])) for m in rated) / len(rated)
+    first = rated[0]
+    if len(rated) == 1:
+        return rating, f"{first['model']} on {first['prior_source']} ({_day(first['prior_as_of'])})"
+    return rating, f"the mean of {len(rated)} models' leaderboard ratings ({first['prior_source']})"
+
+
+def listed_inputs(conn: psycopg.Connection, resource: dict[str, Any], as_of: datetime) -> dict[str, Any]:
+    """The inputs for an offering the index lists but does not track: no probes and
+    no service row, but its outside evidence and the quality of the model it sells."""
+    models = (_models(conn, [resource["id"]]).get(resource["id"], []) if _columns(conn, "index_offering_models")
+              else [])
+    prior_rating, prior_source = _quality_prior(models)
+    payers = resource.get("bazaar_payers_30d")
+    return _jsonable({
+        "as_of": as_of,
+        "tracked": False,
+        "listed": {"resource_id": resource["id"], "method": resource.get("method"),
+                   "url": resource.get("probe_url"), "models": models[:MAX_MODELS]},
+        "endpoints": [],
+        "outside": {"bazaar_payers_30d": payers, "bazaar_calls_30d": resource.get("bazaar_calls_30d"),
+                    "curated": "mpp" in (resource.get("sources") or []) and not payers},
+        "judged_30d": {}, "failures_30d": {"total": 0, "test": 0, "by": {}},
+        "quality": {"v31_score": None, "n_eff": 0, "prior_rating": prior_rating, "prior_source": prior_source},
+        "external_payers_30d": 0,
+    })
+
+
 def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str] | None = None) -> dict[str, dict[str, Any]]:
     """Every input reliability-v2 reads, per service: the tracked, blocked and
     reviewed services (``service_ids`` limits it to those)."""
@@ -447,7 +509,6 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
     review_cols = _columns(conn, "reviews")
     observation_cols = _columns(conn, "index_observations")
     has_models = bool(_columns(conn, "index_offering_models"))
-    has_priors = bool(_columns(conn, "model_quality_priors"))
 
     signals = conn.execute(
         f"""
@@ -580,25 +641,7 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
     ).fetchall()}
 
     # Models (C9) and their leaderboard quality priors.
-    models: dict[int, list[dict[str, Any]]] = {}
-    if has_models:
-        prior_cols = ("q.prior_rating, q.source as prior_source, q.as_of as prior_as_of" if has_priors
-                      else "null::numeric as prior_rating, null::text as prior_source, null::date as prior_as_of")
-        join = "left join model_quality_priors q on q.model = m.model" if has_priors else ""
-        for row in conn.execute(
-            f"""
-            select m.resource_id, m.model, m.model_family, m.modality, {prior_cols}
-            from index_offering_models m {join}
-            where m.resource_id = any(%(resources)s)
-            order by m.resource_id, m.model
-            """,
-            params,
-        ).fetchall():
-            models.setdefault(row["resource_id"], []).append({
-                "model": row["model"], "family": row["model_family"], "modality": row["modality"],
-                "prior_rating": row["prior_rating"], "prior_source": row["prior_source"],
-                "prior_as_of": row["prior_as_of"],
-            })
+    models = _models(conn, resources) if has_models else {}
 
     by_service: dict[str, list[dict[str, Any]]] = {}
     for r in signals:
@@ -629,17 +672,7 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
         # Outside evidence: the endpoint with the most Bazaar payers speaks for the offering.
         busiest = max(endpoints, key=lambda e: e["bazaar_payers_30d"] or 0, default=None)
         has_payers = any(e["bazaar_payers_30d"] for e in endpoints)
-        # The quality prior: the leaderboard rating of the model sold, or the mean
-        # over the models a multi-model offering sells that have one.
-        rated = [m for e in endpoints for m in e["models"] if m.get("prior_rating") is not None]
-        if rated:
-            prior_rating = sum(Decimal(str(m["prior_rating"])) for m in rated) / len(rated)
-            first = rated[0]
-            prior_source = (f"{first['model']} on {first['prior_source']} ({_day(first['prior_as_of'])})"
-                            if len(rated) == 1 else
-                            f"the mean of {len(rated)} models' leaderboard ratings ({first['prior_source']})")
-        else:
-            prior_rating, prior_source = QUALITY_DEFAULT_PRIOR, "the default prior"
+        prior_rating, prior_source = _quality_prior([m for e in endpoints for m in e["models"]])
         out[sid] = _jsonable({
             "as_of": as_of,
             "tracked": bool(endpoints),
@@ -845,9 +878,19 @@ def _service_for_url(conn: psycopg.Connection, url: str, method: str | None) -> 
 def for_url(conn: psycopg.Connection, url: str, method: str | None) -> dict[str, Any]:
     """``GET /api/reliability?url=&method=``: always an answer; unknown is ``new``."""
     service_id, resource = _service_for_url(conn, url, method)
+    if service_id is None and resource is not None:
+        # Listed, not tracked: evaluated now from what the index knows about it.
+        inputs = listed_inputs(conn, resource, datetime.now(UTC))
+        result = evaluate(inputs)
+        return {"service_id": None, "state": result["state"], "tier": result["tier"], "rule_version": RULE_VERSION,
+                "computed_at": inputs["as_of"], "checked_at": None, "reasons": result["reasons"],
+                "posterior": result["posterior"], "quality": result["quality"], "score": result["score"],
+                "inputs": {**inputs, "indexed": True},
+                "resolved": {"service_id": None, "resource_id": resource["id"], "method": resource["method"],
+                             "route_template": resource["route_template"]}}
     if service_id is None:
-        payload = _unknown(None, None, NOT_TRACKED if resource is not None else NOT_INDEXED)
-        payload["inputs"]["indexed"] = resource is not None
+        payload = _unknown(None, None, NOT_INDEXED)
+        payload["inputs"]["indexed"] = False
         payload["resolved"] = None
         return payload
     payload = for_service(conn, service_id) or _unknown(service_id, None, NOT_TRACKED)
