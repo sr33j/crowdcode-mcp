@@ -162,7 +162,7 @@ class Resource:
     probe_url: str
     sources: set[str] = field(default_factory=set)
     feed: Listing | None = None  # the listing whose fields the row shows
-    feed_weight: int = -1
+    feed_weight: tuple[int, int, int] = (-1, -1, -1)
     networks: set[str] = field(default_factory=set)
     pay_to: list[str] = field(default_factory=list)
     payable: bool = False
@@ -247,6 +247,8 @@ class Merger:
                 if r.has_params and (r, key) not in self._templates[r.origin]:
                     self._templates[r.origin].append((r, key))
         resource.sources.add(listing.source)
+        # The Bazaar lists a few hundred URLs twice; count each URL once.
+        repeat = (listing.source, resource.method, url) in self.urls
         self.urls[(listing.source, resource.method, url)] = (key, listing.payers_30d)
 
         if listing.source in FEED_SOURCES:
@@ -262,7 +264,7 @@ class Merger:
             if listing.source == "bazaar":
                 if listing.payers_30d is not None:
                     resource.bazaar_payers = max(resource.bazaar_payers or 0, listing.payers_30d)
-                if listing.calls_30d is not None:
+                if listing.calls_30d is not None and not repeat:
                     resource.bazaar_calls = (resource.bazaar_calls or 0) + listing.calls_30d
                 if listing.last_called_at and (resource.bazaar_last_called_at is None
                                                or listing.last_called_at > resource.bazaar_last_called_at):
@@ -544,6 +546,8 @@ def link_services(conn: psycopg.Connection) -> dict[str, int]:
         if best is None or (match["n"], match["service_id"]) > best:
             owners[match["url"]] = (match["n"], match["service_id"])
 
+    links: list[tuple[str, int]] = []
+    creations: dict[str, tuple[Any, ...]] = {}
     for row in rows:
         found = [owners[u] for u in urls[row["id"]] if u in owners]
         if found:
@@ -557,24 +561,34 @@ def link_services(conn: psycopg.Connection) -> dict[str, int]:
             metadata = {"listing_source": "index", "index_resource_key": row["resource_key"]}
             if row.get("description"):
                 metadata["description"] = row["description"]
-            inserted = conn.execute(
+            creations.setdefault(service_id, (service_id, _service_name(row), canonical_origin(endpoint), endpoint,
+                                              Jsonb(metadata)))
+        links.append((service_id, row["id"]))
+    if creations:
+        existing = {r["id"] for r in conn.execute(
+            "select id from services where id = any(%s)", (list(creations),)).fetchall()}
+        with conn.cursor() as cur:
+            # Pipelined: the first sweep creates thousands of rows.
+            cur.executemany(
                 """
                 insert into services (id, name, canonical_origin, canonical_endpoint, created_from_review, metadata)
                 values (%s, %s, %s, %s, false, %s)
                 on conflict (id) do nothing
-                returning id
                 """,
-                (service_id, _service_name(row), canonical_origin(endpoint), endpoint, Jsonb(metadata)),
-            ).fetchone()
-            conn.execute(
+                list(creations.values()),
+            )
+            cur.executemany(
                 """
                 insert into service_identifiers (service_id, identifier_type, identifier_value)
                 values (%s, 'api_endpoint', %s) on conflict do nothing
                 """,
-                (service_id, endpoint),
+                [(sid, values[3]) for sid, values in creations.items()],
             )
-            stats["created" if inserted else "linked"] += 1
-        conn.execute("update index_resources set service_id = %s where id = %s", (service_id, row["id"]))
+        stats["created"] += len(set(creations) - existing)
+        stats["linked"] += len(set(creations) & existing)
+    if links:
+        with conn.cursor() as cur:
+            cur.executemany("update index_resources set service_id = %s where id = %s", links)
     return stats
 
 
