@@ -139,6 +139,105 @@ CrowdCode publishes only aggregated, generalized proposals.
 Runs entirely locally. Use it for transparency, debugging, or signing with an
 external wallet.
 
+## Agents
+
+The same server also drives your **CrowdCode cloud agents**: agents that run
+in the cloud with their own wallets on Base, Solana and Tempo, can buy x402/MPP
+services and deploy paid services of their own. These are the 13 tools of
+[`spec/agent-tools.json`](https://github.com/sr33j/crowdcode-mcp/blob/main/spec/agent-tools.json), the contract the Hermes
+plugin implements too, so Codex, Claude Code and Hermes offer the same
+features with the same arguments and results. Every result is a JSON object
+with `ok`, and `error`/`hint` when it is `false`.
+
+| Tool | What it does |
+|---|---|
+| `crowdcode_wallet` | How this machine reaches CrowdCode: the wallet's address and USDC balance, or the signed-in account. `init=true` creates the wallet. |
+| `crowdcode_agents` | Your agents with their balances, or one in detail. |
+| `crowdcode_create_agent` | Create an agent, paying CrowdCode's price (about $0.35) by x402 from the wallet. Refuses a quote above `max_price_usd` (default 0.50) before signing anything. |
+| `crowdcode_fund_agent` | Send USDC on Base to an agent (gasless EIP-3009, minimum $0.50). In account mode it returns the crowdcode.app link where you approve the deposit; nothing moves from here. |
+| `crowdcode_run_task` | Give an agent a task with a required `budget_usd`; waits for the answer, spend, purchases and files by default. |
+| `crowdcode_task_status` | Check or cancel a task. |
+| `crowdcode_services` | An agent's paid services, calls and earnings; stop or start one. |
+| `crowdcode_withdraw` | Withdraw from an agent to its owner only: this wallet, or the account's main wallet (base or tempo, minimum $0.50). |
+| `crowdcode_transfer` | Move USDC between two of your agents on one network. |
+| `crowdcode_demand` | What other agents asked CrowdCode for and would pay for: ideas for a paid service. |
+| `crowdcode_files` | The files an agent produced. Nothing is downloaded. |
+| `crowdcode_download` | Download files you asked for. |
+| `crowdcode_claim` | A one-time link (15 minutes) that moves this wallet's agents into your CrowdCode account once you approve it on crowdcode.app. |
+
+Unlike the Hermes plugin, there is no local approval prompt or daily cap:
+CrowdCode's own controls apply, the spend policy of each agent and, for account
+funding, your approval on crowdcode.app. Ask for money moves in plain words
+("fund scout with $1") and the agent calls the tool. The agent tools work
+whether CrowdCode reviews are on or off.
+
+### Wallet or account
+
+The tools use one of two credentials:
+
+- **Wallet mode**: the same local wallet that signs your reviews,
+  `~/.agentcash/wallet.json` (shared with AgentCash). `npx crowdcode-mcp wallet
+  init` or `crowdcode_wallet` with `init=true` creates it if there is none; it
+  is never replaced, and its key is never shown. Fund it with USDC on Base. It
+  signs each owner-API request (EIP-191) and pays agent creation with an x402
+  `exact` authorization; no ETH is needed. Agents it creates belong to it.
+- **Account mode**: `npx crowdcode-mcp login` signs this machine in to your
+  CrowdCode account. It opens crowdcode.app/connect in the browser (OAuth with
+  PKCE and a `127.0.0.1` callback, as the `crowdcode-mcp` client), where you
+  choose which agents it may use, a daily cap and an expiry. The sign-in is
+  kept in `~/.crowdcode/credentials.json` (mode 600) and refreshed when it
+  expires; `npx crowdcode-mcp logout` revokes it and deletes the file. No
+  wallet key is needed in this mode. Creating agents and claims still use the
+  wallet.
+
+`mode` chooses: `auto` (default) uses the account when you are signed in,
+else the wallet; `account` and `wallet` force one. Set it with
+`npx crowdcode-mcp mode <auto|account|wallet>` or `CROWDCODE_MODE`, which wins.
+
+To move agents you created with the wallet into your account, run
+`npx crowdcode-mcp claim [agent…]` and open the link while signed in to
+crowdcode.app. After that they withdraw only to the account's main wallet.
+
+### Files
+
+Nothing downloads automatically. `crowdcode_download` (or
+`npx crowdcode-mcp download`) saves into `./crowdcode-files/<agent name>/`
+under the working directory, or into `dest` (relative to it, or absolute). It
+keeps each file's name, made safe (no folders, `..` or reserved names), never
+overwrites an existing file (it adds `-1`, `-2`…), streams to disk and refuses
+a single file over 500 MB (`CROWDCODE_MAX_DOWNLOAD_MB`). A failed download
+leaves no partial file. Your client's usual approval for MCP tool calls applies;
+there is no separate prompt for a `dest` outside the working directory.
+
+### Commands
+
+The terminal commands show the same screens as `/crowdcode` in Hermes, and run
+without the model. In Codex the `crowdcode` MCP prompt shows them as a slash
+command, with the subcommand as its argument.
+
+```bash
+npx crowdcode-mcp dashboard                 # wallet or account, agents, balances, recent tasks, services
+npx crowdcode-mcp login | logout            # your CrowdCode account
+npx crowdcode-mcp mode [auto|account|wallet]
+npx crowdcode-mcp wallet [init]
+npx crowdcode-mcp agents
+npx crowdcode-mcp tasks                     # recent tasks started from this machine
+npx crowdcode-mcp services <agent>
+npx crowdcode-mcp files <agent> [--task ID]
+npx crowdcode-mcp download <agent> <file-id…|all> [--task ID] [--dest DIR]
+npx crowdcode-mcp demand [keyword]
+npx crowdcode-mcp claim [agent…]
+```
+
+`<agent>` is an agent's name, id or id prefix. The overview is `dashboard`
+because `status` already shows the review on/off default. Recent tasks are kept
+in `~/.crowdcode/state.json`.
+
+`crowdcode_run_task` waits up to `timeout_seconds` (default 600) for the
+answer. If your client gives MCP tools less time (Codex's `tool_timeout_sec`
+defaults to 60 seconds), raise it for the `crowdcode` server or ask for
+`wait=false` and check with `crowdcode_task_status`.
+
 ## Privacy
 
 Free-text arguments are redacted before they leave your machine, using
@@ -171,6 +270,11 @@ work.
 | `CROWDCODE_UPSTREAM_TIMEOUT_MS` | `15000` | Backend timeout |
 | `CROWDCODE_CACHE_DIR` | `~/.cache/crowdcode-mcp` | Redaction model cache |
 | `CROWDCODE_DISABLE_MODEL` | unset | Deterministic redaction only, no model download |
+| `CROWDCODE_APP_URL` | `https://crowdcode.app` | Where the agent tools go (https; http only for localhost) |
+| `CROWDCODE_MODE` | `auto` | Agent tools credential: `auto`, `account` or `wallet` |
+| `CROWDCODE_HOME` | `~/.crowdcode` | Account sign-in, mode setting and recent tasks |
+| `CROWDCODE_BASE_RPC_URL` | `https://mainnet.base.org` | The one read-only call for the wallet's USDC balance |
+| `CROWDCODE_MAX_DOWNLOAD_MB` | `500` | Largest single file `crowdcode_download` saves |
 
 ## Rate limits
 

@@ -1,0 +1,350 @@
+{
+  "version": 1,
+  "description": "One scripted session every implementation of spec/agent-tools.json must pass against spec/mock/mock_server.py, starting from an empty wallet. Steps run in order. A step either calls a tool (`tool`, `args`) or asks the harness to act as the user (`harness`). `$name` in args is replaced by a value saved earlier with `save`. A tool step passes when the result's `ok` matches `ok` (default true), every field in the tool's `result_fields` is present when ok, and the optional checks hold: `equals` (field -> value), `length` (field -> list length), `min_length`, `contains` (field -> substring of its string value), `error_contains` (substring of `error`). Field paths may use dots and list indexes, e.g. `services.0.status`.",
+  "harness_actions": {
+    "approve_claim": "As the account owner approving on crowdcode.app/claim: POST {code} to <mock>/__mock/approve_claim, where code is the part after '#' in the saved claim link.",
+    "login": "Sign in to the mock account the way the implementation signs in for real (Codex/Claude: `crowdcode-mcp login`, which opens <mock>/connect; the mock approves at once and redirects to the loopback). From then on the implementation is in account mode."
+  },
+  "steps": [
+    {
+      "name": "create the wallet",
+      "tool": "crowdcode_wallet",
+      "args": {
+        "init": true
+      }
+    },
+    {
+      "name": "no agents yet",
+      "tool": "crowdcode_agents",
+      "args": {},
+      "length": {
+        "agents": 0
+      }
+    },
+    {
+      "name": "create scout (x402)",
+      "tool": "crowdcode_create_agent",
+      "args": {
+        "name": "scout"
+      },
+      "equals": {
+        "status": "active",
+        "paid_usd": 0.35
+      },
+      "save": {
+        "scout": "agent_id"
+      }
+    },
+    {
+      "name": "create helper",
+      "tool": "crowdcode_create_agent",
+      "args": {
+        "name": "helper"
+      },
+      "save": {
+        "helper": "agent_id"
+      }
+    },
+    {
+      "name": "a price above max_price_usd is refused",
+      "tool": "crowdcode_create_agent",
+      "args": {
+        "name": "pricey",
+        "max_price_usd": 0.1
+      },
+      "ok": false,
+      "error_contains": "nothing was paid"
+    },
+    {
+      "name": "fund scout $1.50 (gasless EIP-3009)",
+      "tool": "crowdcode_fund_agent",
+      "args": {
+        "agent_id": "$scout",
+        "amount_usd": 1.5
+      },
+      "equals": {
+        "agent_id": "$scout"
+      },
+      "contains": {
+        "tx_hash": "0x"
+      }
+    },
+    {
+      "name": "deposits under $0.50 are refused",
+      "tool": "crowdcode_fund_agent",
+      "args": {
+        "agent_id": "$scout",
+        "amount_usd": 0.25
+      },
+      "ok": false,
+      "error_contains": "minimum"
+    },
+    {
+      "name": "two agents with balances",
+      "tool": "crowdcode_agents",
+      "args": {},
+      "length": {
+        "agents": 2
+      }
+    },
+    {
+      "name": "one agent in detail",
+      "tool": "crowdcode_agents",
+      "args": {
+        "agent_id": "$scout"
+      },
+      "equals": {
+        "agent.balances_usd.base": "1.500000"
+      }
+    },
+    {
+      "name": "a task that deploys a paid service",
+      "tool": "crowdcode_run_task",
+      "args": {
+        "agent_id": "$scout",
+        "budget_usd": 0.25,
+        "prompt": "Build a tiny paid service that counts words"
+      },
+      "equals": {
+        "status": "completed",
+        "spent_usd": "0.020000"
+      },
+      "length": {
+        "files": 3,
+        "purchases": 1
+      },
+      "save": {
+        "task": "task_id"
+      }
+    },
+    {
+      "name": "a task needs a budget",
+      "tool": "crowdcode_run_task",
+      "args": {
+        "agent_id": "$scout",
+        "prompt": "anything"
+      },
+      "ok": false,
+      "error_contains": "budget_usd"
+    },
+    {
+      "name": "task status",
+      "tool": "crowdcode_task_status",
+      "args": {
+        "agent_id": "$scout",
+        "task_id": "$task"
+      },
+      "equals": {
+        "status": "completed"
+      },
+      "length": {
+        "files": 3
+      }
+    },
+    {
+      "name": "the deployed service",
+      "tool": "crowdcode_services",
+      "args": {
+        "agent_id": "$scout"
+      },
+      "length": {
+        "services": 1
+      },
+      "save": {
+        "service": "services.0.id"
+      }
+    },
+    {
+      "name": "stop the service",
+      "tool": "crowdcode_services",
+      "args": {
+        "agent_id": "$scout",
+        "action": "stop",
+        "service_id": "$service"
+      },
+      "equals": {
+        "services.0.status": "stopped"
+      }
+    },
+    {
+      "name": "list files",
+      "tool": "crowdcode_files",
+      "args": {
+        "agent_id": "$scout"
+      },
+      "equals": {
+        "count": 3
+      }
+    },
+    {
+      "name": "files by agent name",
+      "tool": "crowdcode_files",
+      "args": {
+        "agent_id": "scout"
+      },
+      "equals": {
+        "count": 3
+      }
+    },
+    {
+      "name": "download all",
+      "tool": "crowdcode_download",
+      "args": {
+        "agent_id": "$scout",
+        "file_ids": [
+          "all"
+        ]
+      },
+      "length": {
+        "downloaded": 3,
+        "failed": 0
+      }
+    },
+    {
+      "name": "an unknown file id",
+      "tool": "crowdcode_download",
+      "args": {
+        "agent_id": "$scout",
+        "file_ids": [
+          "fl_nope"
+        ]
+      },
+      "ok": false,
+      "error_contains": "No such file"
+    },
+    {
+      "name": "transfer between own agents",
+      "tool": "crowdcode_transfer",
+      "args": {
+        "from_agent_id": "$scout",
+        "to_agent_id": "$helper",
+        "amount_usd": 0.5
+      }
+    },
+    {
+      "name": "withdraw to the wallet",
+      "tool": "crowdcode_withdraw",
+      "args": {
+        "agent_id": "$helper",
+        "amount_usd": 0.5
+      },
+      "equals": {
+        "network": "base"
+      }
+    },
+    {
+      "name": "withdrawals can't go to Solana",
+      "tool": "crowdcode_withdraw",
+      "args": {
+        "agent_id": "$helper",
+        "amount_usd": 0.5,
+        "network": "solana"
+      },
+      "ok": false
+    },
+    {
+      "name": "withdrawals under $0.50 are refused",
+      "tool": "crowdcode_withdraw",
+      "args": {
+        "agent_id": "$scout",
+        "amount_usd": 0.1
+      },
+      "ok": false,
+      "error_contains": "minimum"
+    },
+    {
+      "name": "demand",
+      "tool": "crowdcode_demand",
+      "args": {},
+      "equals": {
+        "count": 2,
+        "proposals.0.title": "Bill Table Extractor"
+      }
+    },
+    {
+      "name": "claim scout into an account",
+      "tool": "crowdcode_claim",
+      "args": {
+        "agents": [
+          "scout"
+        ]
+      },
+      "contains": {
+        "approve_url": "/claim#cc_claim_"
+      },
+      "length": {
+        "agents": 1
+      },
+      "save": {
+        "claim_url": "approve_url"
+      }
+    },
+    {
+      "name": "the owner approves the claim",
+      "harness": "approve_claim",
+      "args": {
+        "url": "$claim_url"
+      }
+    },
+    {
+      "name": "the wallet now owns only helper",
+      "tool": "crowdcode_agents",
+      "args": {},
+      "length": {
+        "agents": 1
+      }
+    },
+    {
+      "name": "sign in to the account",
+      "harness": "login"
+    },
+    {
+      "name": "the account sees scout",
+      "tool": "crowdcode_agents",
+      "args": {},
+      "length": {
+        "agents": 1
+      },
+      "equals": {
+        "agents.0.name": "scout"
+      }
+    },
+    {
+      "name": "account funding is a browser approval",
+      "tool": "crowdcode_fund_agent",
+      "args": {
+        "agent_id": "$scout",
+        "amount_usd": 1
+      },
+      "equals": {
+        "moved": false
+      },
+      "contains": {
+        "approve_url": "?fund=1"
+      }
+    },
+    {
+      "name": "a task from the account",
+      "tool": "crowdcode_run_task",
+      "args": {
+        "agent_id": "$scout",
+        "budget_usd": 0.1,
+        "prompt": "Summarise the word-count service"
+      },
+      "equals": {
+        "status": "completed"
+      }
+    },
+    {
+      "name": "withdraw to the account's main wallet",
+      "tool": "crowdcode_withdraw",
+      "args": {
+        "agent_id": "$scout",
+        "amount_usd": 0.5
+      },
+      "equals": {
+        "to": "0x37A1E4ef2fE11b6ec9DA1f2b2d7A55aE0f9A7B31"
+      }
+    }
+  ]
+}

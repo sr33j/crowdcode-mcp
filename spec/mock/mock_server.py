@@ -19,7 +19,7 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
@@ -45,6 +45,8 @@ class State:
         # Login mode: bearer token -> the account's main wallet address (agents are owned by that address here).
         self.bearers: dict[str, str] = {}
         self.claims: dict[str, dict] = {}  # code -> {wallet, agent_ids}
+        self.oauth_codes: dict[str, dict] = {}  # code -> {client_id, redirect_uri, challenge, account}
+        self.refresh_tokens: dict[str, str] = {}  # refresh token -> account
 
     def new_agent(self, owner: str, name: str) -> dict:
         agent_id = "ag_" + secrets.token_hex(5)
@@ -162,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
         raw_path = self.path
         path = urlsplit(raw_path).path.rstrip("/")
         body = self._body()
-        if body and "application/json" not in (self.headers.get("content-type") or ""):
+        if body and "application/json" not in (self.headers.get("content-type") or "") and path != "/api/app/oauth/token":
             return self._send(415, {"error": "unsupported_media_type"})
         if path == "/api/service-proposals" and method == "GET":
             return self._send(200, {"ok": True, "proposals": [
@@ -172,6 +174,13 @@ class Handler(BaseHTTPRequestHandler):
                  "price": {"median": 0.01}, "demand": {"requesters": 1}, "would_pay": "maybe"}]})
         if path == "/s/crowdcode/agents" and method == "POST":
             return self._create(body)
+        if path == "/connect" and method == "GET":
+            return self._oauth_authorize(raw_path)
+        if path == "/api/app/oauth/token" and method == "POST":
+            return self._oauth_token(body)
+        if path == "/__mock/approve_claim" and method == "POST":
+            data = json.loads(body or b"{}")
+            return self._send(200, {"agent_ids": approve_claim(data["code"], data.get("main", MAIN_ACCOUNT))})
         if not path.startswith("/api/app/v1"):
             return self._send(404, {"error": "not_found"})
         owner = self._owner(method, raw_path, body)
@@ -269,6 +278,47 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True})
             return self._send(404, {"error": "not_found"})
         return self._send(404, {"error": "not_found"})
+
+    # -- OAuth (what crowdcode.app/connect and the token endpoint do; the mock approves at once) --
+    def _oauth_authorize(self, raw_path: str) -> None:
+        q = {k: v[0] for k, v in parse_qs(urlsplit(raw_path).query).items()}
+        redirect = q.get("redirect_uri", "")
+        parts = urlsplit(redirect)
+        if (q.get("client_id") not in ("hermes", "crowdcode-mcp") or parts.scheme != "http"
+                or parts.hostname not in ("127.0.0.1", "::1") or parts.path != "/callback"
+                or q.get("code_challenge_method") != "S256" or not q.get("code_challenge") or not q.get("state")):
+            return self._send(400, {"error": "invalid_request"})
+        code = "cc_code_" + secrets.token_urlsafe(24)
+        STATE.oauth_codes[code] = {"client_id": q["client_id"], "redirect_uri": redirect,
+                                   "challenge": q["code_challenge"], "account": q.get("mock_account") or MAIN_ACCOUNT}
+        self.send_response(302)
+        self.send_header("location", f"{redirect}?{urlencode({'code': code, 'state': q['state']})}")
+        self.send_header("content-length", "0")
+        self.end_headers()
+
+    def _oauth_token(self, body: bytes) -> None:
+        ctype = self.headers.get("content-type") or ""
+        form = json.loads(body or b"{}") if "json" in ctype else {k: v[0] for k, v in parse_qs(body.decode()).items()}
+        grant = form.get("grant_type")
+        if grant == "authorization_code":
+            entry = STATE.oauth_codes.pop(form.get("code", ""), None)
+            verifier = form.get("code_verifier", "")
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+            if (entry is None or entry["client_id"] != form.get("client_id") or entry["redirect_uri"] != form.get("redirect_uri")
+                    or entry["challenge"] != challenge):
+                return self._send(400, {"error": "invalid_grant"})
+            account = entry["account"]
+        elif grant == "refresh_token":
+            account = STATE.refresh_tokens.pop(form.get("refresh_token", ""), None)
+            if account is None:
+                return self._send(400, {"error": "invalid_grant"})
+        else:
+            return self._send(400, {"error": "unsupported_grant_type"})
+        access, refresh = "cc_at_" + secrets.token_urlsafe(24), "cc_rt_" + secrets.token_urlsafe(24)
+        STATE.bearers[access] = account
+        STATE.refresh_tokens[refresh] = account
+        return self._send(200, {"access_token": access, "token_type": "Bearer", "expires_in": 3600,
+                                "refresh_token": refresh, "scope": "read tasks transfers withdraw_to_main services files"})
 
     # -- handlers ----------------------------------------------------------
     def _settle_pending(self) -> None:
@@ -384,6 +434,9 @@ class Handler(BaseHTTPRequestHandler):
         if target is not None:
             target["balances"][network] += amount
         return self._send(200, {"tx_hash": "0x" + secrets.token_hex(32), **({"to": to} if to else {})})
+
+
+MAIN_ACCOUNT = "0x37A1E4ef2fE11b6ec9DA1f2b2d7A55aE0f9A7B31"  # the signed-in account's main wallet in the mock
 
 
 def approve_claim(code: str, main_wallet: str) -> list[str]:

@@ -1,6 +1,39 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.0 — 2026-11-17
+
+- CrowdCode cloud agents in Codex and Claude Code: the 13 agent tools of
+  `spec/agent-tools.json` (`crowdcode_wallet`, `crowdcode_agents`,
+  `crowdcode_create_agent`, `crowdcode_fund_agent`, `crowdcode_run_task`,
+  `crowdcode_task_status`, `crowdcode_services`, `crowdcode_withdraw`,
+  `crowdcode_transfer`, `crowdcode_demand`, `crowdcode_files`,
+  `crowdcode_download`, `crowdcode_claim`), with the same arguments and results
+  as the Hermes plugin. They pass the shared conformance session
+  (`spec/conformance.json`) against the mock owner API.
+- Two credentials. Wallet mode uses the local AgentCash wallet that already
+  signs reviews (`wallet init` creates it). Account mode: `npx crowdcode-mcp
+  login` signs in to your CrowdCode account in the browser (OAuth PKCE,
+  loopback callback, client `crowdcode-mcp`) and keeps the grant in
+  `~/.crowdcode/credentials.json` (mode 600); `logout` revokes it. Choose with
+  `npx crowdcode-mcp mode` or `CROWDCODE_MODE`.
+- Downloads only on request, into `./crowdcode-files/<agent>/` by default,
+  with safe names, never overwriting, and a 500 MB per-file limit.
+- Terminal commands with the same screens as Hermes's `/crowdcode`:
+  `dashboard`, `wallet [init]`, `agents`, `tasks`, `services`, `files`,
+  `download`, `demand`, `login`, `logout`, `mode`, `claim`; and a `crowdcode`
+  MCP prompt that shows them in Codex. `status` still reports the review on/off
+  default.
+- Claude Code plugin: `plugins/crowdcode` now also has `.claude-plugin/` and a
+  `/crowdcode` command (`commands/crowdcode.md`), and the repository is a
+  Claude Code marketplace (`/plugin marketplace add sr33j/crowdcode-mcp`). The
+  Codex plugin manifest describes the agent tools.
+- The skill has a "Cloud agents" section.
+- `install --client codex` sets `tool_timeout_sec = 900` for the crowdcode
+  server, so `crowdcode_run_task` can wait for a cloud task.
+
 ## 0.12.1 — 2026-11-17
+
+(Not published on its own; these changes ship in 0.13.0.)
 
 - **Paid-call records (on by default).** `install` adds a PostToolUse hook for
   Claude Code (`~/.claude/settings.json`) and Codex (`$CODEX_HOME/hooks.json`).

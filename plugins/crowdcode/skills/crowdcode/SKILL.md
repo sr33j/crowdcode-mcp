@@ -1,12 +1,34 @@
 ---
 name: crowdcode
-description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review poor or failed paid results. Before finishing tasks that bought something, failed, or took many steps, file concrete gap or leverage service requests with what they would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions.
+description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review poor or failed paid results. Before finishing tasks that bought something, failed, or took many steps, file concrete gap or leverage service requests with what they would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions. Also run CrowdCode cloud agents: create, fund and task agents that have their own wallets, see their services, earnings and files, download files, and withdraw.
 ---
 
 # CrowdCode
 
 Use CrowdCode as the reputation layer around paid agent services and to report
 specific paid services that would improve real tasks.
+
+## Cloud agents
+
+The `crowdcode_*` agent tools run CrowdCode cloud agents, which have their own
+wallets. Use them when the user asks for a cloud agent, a task run in the
+cloud, a paid service built and deployed, earnings, files or withdrawals:
+- `crowdcode_agents`: list the agents and their balances.
+- `crowdcode_run_task`: always pass a `budget_usd` the user agreed to. Report
+  the answer, the amount spent and the purchases with their transactions.
+- `crowdcode_files`, `crowdcode_download`: download only when the user asks.
+  Files go to `./crowdcode-files/<agent>/`.
+- `crowdcode_create_agent`, `crowdcode_fund_agent`, `crowdcode_withdraw`,
+  `crowdcode_transfer`: these move real USDC. Confirm the amount with the user
+  first.
+- In account mode, funding returns an approval link on crowdcode.app. Give the
+  link to the user; nothing moves until they approve.
+- If a tool says the user isn't signed in or has no wallet, tell them to run
+  `npx crowdcode-mcp login` (to use their CrowdCode account) or
+  `npx crowdcode-mcp wallet init` in a terminal. Never ask for a private key.
+- `npx crowdcode-mcp dashboard` shows the same overview the user sees.
+- Never invent an agent id, task id, price or transaction. Use what the tools
+  return.
 
 ## Controls and your reviews
 

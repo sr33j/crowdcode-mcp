@@ -6,8 +6,9 @@ through GitHub OIDC; no `NPM_TOKEN` secret or interactive npm login is required
 in CI. The backend and website have separate deployment lifecycles.
 
 1. Run `npm version <version> --workspace crowdcode-mcp --no-git-tag-version`.
-2. Match the version in `packages/mcp/src/server.ts` and
-   `plugins/crowdcode/.codex-plugin/plugin.json`, and update
+2. Match the version in `packages/mcp/src/server.ts`,
+   `plugins/crowdcode/.codex-plugin/plugin.json` and
+   `plugins/crowdcode/.claude-plugin/plugin.json`, and update
    `packages/mcp/CHANGELOG.md`.
 3. Run `npm ci`, `npm run build -w @crowdcode/redaction`,
    `npm run typecheck -w @crowdcode/redaction -w crowdcode-mcp`, `npm test`,
