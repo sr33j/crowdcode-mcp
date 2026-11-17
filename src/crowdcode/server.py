@@ -59,6 +59,7 @@ from crowdcode.rate_limit import (
 )
 from crowdcode.networks import EMPTY_NETWORKS, fetch_service_networks
 from crowdcode.redaction import (
+    BATCH_TIMEOUT,
     RedactionUnavailable,
     redact_texts,
     redaction_enabled,
@@ -1600,6 +1601,52 @@ async def demand_miner_batch(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+FEED_REDACT_MAX_TEXTS = 40
+FEED_REDACT_MAX_CHARS = 4000
+
+
+async def feed_redact(request: Request) -> JSONResponse:
+    """CrowdCode's reconciler redacts the text of the public home-page feed.
+
+    crowdcode.app's feed (SRI-117) shows runs only from owners who chose to
+    share them, and only after the same PII redactor the reviews and the
+    proposals go through. The redactor is a private sidecar of this backend,
+    so the reconciler asks here, with the token it already holds for the
+    demand miner. Fail-closed: if the sidecar cannot be reached this answers
+    503 and nothing is published; ``redacted`` is false only on a deployment
+    with no redactor configured, and the reconciler then publishes nothing.
+    """
+    token = get_settings().demand_miner_token
+    if not token:
+        return JSONResponse({"ok": False, "error": "feed redaction is not enabled"}, status_code=404)
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_request")
+    texts = body.get("texts") if isinstance(body, dict) else None
+    if (not isinstance(texts, list) or len(texts) > FEED_REDACT_MAX_TEXTS
+            or not all(isinstance(t, str) and len(t) <= FEED_REDACT_MAX_CHARS for t in texts)):
+        return _json_error(
+            f"texts must be a list of at most {FEED_REDACT_MAX_TEXTS} strings of at most {FEED_REDACT_MAX_CHARS} characters",
+            status_code=400, error_code="invalid_request")
+    try:
+        redacted = await run_in_threadpool(
+            lambda: redact_texts(list(texts), fail_closed=True, timeout=BATCH_TIMEOUT))
+    except RedactionUnavailable:
+        return _json_error("redaction service unavailable; retry shortly", status_code=503,
+                           error_code="redaction_unavailable", retryable=True)
+    except Exception:
+        return _unexpected_json_error("feed_redact")
+    if redacted is None:
+        return _json_error("redaction service unavailable; retry shortly", status_code=503,
+                           error_code="redaction_unavailable", retryable=True)
+    return JSONResponse({"ok": True, "texts": [t or "" for t in redacted],
+                         "redacted": redaction_enabled()})
+
+
 async def health(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "crowdcode-backend",
                          "version": version("crowdcode-mcp"),
@@ -1985,6 +2032,7 @@ def create_app() -> Starlette:
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             Route("/api/internal/hosted-services/sync", hosted_services_sync, methods=["POST"]),
             Route("/api/internal/demand-miner/batch", demand_miner_batch, methods=["POST"]),
+            Route("/api/internal/feed/redact", feed_redact, methods=["POST"]),
             Route("/api/internal/tree/publish", tree_publish, methods=["POST"]),
             *mcp_app.routes,
         ],
