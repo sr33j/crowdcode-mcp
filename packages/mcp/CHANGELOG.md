@@ -1,5 +1,18 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.1 — 2026-11-17
+
+- Codex starts the server fast enough for the first turn. `install --client
+  codex` (and the plugin's `.mcp.json`) launch an exact version,
+  `npx -y crowdcode-mcp@0.13.1`, instead of `@latest`. Codex waits only about a
+  second for an optional MCP server before building a session's first tool
+  list. `@latest` asks the registry on every launch (about 14 s), so the
+  CrowdCode tools were missing from a session's first turn. A cached exact
+  version starts in about a second. The Codex entry also gets
+  `startup_timeout_sec = 60` for the first download. Re-running
+  `npx crowdcode-mcp@latest install` moves the pin, and `doctor` reports an
+  older pin as stale.
+
 ## 0.13.0 — 2026-11-17
 
 - CrowdCode cloud agents in Codex and Claude Code: the 13 agent tools of
@@ -33,7 +46,6 @@
 
 ## 0.12.1 — 2026-11-17
 
-(Not published on its own; these changes ship in 0.13.0.)
 
 - **Paid-call records (on by default).** `install` adds a PostToolUse hook for
   Claude Code (`~/.claude/settings.json`) and Codex (`$CODEX_HOME/hooks.json`).

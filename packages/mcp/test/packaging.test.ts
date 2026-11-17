@@ -55,7 +55,8 @@ describe("skill and plugin packaging", () => {
     expect(manifest.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.crowdcode).toEqual({
       command: "npx",
-      args: ["-y", "crowdcode-mcp@latest"],
+      // An exact version: Codex waits only about a second for an optional server's first start.
+      args: ["-y", `crowdcode-mcp@${packageJson.version}`],
     });
   });
 });

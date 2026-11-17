@@ -329,12 +329,25 @@ function removeCrowdCodeTomlSection(content: string): string {
   return kept.join("\n").trimEnd();
 }
 
-export function mergeCodexConfig(content: string): string {
+/**
+ * Codex launches the server with an exact version, not `@latest`. Codex only waits about a second
+ * for an optional MCP server before it builds a session's first tool list, and `npx …@latest` asks
+ * the registry on every launch (about 14 s) while a cached exact version starts in about one second;
+ * with `@latest` the CrowdCode tools were missing from the first turn. `install` (re-run by
+ * `npx crowdcode-mcp@latest install`) moves the pin; `doctor` reports an older pin as stale.
+ */
+export function codexServerArgs(version: string): string[] {
+  return ["-y", `crowdcode-mcp@${version}`];
+}
+
+export function mergeCodexConfig(content: string, version: string): string {
   const before = removeCrowdCodeTomlSection(content);
   const section = [
     "[mcp_servers.crowdcode]",
     `command = ${JSON.stringify(MCP_SERVER.command)}`,
-    `args = ${JSON.stringify(MCP_SERVER.args)}`,
+    `args = ${JSON.stringify(codexServerArgs(version))}`,
+    // The first launch downloads the package; give it time instead of Codex's 10 s default.
+    "startup_timeout_sec = 60",
     // crowdcode_run_task waits for a cloud task (up to 10 minutes); Codex's default per-call limit is 60 s.
     "tool_timeout_sec = 900",
   ].join("\n");
@@ -482,7 +495,7 @@ async function configureClient(
   const path = getClientConfigPath(client, env);
   const current = (await readOptional(path)) ?? "";
   const next =
-    client === "codex" ? mergeCodexConfig(current) : mergeJsonMcpConfig(current, path);
+    client === "codex" ? mergeCodexConfig(current, await packageVersion(env.packageRoot)) : mergeJsonMcpConfig(current, path);
   if (next !== current) await atomicWrite(path, next);
   return path;
 }
@@ -560,11 +573,11 @@ function jsonHasCrowdCode(content: string): boolean {
   }
 }
 
-function codexHasCrowdCode(content: string): boolean {
+function codexHasCrowdCode(content: string, version: string): boolean {
   const merged = removeCrowdCodeTomlSection(content);
   return merged !== content.trimEnd() &&
     /\[mcp_servers\.(?:["']?crowdcode["']?)\]/.test(content) &&
-    /crowdcode-mcp@latest/.test(content);
+    content.includes(JSON.stringify(codexServerArgs(version)));
 }
 
 export async function doctorClients(
@@ -582,7 +595,7 @@ export async function doctorClients(
     const configPath = getClientConfigPath(client, env);
     const config = (await readOptional(configPath)) ?? "";
     const mcpConfigured =
-      client === "codex" ? codexHasCrowdCode(config) : jsonHasCrowdCode(config);
+      client === "codex" ? codexHasCrowdCode(config, await packageVersion(env.packageRoot)) : jsonHasCrowdCode(config);
     if (client === "claude-code") {
       const skillPath = claudeCodeSkillDir(env.homeDir);
       const skillCurrent =
