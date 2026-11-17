@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Leaderboard priors are 3–5, not 1–5.** The old mapping, 1 + 4 ×
+  percentile, gave the last-ranked arena model 1.0. On the judge's scale that
+  means a failed purchase, so veo-3.1 (16th of 21) scored worse before any
+  purchase than an unknown endpoint with no model at all (reported by W4).
+  - **Elo boards** (video, image, speech): `prior_rating` is now
+    5 − min(2, Elo gap to the board's leader / 150).
+  - **The language-model Intelligence Index:** 3 + 2 × percentile.
+  - The ordering within a board is unchanged.
+
 - **Search over the whole index** (SRI-115 C13). `/api/services/find` now
   searches every offering in the index (about 48k, in memory, a few
   milliseconds a query) instead of a live search of the Bazaar's top 12 and

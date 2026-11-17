@@ -559,7 +559,14 @@ def test_leaderboards_become_priors_on_the_judge_scale():
     priors = parse_leaderboard("text-to-video", "https://aa/video", "elo", page)
     assert [(p.model.model, p.score, p.rank) for p in priors] == [
         ("wan-3", 1174, 1), ("seedance-2.5", 1156, 2), ("kling-v3-pro", 1093, 3)]  # best row per model; unknown names skipped
-    assert [p.prior_rating for p in priors] == [5.0, 3.0, 1.0]
+    # Elo boards: 5 - min(2, gap to the leader / 150); never below 3.
+    assert [p.prior_rating for p in priors] == [5.0, 4.88, 4.46]
+    far = parse_leaderboard("text-to-video", "u", "elo", page.replace("1093", "700").replace("1080", "690"))
+    assert far[-1].prior_rating == 3.0
+    llm = parse_leaderboard("llm-intelligence-index", "u", "intelligence_index",
+                            "<table><tr><td>GPT-6.2 Astra Max</td><td>62</td></tr><tr><td>Claude Opus 5</td><td>50</td></tr>"
+                            "<tr><td>Qwen3.5 Max</td><td>40</td></tr></table>")
+    assert [p.prior_rating for p in llm] == [5.0, 4.0, 3.0]  # no Elo: 3 + 2 x percentile
     row = priors_rows(priors, datetime(2026, 11, 18).date())[0]
     assert row[:7] == ("wan-3", "wan", "video", "artificialanalysis:text-to-video", "https://aa/video",
                        datetime(2026, 11, 18).date(), 1174)
