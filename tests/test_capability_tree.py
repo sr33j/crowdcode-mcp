@@ -227,75 +227,108 @@ def video_parts():
         resource(2, None, payers=0, sources=["mpp"], price=250_000, name="StableStudio veo-3.1-fast",
                  route="https://stablestudio.dev/api/generate/veo-3.1-fast/generate", description="Veo 3.1 Fast video generation"),
         resource(3, "svc_treza", payers=9, price=300_000, name="Treza video",
-                 description="Generate a video: veo-3.1, kling-3.0-pro, seedance-2.5, wan-2.7"),
+                 description="Generate a video, 4 to 15 seconds: veo-3.1, kling-3.0-pro, seedance-2.5, wan-2.7"),
         resource(4, None, payers=0, sources=["mpp"], price=500_000, name="StableStudio sora-2",
                  route="https://stablestudio.dev/api/generate/sora-2/generate", description="Sora 2 video generation"),
         resource(5, "svc_transcript", payers=7, price=10_000, name="YouTube transcript",
                  description="Transcript of a YouTube video"),
         resource(6, "svc_render", payers=1, price=50_000, name="Template renderer", description="Render a video template"),
+        # Cheap and popular, but 480p: below the media minimums.
+        resource(7, "svc_wan480", payers=11, calls=22, price=10_000, name="cleared.ink /wan/t2v/480p",
+                 route="https://cleared.ink/wan/t2v/480p", description="Wan 2.6 text-to-video job (480p)"),
+        # A prompt writer that names a model: not a generator.
+        resource(8, "svc_prompts", payers=3, price=5_000, name="kino402 /v1/prompts/launch-teaser",
+                 route="https://kino402.com/v1/prompts/launch-teaser", description="Launch teaser prompt for seedance-1.5-pro"),
+        # A second seller of the top model.
+        resource(9, "svc_aispace", payers=6, price=650_000, name="aispace video queue",
+                 description="Async text-to-video on Venice: Seedance 2.5"),
     ]
-    assignments = {"r:1": assign("video", "text-to-video"), "r:2": assign("video", "text-to-video"),
-                   "r:3": assign("video", "image-to-video"), "r:4": assign("video", "text-to-video"),
-                   "r:5": assign("video", "video-transcript"), "r:6": assign("video", "template-render"),
-                   "p:p_vid": assign("video", "text-to-video")}
-    leaves = fixed("video", generate=["text-to-video", "image-to-video"], edit=["template-render"],
-                   transcribe=["video-transcript"])
+    assignments = {f"r:{i}": assign("video", "text-to-video") for i in (1, 2, 3, 4, 7, 8, 9)}
+    assignments.update({"r:5": assign("video", "video-transcript"), "r:6": assign("video", "template-render"),
+                        "p:p_vid": assign("video", "text-to-video")})
+    leaves = fixed("video", generate=["text-to-video"], edit=["template-render"], transcribe=["video-transcript"])
     proposals = [{"id": "p_vid", "title": "Exact Video Generator", "demand": {"requests": 3, "requesters": 2}}]
     return resources, assignments, leaves, proposals
 
 
-def video_fixture():
-    return build(*video_parts())
+def video_fixture(priors=None):
+    resources, assignments, leaves, proposals = video_parts()
+    return ct.assemble(resources=resources, assignments=assignments, leaves=leaves, proposals=proposals,
+                       reliability=view(), built_at=NOW, version=3, model_priors=priors)
 
 
-PRIORS = {
-    "veo-3.1": {"model": "veo-3.1", "prior_rating": 4.6, "rank": 2, "source": "artificialanalysis:text-to-video",
-                "source_url": "https://artificialanalysis.ai/video/leaderboard/text-to-video", "as_of": "2026-11-17"},
-    "sora-2": {"model": "sora-2", "prior_rating": 4.2, "rank": 5, "source": "artificialanalysis:text-to-video",
-               "source_url": "https://artificialanalysis.ai/video/leaderboard/text-to-video", "as_of": "2026-11-17"},
-}
+def prior(model, rating, rank=1):
+    return {"model": model, "prior_rating": rating, "rank": rank, "source": "artificialanalysis:text-to-video",
+            "source_url": "https://artificialanalysis.ai/video/leaderboard/text-to-video", "as_of": "2026-11-17"}
+
+
+# W1's 3-5 scale (5 - Elo gap / 150).
+PRIORS = {"wan-2.6": prior("wan-2.6", 5.0, 1), "seedance-2.5": prior("seedance-2.5", 4.88, 2),
+          "sora-2": prior("sora-2", 4.7, 3), "veo-3.1": prior("veo-3.1", 4.3, 5),
+          "kling-v3-pro": prior("kling-v3-pro", 3.84, 8), "veo-3.1-fast": prior("veo-3.1-fast", 3.6, 9)}
 
 
 def test_media_nodes_serve_the_fixed_split_with_models_and_their_sellers():
-    tree = video_fixture()
+    tree = video_fixture(PRIORS)
     video = node_of(tree, "video")
     assert [leaf["id"] for leaf in video["leaves"]] == ["video.generate", "video.edit", "video.transcribe"]
+    assert video["ranking"] == "quality_first" and video["leaves"][2]["ranking"] == "value_first"
     generate = video["leaves"][0]
-    models = {m["model"]: m for m in generate["models"]}
-    # W1's model ids (C9): variants are models of their own.
-    assert set(models) == {"veo-3.1", "veo-3.1-fast", "kling-v3-pro", "seedance-2.5", "wan-2.7", "sora-2"}
-    veo = models["veo-3.1"]
-    assert veo["label"] == "Veo 3.1" and veo["sellers"] == 2 and veo["price_range_usd"] == [0.3, 0.4]
-    assert veo["quality_prior"] is None and models["kling-v3-pro"]["label"] == "Kling v3 Pro"
-    # The curated seller is popular and the best-known pick; Treza (9 payers) is explored.
-    assert [p["name"] for p in veo["picks"]] == ["StableStudio veo-3.1"]
-    assert [e["name"] for e in veo["explore"]] == ["Treza video"]
+    models = [m["model"] for m in generate["models"]]
+    # Best-rated first; the prompt writer's model is not a model on sale here.
+    assert models[:4] == ["wan-2.6", "seedance-2.5", "sora-2", "veo-3.1"] and "seedance-1.5-pro" not in models
+    assert generate["not_generators"] == 1 and generate["below_minimums"] == 1
+    assert generate["models"][0]["below_minimums"] == 1 and generate["models"][0]["picks"] == []
     assert generate["demand"][0]["title"] == "Exact Video Generator"
     assert all(leaf["demand_count"] == len(leaf["demand"]) for leaf in video["leaves"])
-    # Every model is browsable, and its view names sellers with tiers and reasons.
-    text = ct.render_entry(tree, "video.generate.veo-3.1")
-    assert "video.generate.veo-3.1 — Veo 3.1, 2 seller(s)" in text and "no quality prior yet" in text
-    assert "Pick: StableStudio veo-3.1, $0.40, popular" in text
-    assert "Why: popular: listed in mpp.dev's curated catalog" in text
-    assert "Explore: Treza video, $0.30, new" in text
-    leaf_text = ct.render_entry(tree, "video.generate")
-    assert "- Kling v3 Pro (1 seller, $0.30) try: Treza video $0.30 new" in leaf_text
 
 
-def test_models_compete_on_their_leaderboard_prior():
-    resources, assignments, leaves, proposals = (lambda t: t)(video_parts())
-    tree = ct.assemble(resources=resources, assignments=assignments, leaves=leaves, proposals=proposals,
-                       reliability=view(), built_at=NOW, version=3, model_priors=PRIORS)
+def test_quality_first_picks_the_best_model_and_explores_its_other_sellers():
+    tree = video_fixture(PRIORS)
     generate = node_of(tree, "video")["leaves"][0]
-    order = [m["model"] for m in generate["models"]]
-    assert order[:2] == ["veo-3.1", "sora-2"]  # rated models first, best first
-    veo = generate["models"][0]
-    assert veo["quality_prior"]["rating"] == 4.6 and veo["quality_prior"]["as_of"] == "2026-11-17"
-    # A seller's value uses its model's prior (4.6 / 5) when it has no judged quality of its own.
-    assert veo["picks"][0]["value_per_dollar"] == pytest.approx((3 / 4) * 0.92 / 0.4, abs=0.01)
+    picks = [(p["model"], p["name"]) for p in generate["picks"]]
+    # wan-2.6 (5.0) has no seller that meets the minimums: Seedance 2.5 (4.88) is the best eligible model;
+    # Sora 2 (4.7) is inside the 0.25 band; Veo 3.1 (4.3) is not, and no cheap low-rated model is offered.
+    assert {m for m, _ in picks} == {"seedance-2.5", "sora-2"}
+    assert picks[0] == ("seedance-2.5", "Treza video")  # equal delivery estimates: the cheaper seller of the band
+    explore = [(e["model"], e["name"]) for e in generate["explore"]]
+    assert explore == [("seedance-2.5", "aispace video queue")]  # the top model's other seller
+    names = {p["name"] for p in generate["picks"] + generate["explore"]}
+    assert not names & {"cleared.ink /wan/t2v/480p", "kino402 /v1/prompts/launch-teaser", "StableStudio veo-3.1-fast"}
+    assert node_of(tree, "video")["best_pick"]["model"] == "seedance-2.5"
+    text = ct.render_entry(tree, "video.generate")
+    assert "Pick: Seedance 2.5 via Treza video, $0.30, new, rated 4.9/5" in text
+    assert "Quality first: use the best model" in text
+    assert "best: Seedance 2.5 via" in ct.render_l0(tree)
+
+
+def test_a_model_view_names_its_sellers_by_delivery_then_price():
+    tree = video_fixture(PRIORS)
+    veo = next(m for m in node_of(tree, "video")["leaves"][0]["models"] if m["model"] == "veo-3.1")
+    assert veo["sellers"] == 2 and veo["quality_prior"]["rating"] == 4.3
+    # Both have Beta(3,1); the cheaper seller first.
+    assert [p["name"] for p in veo["picks"]] == ["Treza video"]
+    assert [e["name"] for e in veo["explore"]] == ["StableStudio veo-3.1"]
     text = ct.render_entry(tree, "video.generate.veo-3.1")
-    assert "rated 4.6/5, #2 on text-to-video (2026-11-17)" in text
-    assert "- Veo 3.1 (2 sellers, $0.30–$0.40, 4.6/5)" in ct.render_entry(tree, "video.generate")
+    assert "rated 4.3/5, #5 on text-to-video (2026-11-17)" in text and "Pick: Veo 3.1 via Treza video" in text
+
+
+def test_value_first_ranks_only_offerings_of_quality_three_or_more():
+    import dataclasses
+    good = offering("good", {"payers": 12, "calls": 30}, 0.01)
+    poor = offering("poor", {"payers": 12, "calls": 30}, 0.001)
+    poor["estimate"] = dataclasses.replace(poor["estimate"], quality=2.0 / 5)
+    ranked = vr.rank_value_first([good, poor], seed=1)
+    assert [p["offering_id"] for p in ranked.picks] == ["good"] and ranked.eligible == 1
+
+
+def test_media_minimums_read_the_offering_s_own_words():
+    assert vr.meets_minimums("Wan Text-to-Video Job (480p)", "video") == (False, "at most 480p (video needs 720p)")
+    assert vr.meets_minimums("a four-second 720p clip", "video")[0]
+    assert not vr.meets_minimums("3s clip at 1080p", "video")[0]
+    assert vr.meets_minimums("4 to 15 seconds, 16:9", "video")[0]
+    assert not vr.meets_minimums("512x512 avatar", "image")[0] and vr.meets_minimums("up to 4K", "image")[0]
+    assert vr.meets_minimums("Generate a video", "video") == (True, None)  # silence passes
 
 
 def test_stored_c9_models_are_the_only_source_once_the_index_has_them():
@@ -415,6 +448,9 @@ class ScriptedModel:
         if self.fail:
             raise httpx.ConnectError("down")
         usage.update({"prompt_tokens": 1000, "completion_tokens": 200})
+        if "items" in payload and "rule" in payload and "task" in payload:  # the media review
+            return {"r": {str(item["i"]): ("llm:prompt-writing" if "prompt" in json.dumps(item).lower() else "keep")
+                          for item in payload["items"]}}
         if "items" in payload:
             out = {}
             for item in payload["items"]:
@@ -573,6 +609,7 @@ class Settings:
 
 
 def test_the_job_classifies_once_builds_versions_and_publishes(db, monkeypatch):
+    monkeypatch.setenv("CROWDCODE_TREE_AUTO_PUBLISH", "1")  # a database with no gate
     seed(db)
     model = ScriptedModel()
     reliability = view(judged("svc_vid", 6, 6))
@@ -635,7 +672,8 @@ def test_a_model_proposed_leaf_under_a_media_node_is_replaced_by_the_fixed_split
         assert ct.ensure_fixed_leaves(conn, NOW) == 0
 
 
-def test_a_model_outage_is_reported_and_the_tree_still_builds(db):
+def test_a_model_outage_is_reported_and_the_tree_still_builds(db, monkeypatch):
+    monkeypatch.setenv("CROWDCODE_TREE_AUTO_PUBLISH", "1")
     seed(db)
     with pytest.raises(RuntimeError, match="model call"):
         ct.run(db, NOW, chat=ScriptedModel(fail=True), reliability=ct.ReliabilityView(), settings=Settings())
@@ -654,6 +692,7 @@ def test_the_daily_cap_holds_across_runs(db, monkeypatch):
 
 def test_old_versions_are_pruned_but_the_published_one_is_kept(db, monkeypatch):
     seed(db, 1)
+    monkeypatch.setenv("CROWDCODE_TREE_AUTO_PUBLISH", "1")
     with db() as conn:
         ct.store_version(conn, {"nodes": []}, fingerprint="a", trigger="first", now=NOW, stats={})
         monkeypatch.setenv("CROWDCODE_TREE_AUTO_PUBLISH", "0")
@@ -785,3 +824,42 @@ def test_the_curated_catalog_and_model_sellers_are_classified_before_the_long_ta
         items = ct._pending_items(conn, resources, [], ct.ReliabilityView())
     # The curated listing, with no payers at all, comes before sellers with 10-12 payers.
     assert items[0].payload.get("url", "").startswith("studio.example/veo")
+
+
+def test_the_media_review_moves_non_generators_out_once_and_new_items_are_marked(db):
+    seed(db, 1)  # svc_vid: "Generate a video from a prompt" ... classified below
+    with db() as conn:
+        conn.execute("""insert into index_resources (resource_key, method, origin, route_template, probe_url, payable,
+                          description, service_id) values ('POST https://kino.example/v1/prompts/teaser', 'POST',
+                          'https://kino.example', 'https://kino.example/v1/prompts/teaser', 'https://kino.example/v1/prompts/teaser',
+                          true, 'Writes a launch teaser script for seedance', null)""")
+        rid = conn.execute("select id from index_resources where origin = 'https://kino.example'").fetchone()["id"]
+        old = [{"node": "video", "facet": "text-to-video"}]  # classified before the rule: no check mark
+        conn.execute("insert into capability_classifications (item_key, fingerprint, assignments) values (%s, 'x', %s::jsonb)",
+                     (f"r:{rid}", json.dumps(old)))
+        conn.commit()
+    model = ScriptedModel()
+    spend = ct.Spend(model="gpt-5-mini", remaining_usd=1.0)
+    stats = ct.review_media(db, model, spend, NOW)
+    assert stats["pending"] == 1 and stats["moved"] == 1
+    with db() as conn:
+        moved = conn.execute("select assignments from capability_classifications where item_key = %s",
+                             (f"r:{rid}",)).fetchone()["assignments"]
+    assert moved == [{"node": "llm", "facet": "prompt-writing", "check": ct.GENERATOR_CHECK}]
+    # Checked once: a second pass sends nothing.
+    calls = len(model.calls)
+    assert ct.review_media(db, model, spend, NOW)["pending"] == 0 and len(model.calls) == calls
+    # A new classification is made under the rule and marked as such.
+    ct.run(db, NOW, chat=model, reliability=ct.ReliabilityView(), settings=Settings())
+    with db() as conn:
+        rows = conn.execute("select assignments from capability_classifications where item_key like 'r:%'").fetchall()
+    assert all(a.get("check") == ct.GENERATOR_CHECK for r in rows for a in r["assignments"])
+    assert ct.GENERATOR_RULE in json.dumps([c for c in model.calls if "nodes" in c and "rules" in c][0]["rules"])
+
+
+def test_only_the_gate_publishes_unless_auto_publish_is_set(db, monkeypatch):
+    monkeypatch.delenv("CROWDCODE_TREE_AUTO_PUBLISH", raising=False)
+    seed(db)
+    ct.run(db, NOW, chat=ScriptedModel(), reliability=ct.ReliabilityView(), settings=Settings())
+    with db() as conn:
+        assert ct.latest(conn, published_only=True) is None and ct.latest(conn, published_only=False)["version"] == 1

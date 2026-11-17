@@ -20,7 +20,7 @@ from typing import Any
 from crowdcode import index_models
 
 # A node's media modalities: audio covers speech and music.
-NODE_MODALITIES = {"video": ("video",), "image": ("image",), "audio": ("audio", "music")}
+NODE_MODALITIES = {"video": ("video",), "image": ("image",), "audio": ("audio", "music"), "llm": ("llm",)}
 
 _WORDS = {"gpt": "GPT", "tts": "TTS", "hd": "HD", "ai": "AI", "xl": "XL", "sdxl": "SDXL", "ltx": "LTX",
           "elevenlabs": "ElevenLabs", "minimax": "MiniMax", "openai": "OpenAI", "pixverse": "PixVerse",
@@ -70,7 +70,7 @@ def load(conn: Any) -> tuple[dict[int, list[dict[str, Any]]] | None, dict[str, d
     """(models by index row id, or None before the first model sweep; priors by model)."""
     try:
         rows = conn.execute(
-            "select resource_id, model, model_family as family, modality, usd_per_second from index_offering_models"
+            "select resource_id, model, model_family as family, modality, usd_per_second, pricing from index_offering_models"
         ).fetchall()
         priors = {r["model"]: dict(r) for r in conn.execute(
             "select model, model_family, modality, source, source_url, as_of, rank, prior_rating, leaderboard_name "
