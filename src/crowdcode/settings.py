@@ -53,6 +53,8 @@ class Settings:
     # Bearer token CrowdCode's control plane uses to push its hosted services
     # (POST /api/internal/hosted-services/sync). Unset disables the endpoint.
     hosted_sync_token: str | None = None
+    # Shared with CrowdCode's reconciler: the nightly demand miner's batches (C8).
+    demand_miner_token: str | None = None
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -131,4 +133,5 @@ def get_settings() -> Settings:
         knowledge_export_token=os.environ.get("CROWDCODE_KNOWLEDGE_EXPORT_TOKEN", "").strip()
         or None,
         hosted_sync_token=os.environ.get("CROWDCODE_HOSTED_SYNC_TOKEN", "").strip() or None,
+        demand_miner_token=os.environ.get("CROWDCODE_DEMAND_MINER_TOKEN", "").strip() or None,
     )

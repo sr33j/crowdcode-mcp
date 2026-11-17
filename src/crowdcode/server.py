@@ -28,7 +28,7 @@ from crowdcode.db import connect
 from crowdcode.hosted_services import SyncError, parse_services, sync_hosted_services
 from crowdcode.demand import RequestExtras, validate_request_extras, validate_request_fields
 from crowdcode.observations import submit_observation
-from crowdcode import reliability
+from crowdcode import demand_miner, reliability
 from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
 from crowdcode.discovery import find_services, warm_search
 from crowdcode.listing_metadata import fill_in_background
@@ -1576,6 +1576,30 @@ async def hosted_services_sync(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **stats})
 
 
+async def demand_miner_batch(request: Request) -> JSONResponse:
+    """CrowdCode's reconciler posts one batch of run summaries (demand_miner.py, C8)."""
+    token = get_settings().demand_miner_token
+    if not token:
+        return JSONResponse({"ok": False, "error": "the demand miner is not enabled"}, status_code=404)
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_request")
+    try:
+        result = await run_in_threadpool(lambda: demand_miner.mine(body, connect, utc_now()))
+    except demand_miner.MinerError as exc:
+        return _json_error(str(exc), status_code=400, error_code="invalid_request")
+    except RedactionUnavailable:
+        return _json_error("redaction service unavailable; retry shortly", status_code=503,
+                           error_code="redaction_unavailable", retryable=True)
+    except Exception:
+        return _unexpected_json_error("demand_miner_batch")
+    return JSONResponse(result)
+
+
 async def health(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "crowdcode-backend",
                          "version": version("crowdcode-mcp"),
@@ -1925,6 +1949,7 @@ def create_app() -> Starlette:
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             Route("/api/internal/hosted-services/sync", hosted_services_sync, methods=["POST"]),
+            Route("/api/internal/demand-miner/batch", demand_miner_batch, methods=["POST"]),
             *mcp_app.routes,
         ],
         lifespan=mcp_app.router.lifespan_context,

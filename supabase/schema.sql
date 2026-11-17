@@ -402,3 +402,39 @@ create index if not exists index_observations_observer_at_idx
   on index_observations (observer_wallet, at desc) where kind = 'observation';
 
 alter table index_observations enable row level security;
+
+-- The nightly demand miner (supabase/demand-miner.sql, SRI-115 C8).
+alter table service_requests
+  -- Who filed it: an agent through request_service, or the miner.
+  add column if not exists source text not null default 'agent',
+  -- How many run summaries the miner saw this need in.
+  add column if not exists miner_run_count integer,
+  -- HMACs of those runs' ids, keyed by a secret only the reconciler holds.
+  -- They let an operator with that secret find the runs again; nothing else.
+  add column if not exists miner_run_refs text[];
+
+alter table service_requests drop constraint if exists service_requests_source_check;
+alter table service_requests
+  add constraint service_requests_source_check check (source in ('agent', 'miner'));
+
+-- A miner request's fields come from the miner's model, not an agent or the
+-- legacy mapping.
+alter table service_requests drop constraint if exists service_requests_fields_source_check;
+alter table service_requests
+  add constraint service_requests_fields_source_check
+  check (fields_source is null or fields_source in ('agent', 'inferred', 'miner'));
+
+create index if not exists service_requests_source_created_idx
+  on service_requests (source, created_at desc);
+
+-- One row per batch the miner accepted, so a batch the reconciler retries
+-- (a timeout after the backend had already stored it) is not mined twice.
+create table if not exists demand_miner_batches (
+  batch_key text primary key,
+  night date not null,
+  runs integer not null,
+  result jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table demand_miner_batches enable row level security;

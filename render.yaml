@@ -60,6 +60,13 @@ services:
       # https://api.mainnet-beta.solana.com.
       - key: SOLANA_RPC_URL
         sync: false
+      # The nightly demand miner (src/crowdcode/demand_miner.py, SRI-115 C8):
+      # the bearer token CrowdCode's reconciler sends (its DEMAND_MINER_TOKEN),
+      # and the most its model calls may cost in one UTC day.
+      - key: CROWDCODE_DEMAND_MINER_TOKEN
+        sync: false
+      - key: CROWDCODE_DEMAND_MINER_DAILY_USD
+        value: "0.24"
 
   # Hourly batch (docs/SCORING.md §8.2): consistency sweep, per-service
   # review summaries, service proposals, and the services index (its feed
