@@ -320,7 +320,7 @@
         "moved": false
       },
       "contains": {
-        "approve_url": "?fund=1"
+        "approve_url": "/fund?amount=1.00&from=your+agent"
       }
     },
     {

@@ -72,7 +72,7 @@ def test_claim_then_login_drives_the_account_without_a_wallet_key(ctx, hermes_ho
     # Funding is the owner's approval in the browser: nothing moves, and the guard asks nothing.
     assert ctx.hooks["pre_tool_call"](tool_name="crowdcode_fund_agent", args={"agent_id": agent, "amount_usd": 1}) is None
     funded = call(ctx, "crowdcode_fund_agent", agent_id=agent, amount_usd=1)
-    assert funded["ok"] and funded["moved"] is False and funded["approve_url"].endswith(f"/agent/{agent}?fund=1")
+    assert funded["ok"] and funded["moved"] is False and funded["approve_url"].endswith(f"/agent/{agent}/fund?amount=1.00&from=your+agent")
     # Withdrawals go to the account's main wallet.
     out = call(ctx, "crowdcode_withdraw", agent_id=agent, amount_usd=0.5, network="base")
     assert out["ok"] and out["to"] == MAIN, out

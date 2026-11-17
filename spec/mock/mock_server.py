@@ -226,7 +226,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self._agent_view(agent))
         if rest == ["deposits"] and method == "POST":
             if self.bearer:
-                url = f"https://crowdcode.app/agent/{agent['id']}?fund=1"
+                # What crowdcode.app answers: a page with just this request, the amount filled in.
+                amount = f"{float(payload.get('amount_usd') or 0):.2f}"
+                url = f"http://{self.headers.get('host')}/agent/{agent['id']}/fund?amount={amount}&from=your+agent"
                 return self._send(409, {"error": "browser_approval_required", "approve_url": url, "message": f"Open {url}"})
             return self._deposit(agent, owner, payload)
         if rest == ["tasks"] and method == "POST":
