@@ -863,3 +863,24 @@ def test_only_the_gate_publishes_unless_auto_publish_is_set(db, monkeypatch):
     ct.run(db, NOW, chat=ScriptedModel(), reliability=ct.ReliabilityView(), settings=Settings())
     with db() as conn:
         assert ct.latest(conn, published_only=True) is None and ct.latest(conn, published_only=False)["version"] == 1
+
+
+def test_new_model_rows_priors_or_build_logic_rebuild_at_the_next_run(db, monkeypatch):
+    seed(db)
+    with db() as conn:
+        conn.execute((ROOT / "supabase/offerings-models.sql").read_text())
+        conn.commit()
+    model = ScriptedModel()
+    ct.run(db, NOW, chat=model, reliability=ct.ReliabilityView(), settings=Settings())
+    assert ct.run(db, NOW + timedelta(hours=1), chat=model, reliability=ct.ReliabilityView(),
+                  settings=Settings())["built"] is None
+    with db() as conn:
+        conn.execute("""insert into model_quality_priors (model, model_family, modality, source, source_url, as_of,
+                          metric, score, rank, prior_rating) values ('veo-3.1', 'veo', 'video', 'aa', 'https://x', '2026-11-17',
+                          'elo', 1200, 1, 4.6)""")
+        conn.commit()
+    assert ct.run(db, NOW + timedelta(hours=2), chat=model, reliability=ct.ReliabilityView(),
+                  settings=Settings())["built"]["trigger"] == "changed"
+    monkeypatch.setattr(ct, "BUILD_LOGIC", "next")
+    assert ct.run(db, NOW + timedelta(hours=3), chat=model, reliability=ct.ReliabilityView(),
+                  settings=Settings())["built"]["trigger"] == "changed"
