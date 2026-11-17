@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **C12's allowance reference.** `GET /api/reliability?url=&method=` adds
+  `allowance_reference`: the per-call price of the best `proven` or `popular`
+  alternative, or null when there is none.
+  - **Same model first.** Sellers of the queried offering's model, priced
+    per model from the seller's own pricing (a 5-second 720p clip, one image,
+    or a fixed clip price, plus fees). A single-model seller is priced by its
+    quote.
+  - **Else the same tree leaf.** Quality-first for media leaves (the best
+    model, then delivery, then price) and best score for the rest.
+  - **Shape:** `{basis, price_atomic, service_id, resource_id, tier, score,
+    model?, leaf?, by_model?}`. The gateway caps exploration at the larger of
+    the owner's floor and this price.
 - **`@crowdcode/redaction` 0.1.1 (in the repository, not published):** `@huggingface/transformers` is an optional dependency, `^4.3.2` (`onnxruntime-node` 1.30.0), and stays external in its build. The redactor service builds from the workspace; on Render it also sets `ONNXRUNTIME_NODE_INSTALL_CUDA=skip`, because from 2026-11-17 its builds failed on `onnxruntime-node` 1.21.0's CUDA download (a GitHub 404).
 
 - **Search ranks media and models by quality first** (C13 amendment, 2026-11-17).

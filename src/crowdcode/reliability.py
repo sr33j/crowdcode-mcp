@@ -94,6 +94,10 @@ PROVEN_MEAN_AT_LEAST = Decimal("0.85")
 QUALITY_KAPPA = Decimal(2)
 QUALITY_V31_PRIOR = Decimal(3)
 QUALITY_DEFAULT_PRIOR = Decimal(3)
+# C12's allowance reference: what one standard call of a model costs, where a
+# seller prices by duration (the C13 amendment's video minimum is 4 s at 720p).
+REFERENCE_VIDEO_SECONDS = Decimal(5)
+REFERENCE_TIERS = ("proven", "popular")
 # What the gateway shows an owner (C4 caps reasons at 8).
 MAX_REASONS = 8
 MAX_MODELS = 12
@@ -876,7 +880,9 @@ def _service_for_url(conn: psycopg.Connection, url: str, method: str | None) -> 
 
 
 def for_url(conn: psycopg.Connection, url: str, method: str | None) -> dict[str, Any]:
-    """``GET /api/reliability?url=&method=``: always an answer; unknown is ``new``."""
+    """``GET /api/reliability?url=&method=``: always an answer; unknown is ``new``.
+    Carries C12's ``allowance_reference`` (None when there is no proven or popular
+    alternative with a per-call price)."""
     service_id, resource = _service_for_url(conn, url, method)
     if service_id is None and resource is not None:
         # Listed, not tracked: evaluated now from what the index knows about it.
@@ -885,6 +891,7 @@ def for_url(conn: psycopg.Connection, url: str, method: str | None) -> dict[str,
         return {"service_id": None, "state": result["state"], "tier": result["tier"], "rule_version": RULE_VERSION,
                 "computed_at": inputs["as_of"], "checked_at": None, "reasons": result["reasons"],
                 "posterior": result["posterior"], "quality": result["quality"], "score": result["score"],
+                "allowance_reference": allowance_reference(conn, resource),
                 "inputs": {**inputs, "indexed": True},
                 "resolved": {"service_id": None, "resource_id": resource["id"], "method": resource["method"],
                              "route_template": resource["route_template"]}}
@@ -892,8 +899,14 @@ def for_url(conn: psycopg.Connection, url: str, method: str | None) -> dict[str,
         payload = _unknown(None, None, NOT_INDEXED)
         payload["inputs"]["indexed"] = False
         payload["resolved"] = None
+        payload["allowance_reference"] = None
         return payload
     payload = for_service(conn, service_id) or _unknown(service_id, None, NOT_TRACKED)
+    if resource is None:  # found through the registry's aliases: use the service's own tracked resource
+        resource = conn.execute(
+            "select * from index_resources where service_id = %s order by tracked desc, id limit 1", (service_id,)
+        ).fetchone()
+    payload["allowance_reference"] = allowance_reference(conn, resource) if resource else None
     payload["resolved"] = {
         "service_id": service_id,
         "resource_id": resource["id"] if resource else None,
@@ -930,6 +943,201 @@ def listing(conn: psycopg.Connection, *, state: str | None = None, tier: str | N
 
 def by_state(conn: psycopg.Connection, state: str, limit: int = 500, offset: int = 0) -> dict[str, Any]:
     return listing(conn, state=state, limit=limit, offset=offset)
+
+
+# --- C12: the allowance reference -------------------------------------------------------
+
+
+def _usd(value: Any) -> Decimal | None:
+    d = _dec(value)
+    return d if d is not None and d >= 0 else None
+
+
+def model_call_usd(pricing: Any) -> Decimal | None:
+    """One standard call of a model, in USD, from a seller's own pricing
+    (``index_offering_models.pricing``): a fixed clip price, one image, or a
+    5-second clip at 720p for per-second pricing, plus per-call fees. None when
+    the price depends on input size (per character, per token)."""
+    if not isinstance(pricing, dict):
+        return None
+    fees = sum((_usd(pricing.get(k)) or Decimal(0)) for k in ("transaction_fee", "per_call_surcharge"))
+    secs = REFERENCE_VIDEO_SECONDS
+    for key in ("clip_usd", "per_call", "usd_per_call"):
+        if _usd(pricing.get(key)) is not None:
+            return _usd(pricing[key]) + fees
+    if _usd(pricing.get("per_image")) is not None:
+        return _usd(pricing["per_image"]) + fees
+    if str(pricing.get("per") or "").lower() in ("call", "request", "clip", "image", "video"):
+        if _usd(pricing.get("usd")) is not None:
+            return _usd(pricing["usd"]) + fees
+    for key in ("per_second", "duration_seconds_720p", "text_to_video_duration_seconds_720p",
+                "duration_seconds_without_audio_720p", "duration_seconds_with_audio_720p", "duration_seconds",
+                "duration_seconds_without_audio"):
+        if _usd(pricing.get(key)) is not None:
+            return _usd(pricing[key]) * secs + fees
+    for key in ("cents_per_video_output_second_720p", "cents_per_second_output"):
+        if _usd(pricing.get(key)) is not None:
+            return _usd(pricing[key]) / 100 * secs + fees
+    return None
+
+
+def _quote_atomic(row: dict[str, Any]) -> int | None:
+    """The offering's own per-call price in atomic USDC: its latest valid quote, else its listing."""
+    for amount, asset in ((row.get("quoted_price_atomic"), row.get("quoted_asset")),
+                          (row.get("price_atomic"), row.get("price_asset"))):
+        if amount is not None and isinstance(asset, str) and asset.lower() in _USDC:
+            return int(amount)
+    return None
+
+
+def _best(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """C13's best known option: the highest one score, then the lower price."""
+    priced = [c for c in candidates if c.get("price_atomic") is not None]
+    if not priced:
+        return None
+    return sorted(priced, key=lambda c: (-(float(c["score"] or 0)), c["price_atomic"], c["service_id"]))[0]
+
+
+def allowance_reference(conn: psycopg.Connection, resource: dict[str, Any]) -> dict[str, Any] | None:
+    """C12: the price of the best ``proven`` or ``popular`` offering in the same
+    model as ``resource`` (quality first, the C13 amendment), else in the same
+    tree leaf. ``{price_atomic, service_id, resource_id, tier, score, model | leaf}``,
+    or None when no such alternative has a per-call price."""
+    rid = resource["id"]
+    sid = resource.get("service_id")
+    has_models = bool(_columns(conn, "index_offering_models"))
+    n_models = ("(select count(*) from index_offering_models x where x.resource_id = r.id)::int" if has_models
+                else "0")
+    if has_models:
+        rows = conn.execute(
+            """
+            select m.model, m.pricing, r.id as resource_id, r.service_id, r.quoted_price_atomic, r.quoted_asset,
+                   r.price_atomic, r.price_asset, sr.tier, sr.score,
+                   (select count(*) from index_offering_models x where x.resource_id = r.id)::int as n_models
+            from index_offering_models m
+            join index_resources r on r.id = m.resource_id
+            join service_reliability sr on sr.service_id = r.service_id
+            where m.model in (select model from index_offering_models where resource_id = %s)
+              and r.id <> %s and r.service_id is distinct from %s and sr.tier = any(%s)
+            """,
+            (rid, rid, sid, list(REFERENCE_TIERS)),
+        ).fetchall()
+        by_model: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            usd = model_call_usd(row["pricing"])
+            price = (int((usd * 10**6).to_integral_value()) if usd is not None
+                     else _quote_atomic(row) if row["n_models"] == 1 else None)
+            by_model.setdefault(row["model"], []).append({**row, "price_atomic": price})
+        best_by_model = {m: b for m, cs in by_model.items() if (b := _best(cs))}
+        if best_by_model:
+            best = _best(list(best_by_model.values()))
+            return {"basis": "model", "model": best["model"], "price_atomic": best["price_atomic"],
+                    "service_id": best["service_id"], "resource_id": best["resource_id"], "tier": best["tier"],
+                    "score": float(best["score"]) if best["score"] is not None else None,
+                    **({"by_model": {m: b["price_atomic"] for m, b in sorted(best_by_model.items())}}
+                       if len(best_by_model) > 1 else {})}
+    if not (_columns(conn, "capability_classifications") and _columns(conn, "capability_leaves")):
+        return None
+    from crowdcode.capability_tree import ranking_policy
+
+    leaves = conn.execute(
+        """
+        select distinct l.id, l.node, l.facets
+        from capability_classifications c
+        cross join jsonb_array_elements(c.assignments) a
+        join capability_leaves l on l.node = a->>'node' and (a->>'facet') = any(l.facets)
+        where c.item_key = %s
+        order by l.id
+        """,
+        (f"r:{rid}",),
+    ).fetchall()
+    best = None
+    for leaf in leaves:
+        policy = ranking_policy(leaf["node"], leaf["id"])
+        candidates = [c for c in _leaf_candidates(conn, leaf, has_models)
+                      if c["resource_id"] != rid and (sid is None or c["service_id"] != sid)]
+        found = _best_quality_first(candidates) if policy == "quality_first" else _best(candidates)
+        if found and (best is None or found["price_atomic"] > best["price_atomic"]):
+            best = {**found, "leaf": leaf["id"], "policy": policy}
+    if best is None:
+        return None
+    out = {"basis": "leaf", "leaf": best["leaf"], "price_atomic": best["price_atomic"],
+           "service_id": best["service_id"], "resource_id": best["resource_id"], "tier": best["tier"],
+           "score": float(best["score"]) if best["score"] is not None else None}
+    if best["policy"] == "quality_first" and best.get("model"):
+        out["model"] = best["model"]
+    return out
+
+
+LEAF_CACHE_SECONDS = 300.0
+_LEAF_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _leaf_candidates(conn: psycopg.Connection, leaf: dict[str, Any], has_models: bool) -> list[dict[str, Any]]:
+    """Every proven or popular offering in one leaf, one entry per model it sells
+    there (priced from the seller's own pricing) or one entry priced by its quote.
+    Cached for five minutes, like the gateway's own lookups."""
+    now = time.monotonic()
+    with _lock:
+        hit = _LEAF_CACHE.get(leaf["id"])
+        if hit and hit[0] > now:
+            return hit[1]
+    models_sql = ("""left join lateral (
+                       select coalesce(jsonb_agg(jsonb_build_object('model', m.model, 'pricing', m.pricing,
+                                'prior_rating', q.prior_rating)), '[]'::jsonb) as models
+                       from index_offering_models m left join model_quality_priors q on q.model = m.model
+                       where m.resource_id = r.id) om on true"""
+                  if has_models and _columns(conn, "model_quality_priors") else
+                  "cross join (select '[]'::jsonb as models) om")
+    rows = conn.execute(
+        f"""
+        select distinct on (r.id) r.id as resource_id, r.service_id, r.quoted_price_atomic, r.quoted_asset,
+               r.price_atomic, r.price_asset, sr.tier, sr.score, sr.alpha, sr.beta, om.models
+        from service_reliability sr
+        join index_resources r on r.service_id = sr.service_id
+        join capability_classifications c on c.item_key = 'r:' || r.id
+        cross join jsonb_array_elements(c.assignments) a
+        {models_sql}
+        where sr.tier = any(%(tiers)s) and a->>'node' = %(node)s and (a->>'facet') = any(%(facets)s)
+        """,
+        {"node": leaf["node"], "facets": list(leaf["facets"] or []), "tiers": list(REFERENCE_TIERS)},
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        mean = (Decimal(row["alpha"]) / Decimal(row["alpha"] + row["beta"])
+                if row["alpha"] is not None and row["beta"] is not None else None)
+        base = {k: row[k] for k in ("resource_id", "service_id", "tier", "score")}
+        models = row["models"] or []
+        if len(models) > 1:
+            # A multi-model seller's quote is for whichever model the probe named: price each model itself.
+            for m in models:
+                usd = model_call_usd(m.get("pricing"))
+                out.append({**base, "model": m.get("model"), "quality": _dec(m.get("prior_rating")), "mean": mean,
+                            "price_atomic": int((usd * 10**6).to_integral_value()) if usd is not None else None})
+        else:
+            m = models[0] if models else {}
+            usd = model_call_usd(m.get("pricing"))
+            out.append({**base, "model": m.get("model"), "quality": _dec(m.get("prior_rating")), "mean": mean,
+                        "price_atomic": (int((usd * 10**6).to_integral_value()) if usd is not None
+                                         else _quote_atomic(row))})
+    with _lock:
+        _LEAF_CACHE[leaf["id"]] = (now + LEAF_CACHE_SECONDS, out)
+    return out
+
+
+QUALITY_BAND = Decimal("0.25")
+
+
+def _best_quality_first(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The C13 amendment: the best model (leaderboard quality; 3.0 when unrated),
+    and within 0.25 of it the seller most likely to deliver, then the cheaper."""
+    priced = [c for c in candidates if c.get("price_atomic") is not None]
+    if not priced:
+        return None
+    quality = lambda c: c["quality"] if c.get("quality") is not None else QUALITY_DEFAULT_PRIOR
+    top = max(quality(c) for c in priced)
+    band = [c for c in priced if quality(c) >= top - QUALITY_BAND]
+    return sorted(band, key=lambda c: (-(c["mean"] or 0), c["price_atomic"], c["service_id"]))[0]
 
 
 # --- Blocking ------------------------------------------------------------------------
