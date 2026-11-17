@@ -1,11 +1,21 @@
-"""The directory search evaluation set, ranked offline with the real model (SRI-86).
+"""The search evaluation set, ranked offline with the real model (SRI-86, SRI-115 W10).
 
 The owner asked for "sell-side reports / investment memos" and the search did
 not offer Drip, the best-rated research source CrowdCode lists. These tests
-fail when a change to listings, matching or ranking loses recall on 60 real
+fail when a change to listings, matching or ranking loses recall on 80 real
 intents (tests/search_eval/cases.json), scored over the committed snapshot of
-the directory and catalogs, so a regression shows up in the pull request that
-causes it rather than in an owner's search.
+the index, directory and catalogs, so a regression shows up in the pull request
+that causes it rather than in an owner's search.
+
+Two paths are scored:
+
+- **the index search** (C13, the default since SRI-115 W10): every offering in
+  the services index, ranked by a seeded Thompson draw of value per dollar.
+  Scored against `expected` plus the judged `also` (search_eval.py), averaged
+  over several seeds, since a ranking that explores is a distribution.
+- **the live fallback** (the federated search the index replaced, still used
+  when the index has no match or has not loaded): the original 60 cases,
+  against `expected` alone, with the floors it has always had.
 """
 
 from __future__ import annotations
@@ -15,16 +25,23 @@ import os
 import pytest
 
 from crowdcode import semantic
-from crowdcode.search_eval import evaluate, load_cases
+from crowdcode.search_eval import evaluate, load_cases, route_key
 from tests.search_eval.snapshot import load_snapshot, offline_search
 
-# On this snapshot: recall@3 0.458 and MRR 0.642 before SRI-86 (what
-# production measured live that day), 0.689 and 0.800 after. The floors sit
-# about two cases under that, so a snapshot refresh's noise passes and a real
-# regression does not; raise them when a change earns it.
-RECALL_FLOOR = 0.66
-MRR_FLOOR = 0.77
+# The live federated search on this snapshot: recall@3 0.661 and MRR 0.779 against
+# `expected` (0.689 / 0.800 on the 2026-11-04 snapshot it was tuned on).
+LIVE_RECALL_FLOOR = 0.63
+LIVE_MRR_FLOOR = 0.75
+# The index search, mean over SEEDS, against `expected` plus `also`: recall@3 0.772,
+# MRR 0.855, hit@3 0.935 on the 80 cases over 47,831 offerings (the live search: 0.533,
+# 0.765, 0.838 against the same labels; on the original 60, 0.742 / 0.837 / 0.913 against
+# the live search's 0.589 / 0.833 / 0.950). The floors leave room for a snapshot refresh.
+INDEX_RECALL_FLOOR = 0.73
+INDEX_MRR_FLOOR = 0.82
+INDEX_HIT_FLOOR = 0.90
+SEEDS = (20261117, 1, 2, 3, 4)
 DRIP = "https://dripstack.xyz/api/v1/publications/{publicationSlug}/{postSlug}"
+OWNER = "is there a service on CrowdCode that will get me really good sell-side reports / investment memos?"
 
 
 @pytest.fixture(scope="module")
@@ -33,51 +50,108 @@ def snapshot():
 
 
 @pytest.fixture(scope="module")
-def search(snapshot):
+def model():
     semantic.EMBEDDER.warm(wait=True)
     if not semantic.EMBEDDER.ready():
         if os.environ.get("CI"):
             pytest.fail(f"could not load {semantic.MODEL_REPO}@{semantic.MODEL_REVISION}")
         pytest.skip("the embedding model is not available offline")
-    return offline_search(snapshot, embedder=semantic.EMBEDDER)
+    return semantic.EMBEDDER
 
 
 @pytest.fixture(scope="module")
-def summary(search):
-    return evaluate(load_cases(), search)
+def search(snapshot, model):
+    return offline_search(snapshot, embedder=model)
 
 
-def test_every_expected_service_is_in_the_directory(snapshot):
-    listed = {row["canonical_endpoint"] for row in snapshot["directory"]}
+@pytest.fixture(scope="module")
+def live(snapshot, model):
+    return offline_search(snapshot, embedder=model, live=True)
+
+
+def original(cases):
+    return [c for c in cases if c.get("source") != "index"]
+
+
+def test_every_expected_service_is_in_the_index_or_the_directory(snapshot):
     cases = load_cases()
-    assert 40 <= len(cases) <= 60
+    assert 75 <= len(cases) <= 100
     assert len({c["id"] for c in cases}) == len(cases)
-    missing = [(c["id"], e) for c in cases for e in c["expected"] if e not in listed]
+    known = {route_key(r["route_template"]) for r in snapshot["index"]["resources"]}
+    known |= {route_key(r["probe_url"]) for r in snapshot["index"]["resources"]}
+    known |= {route_key(r["canonical_endpoint"]) for r in snapshot["directory"] if r.get("canonical_endpoint")}
+    # `also` may name results only the live catalogs returned; `expected` must be findable.
+    missing = [(c["id"], e) for c in cases for e in c["expected"] if route_key(e) not in known]
     assert missing == []
 
 
-def test_recall_and_mrr_do_not_regress(summary):
+def test_index_search_recall_and_mrr_do_not_regress(snapshot, model):
+    cases = load_cases()
+    summaries = [evaluate(cases, offline_search(snapshot, embedder=model, seed=seed)) for seed in SEEDS]
+    recall = sum(s.recall_at_3 for s in summaries) / len(summaries)
+    mrr = sum(s.mrr for s in summaries) / len(summaries)
+    hit = sum(s.hit_at_3 for s in summaries) / len(summaries)
+    print("\n" + summaries[0].table())
+    print(f"mean over {len(SEEDS)} seeds: recall@3 {recall:.3f}  MRR {mrr:.3f}  hit@3 {hit:.3f}")
+    assert recall >= INDEX_RECALL_FLOOR, summaries[0].table()
+    assert mrr >= INDEX_MRR_FLOOR, summaries[0].table()
+    assert hit >= INDEX_HIT_FLOOR, summaries[0].table()
+
+
+def test_index_search_beats_the_live_search_it_replaced(snapshot, model, live):
+    cases = load_cases()
+    old = evaluate(cases, live)
+    new = [evaluate(cases, offline_search(snapshot, embedder=model, seed=seed)) for seed in SEEDS]
+    assert sum(s.recall_at_3 for s in new) / len(new) > old.recall_at_3
+    assert sum(s.mrr for s in new) / len(new) > old.mrr
+
+
+def test_live_fallback_recall_and_mrr_do_not_regress(live):
+    summary = evaluate(original(load_cases()), live, widened=False)
     print("\n" + summary.table())
-    assert summary.recall_at_3 >= RECALL_FLOOR, summary.table()
-    assert summary.mrr >= MRR_FLOOR, summary.table()
+    assert summary.recall_at_3 >= LIVE_RECALL_FLOOR, summary.table()
+    assert summary.mrr >= LIVE_MRR_FLOOR, summary.table()
 
 
-@pytest.mark.parametrize("query", [
-    "sell-side research reports",
-    "is there a service on CrowdCode that will get me really good sell-side reports / investment memos?",
-])
-def test_drip_answers_the_owners_sell_side_question(search, query):
-    assert DRIP in search(query)[:3]
+@pytest.mark.parametrize("query", ["sell-side research reports", OWNER])
+def test_the_live_fallback_still_offers_drip_for_the_owners_question(live, query):
+    assert route_key(DRIP) in [route_key(e) for e in live(query)[:3]]
 
 
-def test_the_tickets_other_examples(search):
-    assert search("send an email")[0] == "https://stableemail.dev/api/send"
-    speech = {"https://stablevoice.dev/api/speech", "https://agent402.tools/api/tts", "https://agent402.tools/api/tts-lite",
-              "https://x402.forgemesh.io/speech-generator", "https://x402.forgemesh.io/tts"}
-    assert speech & set(search("text to speech mp3")[:3])
+def test_the_index_offers_drip_for_the_owners_question(snapshot, model):
+    for seed in SEEDS:
+        ranked = [route_key(e) for e in offline_search(snapshot, embedder=model, seed=seed)(OWNER)]
+        assert route_key(DRIP) in ranked[:3], (seed, ranked[:3])
+
+
+def test_the_tickets_other_examples(snapshot, model):
+    send = next(c for c in load_cases() if c["id"] == "send-email")
+    senders = {route_key(e) for e in [*send["expected"], *send.get("also", [])]}
+    for seed in SEEDS:
+        search = offline_search(snapshot, embedder=model, seed=seed)
+        top = [route_key(e) for e in search("send an email")[:3]]
+        # The draw may lead with another sender; whatever leads sends email, and StableEmail is there.
+        assert top[0] in senders and route_key("https://stableemail.dev/api/send") in top, (seed, top)
+        speech = {"https://stablevoice.dev/api/speech", "https://agent402.tools/api/tts", "https://agent402.tools/api/tts-lite",
+                  "https://x402.forgemesh.io/speech-generator", "https://x402.forgemesh.io/tts"}
+        assert speech & set(search("text to speech mp3")[:3]), seed
+
+
+def test_a_video_request_gets_video_generators_not_transcript_tools(snapshot, model):
+    """C13's example: "generate a 10 second video" is answered by sellers of video models."""
+    case = next(c for c in load_cases() if c["id"] == "video-10s")
+    generators = {route_key(e) for e in [*case["expected"], *case.get("also", [])]}
+    for seed in SEEDS:
+        top = [route_key(e) for e in offline_search(snapshot, embedder=model, seed=seed)("generate a 10 second video")[:5]]
+        assert sum(1 for e in top if e in generators) >= 4, (seed, top)
+        assert not any("transcri" in e for e in top), (seed, top)
 
 
 def test_without_the_model_search_still_works(snapshot):
-    keyword_only = evaluate(load_cases(), offline_search(snapshot, embedder=None))
-    # Keywords over the new descriptions alone: no worse than before SRI-86.
-    assert keyword_only.recall_at_3 >= 0.45
+    cases = load_cases()
+    keyword_only = evaluate(cases, offline_search(snapshot, embedder=None))
+    # Keywords alone over the index (the model not yet loaded): still useful, if well below the model.
+    assert keyword_only.recall_at_3 >= 0.35, keyword_only.table()
+    live_keywords = evaluate(original(cases), offline_search(snapshot, embedder=None, live=True), widened=False)
+    # The live fallback with keywords only: no worse than before SRI-86.
+    assert live_keywords.recall_at_3 >= 0.45

@@ -392,17 +392,20 @@ def find_service(
 ) -> dict[str, Any]:
     """Find the best paid service for a capability across Base, Solana and Tempo.
 
-    `query`: the capability in a few words ("web search", "object storage"),
-    not the task's subject. Searches Coinbase's x402 Bazaar, the mpp.dev MPP catalog and CrowdCode's
-    reviewed services, merges them by endpoint, and ranks for this payer:
-    CrowdCode quality first, then effective price on the payer's best network
-    (adding one transfer between its own networks when that network's balance
-    is short), then the balance there. `networks`: networks the payer can pay
-    on (default base, solana, tempo). `balances`: available USDC per network,
-    e.g. {"base": 1.2, "solana": 0.4, "tempo": 0}. `candidates`: endpoints
-    found elsewhere (e.g. AgentCash search) to rank together, each
-    {endpoint, method?, name?, price_usd?, network?, protocol?, source?}.
-    Inspect the chosen endpoint for its live quote before paying.
+    `query`: the capability in a few words ("web search", "text to speech",
+    "seedance video"), not the task's subject. Searches every offering in
+    CrowdCode's index (the x402 Bazaar, mpp.dev and the other catalogs, plus
+    CrowdCode's own services), within the capability or model asked for, and
+    ranks them by a seeded draw of delivery x quality per dollar on the
+    payer's best network (adding one transfer between its own networks when
+    that network's balance is short). Each result carries its `tier`
+    (proven, popular, new; bad is left out) and `why`; `explore: true` marks
+    one the draw tried ahead of the best-known option. `networks`: networks
+    the payer can pay on (default base, solana, tempo). `balances`: available
+    USDC per network, e.g. {"base": 1.2, "solana": 0.4, "tempo": 0}.
+    `candidates`: endpoints found elsewhere (e.g. AgentCash search) to rank
+    together, each {endpoint, method?, name?, price_usd?, network?, protocol?,
+    source?}. Inspect the chosen endpoint for its live quote before paying.
     """
     return find_services(query, networks=networks, balances=balances,
                          candidates=candidates, limit=limit, conn_factory=connect)
@@ -2110,6 +2113,7 @@ async def find_services_route(request: Request) -> JSONResponse:
         payload = await run_in_threadpool(
             find_services, body["query"], networks=body.get("networks"), balances=body.get("balances"),
             candidates=body.get("candidates"), limit=body.get("limit"), conn_factory=connect,
+            seed=body.get("seed"), detail=body.get("detail"),
         )
     except Exception:
         return _unexpected_json_error("find_services")

@@ -1,0 +1,5593 @@
+{
+ "about": "Every verdict behind cases.json `also` (SRI-115 W10, 2026-11-17): for each case, each candidate a search returned that was not already expected, judged from its URL, name, description and input fields by an independent model judge that never saw either ranking. relevant: it answers the intent as well as the expected services.",
+ "verdicts": {
+  "sell-side-owner": {
+   "https://agentpay.tools/tools/pre_trade_check/call": {
+    "relevant": false,
+    "why": "crypto pre-trade risk check, not research reports"
+   },
+   "https://edgar.apitoll.cloud/v1/edgar/insider": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://opportunity-api-production.up.railway.app/api/market-brief": {
+    "relevant": false,
+    "why": "no description; vague market brief"
+   },
+   "https://crowdcode.app/s/crowdcode/agents": {
+    "relevant": false,
+    "why": "creates a generic cloud agent; meta-service"
+   },
+   "https://filings.wickedapi.com/v1/insider-trades": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://agent.massive.com/stocks/filings/vX/13-F": {
+    "relevant": false,
+    "why": "13F holdings data, not research report"
+   },
+   "https://agent.massive.com/stocks/filings/8-K/vX/text": {
+    "relevant": false,
+    "why": "raw 8-K filing text, not research report"
+   },
+   "https://horizonpulse.dev/api/sec/filings": {
+    "relevant": false,
+    "why": "filings list lookup, not research report"
+   },
+   "https://agent.massive.com/stocks/filings/10-K/vX/sections": {
+    "relevant": false,
+    "why": "raw 10-K section text, not research report"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/sec/insider": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://www.x402pulse.dev/v1/wallstreet/morning-brief": {
+    "relevant": false,
+    "why": "daily filing-signal brief, not sell-side report or memo"
+   },
+   "https://www.x402pulse.dev/v1/wallstreet/company-brief": {
+    "relevant": false,
+    "why": "filings-derived data summary, not analyst report/memo"
+   },
+   "https://scraplingdata.xyz/v1/stocks/insiders": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://makememoneynomistakes.ai/api/v1/directory/market": {
+    "relevant": false,
+    "why": "x402 market directory; meta-service"
+   },
+   "https://crowdcode.app/s/text-stats/stats": {
+    "relevant": false,
+    "why": "text statistics; unrelated"
+   },
+   "https://api.chainmarket-api.workers.dev/api/crypto/coinmarketcap-listings": {
+    "relevant": false,
+    "why": "new token listings, not research reports"
+   },
+   "https://api.chainmarket-api.workers.dev/api/finance/stooq-historical-stocks": {
+    "relevant": false,
+    "why": "historical price data, not memos"
+   },
+   "https://agent.massive.com/v2/snapshot/locale/us/markets/stocks/tickers": {
+    "relevant": false,
+    "why": "market snapshot data, not reports"
+   },
+   "https://df-data-agent.vercel.app/api/v1/macro/calendar": {
+    "relevant": false,
+    "why": "economic calendar, not research reports"
+   },
+   "https://agent.massive.com/v2/aggs/grouped/locale/us/market/stocks/:date": {
+    "relevant": false,
+    "why": "daily OHLC data, not reports"
+   },
+   "https://api.hivemindos.app/v1/x402/onchain-intelligence/tokens.brief": {
+    "relevant": false,
+    "why": "token flow brief, not sell-side research"
+   },
+   "https://x402.smartmoney.market/congress": {
+    "relevant": false,
+    "why": "congressional trade disclosures, not research"
+   },
+   "https://bazaar-gateway.vercel.app/api/market-report": {
+    "relevant": false,
+    "why": "Market signals and sentiment, not sell-side reports or memos"
+   },
+   "https://x402.smartmoney.market/insiders": {
+    "relevant": false,
+    "why": "Insider Form 4 activity, not research reports"
+   },
+   "https://www.df-data-agent.app/api/v1/macro/calendar": {
+    "relevant": false,
+    "why": "Economic calendar, not reports"
+   },
+   "https://api.tickersfeed.net/sec/:symbol/filings": {
+    "relevant": false,
+    "why": "Raw SEC filings, not sell-side reports"
+   }
+  },
+  "sell-side-research-reports": {
+   "https://bazaar-gateway.vercel.app/api/market-report": {
+    "relevant": false,
+    "why": "no description; vague market report"
+   },
+   "https://agent-data-toolkit.onrender.com/x402report": {
+    "relevant": false,
+    "why": "x402 market report; meta-service"
+   },
+   "https://x402.onchainexpat.com/api/x402-research/website-report": {
+    "relevant": false,
+    "why": "website competitive intelligence, not equity research"
+   },
+   "https://wintel.canopy.finance/x402/v1/report/stock/AAPL": {
+    "relevant": true,
+    "why": "full AI analyst report for a stock"
+   },
+   "https://marketdata.use.x402atlas.com/insider-trades": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://makememoneynomistakes.ai/api/v1/directory/market": {
+    "relevant": false,
+    "why": "x402 market directory; meta-service"
+   },
+   "https://x402.dailyelo.com/v1/sales/gap": {
+    "relevant": false,
+    "why": "x402 seller sales analysis; meta-service"
+   },
+   "https://www.x402pulse.dev/v1/health/drug-safety": {
+    "relevant": false,
+    "why": "FDA drug safety data; unrelated"
+   },
+   "https://api.vextorium.com/v1/insider-trades": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://www.x402pulse.dev/v1/politics/trump-trades": {
+    "relevant": false,
+    "why": "politician trade disclosures, not research report"
+   },
+   "https://api.youraitools.co/toolpick/v1/market": {
+    "relevant": false,
+    "why": "x402 API market report; meta-service"
+   },
+   "https://tempo-mpp-prediction-market.vercel.app/v1/report": {
+    "relevant": false,
+    "why": "Polymarket intelligence, not sell-side research"
+   },
+   "https://scout.hugen.tokyo/scout/research": {
+    "relevant": false,
+    "why": "generic AI web synthesis, not sell-side reports"
+   },
+   "https://x402.smartmoney.market/congress": {
+    "relevant": false,
+    "why": "congressional trade disclosures, not research"
+   },
+   "https://www.x402pulse.dev/v1/politics/congress-trades": {
+    "relevant": false,
+    "why": "Congress trades, not research reports"
+   }
+  },
+  "sell-side-equity": {
+   "https://api.stocktrends.com/v1/decision/evaluate-symbol": {
+    "relevant": false,
+    "why": "signal-based evaluation, not research report"
+   },
+   "https://edgar.apitoll.cloud/v1/edgar/insider": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://agent-data-toolkit.onrender.com/x402report": {
+    "relevant": false,
+    "why": "x402 market report; meta-service"
+   },
+   "https://agent.massive.com/stocks/filings/vX/form-4": {
+    "relevant": false,
+    "why": "Form 4 filings data, not research report"
+   },
+   "https://filings.wickedapi.com/v1/insider-trades": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://horizonpulse.dev/api/sec/company-facts": {
+    "relevant": false,
+    "why": "XBRL financial facts, not research report"
+   },
+   "https://marketdata.use.x402atlas.com/insider-trades": {
+    "relevant": false,
+    "why": "insider trade data, not research report"
+   },
+   "https://apiacre.com/v1/research/sec-company-evidence": {
+    "relevant": false,
+    "why": "SEC evidence bundle, not analyst research report"
+   },
+   "https://www.x402pulse.dev/v1/wallstreet/financials": {
+    "relevant": false,
+    "why": "financial statement data, not research report"
+   },
+   "https://makememoneynomistakes.ai/api/v1/directory/market": {
+    "relevant": false,
+    "why": "x402 market directory; meta-service"
+   },
+   "https://www.x402pulse.dev/v1/politics/trump-trades": {
+    "relevant": false,
+    "why": "politician trade disclosures, not research report"
+   },
+   "https://x402.dailyelo.com/v1/sales/gap": {
+    "relevant": false,
+    "why": "x402 seller sales analysis; meta-service"
+   },
+   "https://x402.onchainexpat.com/api/x402-research/website-report": {
+    "relevant": false,
+    "why": "Website competitive intelligence, not equity research"
+   },
+   "https://api.vextorium.com/v1/company-fundamentals": {
+    "relevant": false,
+    "why": "Raw fundamentals, not research reports"
+   },
+   "https://x402.datakoot.com/api/financials": {
+    "relevant": false,
+    "why": "XBRL financial facts, not research reports"
+   },
+   "https://www.x402pulse.dev/v1/politics/congress-trades": {
+    "relevant": false,
+    "why": "Congress trades, not research reports"
+   }
+  },
+  "investment-memo-analyst": {
+   "https://bazaar-gateway.vercel.app/api/market-report": {
+    "relevant": false,
+    "why": "no description; vague market report"
+   },
+   "https://api.printmoneylab.com/api/v1/kr-news/semiconductor-summary": {
+    "relevant": false,
+    "why": "Korean semiconductor news summary, not investment memo"
+   },
+   "https://api.stocktrends.com/v1/decision/evaluate-symbol": {
+    "relevant": false,
+    "why": "signal-based evaluation, not analyst report"
+   },
+   "https://api.aurelianflo.com/api/workflows/compliance/edd-report": {
+    "relevant": false,
+    "why": "wallet OFAC due diligence memo, not investment memo"
+   },
+   "https://agent.massive.com/stocks/filings/vX/13-F": {
+    "relevant": false,
+    "why": "13F holdings data, not analyst report"
+   },
+   "https://horizonpulse.dev/api/sec/company-facts": {
+    "relevant": false,
+    "why": "XBRL financial facts, not analyst report"
+   },
+   "https://api.marketintelligenceapi.com/api/v1/earnings/:symbol": {
+    "relevant": false,
+    "why": "earnings dates/history data, not analyst report"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/sec/13f": {
+    "relevant": false,
+    "why": "13F holdings data, not analyst report"
+   },
+   "https://api.interzoid.com/getstockinfo": {
+    "relevant": false,
+    "why": "quote metrics with brief assessment, not full report"
+   },
+   "https://api.financialdatasets.ai/financials/cash-flow-statements": {
+    "relevant": false,
+    "why": "raw cash flow statements, not analyst memo"
+   },
+   "https://api.intelica.dev/intel": {
+    "relevant": true,
+    "why": "Venture screening report is an analyst-style investment memo"
+   },
+   "https://scout.hugen.tokyo/scout/research": {
+    "relevant": false,
+    "why": "Generic multi-source research synthesis, not investment memo"
+   },
+   "https://emc2ai.io/x402/bitquery/investment-report": {
+    "relevant": false,
+    "why": "On-chain token intel, not analyst investment memo"
+   },
+   "https://x402.tbs-digital.com/sec/facts": {
+    "relevant": false,
+    "why": "Raw XBRL financial facts, not an analyst report or memo"
+   }
+  },
+  "bank-research": {
+   "https://api.stocktrends.com/v1/decision/evaluate-symbol": {
+    "relevant": false,
+    "why": "signal-based evaluation, not research report"
+   },
+   "https://scout.hugen.tokyo/scout/research": {
+    "relevant": false,
+    "why": "generic topic research synthesis, not stock research report"
+   },
+   "https://api.printmoneylab.com/api/v1/kr-news/semiconductor-summary": {
+    "relevant": false,
+    "why": "Korean semiconductor news summary, not stock report"
+   },
+   "https://api.stocktrends.com/v1/indicators/history": {
+    "relevant": false,
+    "why": "indicator history series, not research report"
+   },
+   "https://api.kakerapetit.dev/v1/jp-company/snapshot": {
+    "relevant": false,
+    "why": "Japanese company fundamentals data, not research report"
+   },
+   "https://stationfx.com/economic-data/credit-spreads/ice-bofa-us-corporate-index-option-adjusted-spread": {
+    "relevant": false,
+    "why": "credit spread series; unrelated"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/pack/coin-research": {
+    "relevant": false,
+    "why": "crypto coin data pack, not stock research"
+   },
+   "https://api.stocktrends.com/v1/indicators/latest": {
+    "relevant": false,
+    "why": "indicator snapshot, not research report"
+   },
+   "https://api.financialdatasets.ai/financial-metrics": {
+    "relevant": false,
+    "why": "financial metrics data, not research report"
+   },
+   "https://api.financialdatasets.ai/financials/balance-sheets": {
+    "relevant": false,
+    "why": "balance sheet data, not research report"
+   },
+   "https://api.interzoid.com/getstockinfo": {
+    "relevant": false,
+    "why": "quote metrics with brief assessment, not full report"
+   },
+   "https://api.marketintelligenceapi.com/api/v1/earnings/:symbol": {
+    "relevant": false,
+    "why": "earnings dates/history data, not research report"
+   },
+   "https://api.tickersfeed.net/stock/:symbol/earnings": {
+    "relevant": false,
+    "why": "earnings EPS history, not research report"
+   },
+   "https://api.chainmarket-api.workers.dev/api/finance/stockanalysis": {
+    "relevant": false,
+    "why": "company identity only"
+   },
+   "https://researcher.now/v1/analyze": {
+    "relevant": false,
+    "why": "vague URL analyzer"
+   },
+   "https://cn-data-x402.cn-data-x402-worker.workers.dev/cn/research-reports": {
+    "relevant": false,
+    "why": "Broker report metadata only, not report content"
+   },
+   "https://x402.onchainexpat.com/api/x402-research/website-report": {
+    "relevant": false,
+    "why": "Website competitive report, unrelated"
+   },
+   "https://api.marketintelligenceapi.com/api/v1/report/:symbol": {
+    "relevant": true,
+    "why": "Full research report on a stock"
+   }
+  },
+  "investment-memo-nvda": {
+   "https://api.aurelianflo.com/api/workflows/compliance/edd-report": {
+    "relevant": false,
+    "why": "wallet OFAC due diligence memo, not investment memo"
+   },
+   "https://api.x402node.dev/stock/quote/nvda": {
+    "relevant": false,
+    "why": "NVDA price quote only, not memo"
+   },
+   "https://api.newsgurus.ai/x402/institutions/NVDA": {
+    "relevant": false,
+    "why": "no description; vague institutions endpoint"
+   },
+   "https://api.liquidagent.ai/v1/signals": {
+    "relevant": false,
+    "why": "portfolio rebalancing signals, not memo"
+   },
+   "https://api.newsgurus.ai/x402/futures/NVDA": {
+    "relevant": false,
+    "why": "crypto futures signals; unrelated"
+   },
+   "https://horizonpulse.dev/api/vuln/check": {
+    "relevant": false,
+    "why": "software vulnerability check; unrelated"
+   },
+   "https://mpp.orthogonal.com/aviato/company/investments/funds": {
+    "relevant": false,
+    "why": "company fund investments data; unrelated"
+   },
+   "https://mpp.orthogonal.com/fundable/investor/deals": {
+    "relevant": false,
+    "why": "investor portfolio deals; unrelated"
+   },
+   "https://api.chainmarket-api.workers.dev/api/finance/sec-investment-adviser": {
+    "relevant": false,
+    "why": "SEC adviser registration record; unrelated"
+   },
+   "https://blockrun-web-vbsbhh7lea-uc.a.run.app/api/v1/stocks/us/price/NVDA": {
+    "relevant": false,
+    "why": "Price quote only, not a memo"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/sec/13f": {
+    "relevant": false,
+    "why": "13F fund holdings, not a memo"
+   },
+   "https://signal-api.shicoars.workers.dev/p/regime-nvdab": {
+    "relevant": false,
+    "why": "Tokenized NVDAB/USDT trend signal, not an investment memo"
+   }
+  },
+  "newsletter-stock-picks": {
+   "https://api.stocktrends.com/v1/decision/evaluate-symbol": {
+    "relevant": false,
+    "why": "signal-based evaluation, not investor picks"
+   },
+   "https://api.nansen.ai/api/v1/prediction-market/categories": {
+    "relevant": false,
+    "why": "prediction market categories; unrelated"
+   },
+   "https://edgar.apitoll.cloud/v1/edgar/insider": {
+    "relevant": false,
+    "why": "insider trades, not investor/newsletter picks"
+   },
+   "https://agent402.tools/api/skill/company-dossier": {
+    "relevant": false,
+    "why": "company dossier, not investor picks"
+   },
+   "https://api.stocktrends.com/v1/prices/latest": {
+    "relevant": false,
+    "why": "weekly price data; unrelated"
+   },
+   "https://agent.massive.com/v2/aggs/grouped/locale/us/market/stocks/:date": {
+    "relevant": false,
+    "why": "market OHLC data; unrelated"
+   },
+   "https://www.x402pulse.dev/v1/wallstreet/insider-feed": {
+    "relevant": false,
+    "why": "insider trading feed, not investor/newsletter picks"
+   },
+   "https://api.stocktrends.com/v1/prices/history": {
+    "relevant": false,
+    "why": "price history; unrelated"
+   },
+   "https://api.chainmarket-api.workers.dev/api/finance/tradingview-ideas": {
+    "relevant": false,
+    "why": "community chart ideas titles, not top investor picks"
+   },
+   "https://api.stocktrends.com/v1/indicators/latest": {
+    "relevant": false,
+    "why": "indicator snapshot; unrelated"
+   },
+   "https://api.chainmarket-api.workers.dev/api/dev/morningstar": {
+    "relevant": false,
+    "why": "Morningstar quote data; unrelated"
+   },
+   "https://api.chainmarket-api.workers.dev/api/finance/dataroma-superinvestors": {
+    "relevant": true,
+    "why": "superinvestor portfolios and top holdings"
+   },
+   "https://www.x402pulse.dev/v1/politics/trump-trades": {
+    "relevant": false,
+    "why": "politician trades, not top investors/newsletters"
+   },
+   "https://stocks.0000402.xyz/v1/chat": {
+    "relevant": false,
+    "why": "SEC-based assistant, not investor picks"
+   },
+   "https://coil.trade/api/board/buylist": {
+    "relevant": false,
+    "why": "Algorithmic buy list, not investors' or newsletter picks"
+   },
+   "https://api.stocktrends.com/v1/agent/screener/top": {
+    "relevant": false,
+    "why": "Trend screener, not investor picks"
+   }
+  },
+  "sec-filings": {
+   "https://edgar.apitoll.cloud/v1/edgar/insider": {
+    "relevant": false,
+    "why": "Form 4 insider trades only"
+   },
+   "https://oracles-production.up.railway.app/v1/edgar-ma/status": {
+    "relevant": false,
+    "why": "single M&A filing detail by accession"
+   },
+   "https://agent402.tools/api/skill/company-dossier": {
+    "relevant": true,
+    "why": "company research bundle includes SEC filings"
+   },
+   "https://data.tollkit.dev/sec/company": {
+    "relevant": true,
+    "why": "recent 10-K/10-Q/8-K filings with links"
+   },
+   "https://scraplingdata.xyz/v1/stocks/filings": {
+    "relevant": true,
+    "why": "recent SEC filings incl 10-K with links"
+   },
+   "https://api.vextorium.com/v1/sec-company-profile": {
+    "relevant": false,
+    "why": "company profile only, not filings"
+   },
+   "https://agent402.tools/api/edgar-filings": {
+    "relevant": true,
+    "why": "recent SEC filings, filterable by 10-K"
+   },
+   "https://sec-filings.mick8511.workers.dev/lookup": {
+    "relevant": false,
+    "why": "registrant profile lookup, no filings"
+   },
+   "https://agent.pocket.network/v1/sec-holdings": {
+    "relevant": false,
+    "why": "13F holdings, not 10-K filings"
+   },
+   "https://api.vextorium.com/v1/company-filings": {
+    "relevant": true,
+    "why": "latest filings incl 10-K with links"
+   },
+   "https://agent-sec-lookup.iykykblog.workers.dev/lookup": {
+    "relevant": true,
+    "why": "company profile and recent filings"
+   },
+   "https://api.aidress.ai/pay/agent_edgar_apitoll_cloud": {
+    "relevant": true,
+    "why": "latest 10-K/10-Q/8-K filings"
+   },
+   "https://api.stablecoingateways.com/v1/sec/company-facts": {
+    "relevant": true,
+    "why": "XBRL data plus recent 10-K filings"
+   },
+   "https://api.chainmarket-api.workers.dev/api/finance/sec-nport-mutual-fund-holdings": {
+    "relevant": false,
+    "why": "mutual fund NPORT filings only"
+   },
+   "https://x402.ottoai.services/financial-statements": {
+    "relevant": false,
+    "why": "financial statements data, not filings"
+   },
+   "https://agent.pocket.network/v1/sec-8k-event-stream": {
+    "relevant": false,
+    "why": "8-K events only"
+   },
+   "https://agent.pocket.network/v1/sec-edgar-xbrl": {
+    "relevant": true,
+    "why": "SEC filing text and XBRL for filer"
+   },
+   "https://synaptic.websterberrymarketing.com/agents/02-sec-filing-digest": {
+    "relevant": true,
+    "why": "digest of latest 10-K/10-Q/8-K filings"
+   },
+   "https://ai-data-marketplace-1042299154756.us-central1.run.app/api/v1/stock_research_brief": {
+    "relevant": true,
+    "why": "brief with recent SEC filing metadata"
+   },
+   "https://agent-toolbox.zafermemon87.workers.dev/v1/company/us": {
+    "relevant": false,
+    "why": "company profile and financials, not filings"
+   },
+   "https://2s.io/api/finance/sec-filings": {
+    "relevant": true,
+    "why": "SEC EDGAR filings by ticker with form filter"
+   },
+   "https://apiacre.com/v1/research/sec-company-evidence": {
+    "relevant": true,
+    "why": "Bundles recent SEC filings for a company"
+   },
+   "https://api.mekler.ai/v1/finance/filings/find-company-filings": {
+    "relevant": true,
+    "why": "Finds SEC filings by company and form"
+   }
+  },
+  "insider-filings": {
+   "https://edgar.apitoll.cloud/v1/edgar/filings": {
+    "relevant": false,
+    "why": "10-K/10-Q/8-K filings, not Form 4"
+   },
+   "https://agent402.tools/api/skill/company-dossier": {
+    "relevant": true,
+    "why": "company dossier includes insider trades"
+   },
+   "https://api.tickersfeed.net/sec/:symbol/filings": {
+    "relevant": false,
+    "why": "general filings list, not insider Form 4"
+   },
+   "https://oracles-production.up.railway.app/v1/edgar-ma/status": {
+    "relevant": false,
+    "why": "M&A filing detail; unrelated"
+   },
+   "https://joyful-charm-production-bf6d.up.railway.app/trades/ticker/AAPL": {
+    "relevant": true,
+    "why": "Form 4 insider trade history by ticker"
+   },
+   "https://data.tollkit.dev/sec/company": {
+    "relevant": false,
+    "why": "general filings lookup, not insider Form 4"
+   },
+   "https://api.stablecoingateways.com/v1/sec/company-facts": {
+    "relevant": false,
+    "why": "financials and 10-K/10-Q/8-K, not Form 4"
+   },
+   "https://joyful-charm-production-bf6d.up.railway.app/trades/insider/cook": {
+    "relevant": true,
+    "why": "Form 4 trades by named insider"
+   },
+   "https://joyful-charm-production-bf6d.up.railway.app/trades/search": {
+    "relevant": true,
+    "why": "filtered search over Form 4 trades"
+   },
+   "https://filings.wickedapi.com/v1/insider-summary": {
+    "relevant": true,
+    "why": "insider activity rollup from Form 4"
+   },
+   "https://scraplingdata.xyz/v1/stocks/filings": {
+    "relevant": true,
+    "why": "filings list including Form 4 filter"
+   },
+   "https://x402.ottoai.services/insider-trades": {
+    "relevant": true,
+    "why": "Form 4 insider trades by ticker"
+   },
+   "https://scraplingdata.xyz/v1/stocks/insiders": {
+    "relevant": true,
+    "why": "Form 4 insider trades parsed"
+   },
+   "https://edgar.genexxis.com/insiders": {
+    "relevant": true,
+    "why": "Form 4 insider buys and sells"
+   },
+   "https://joyful-charm-production-bf6d.up.railway.app/stats": {
+    "relevant": false,
+    "why": "aggregate statistics only, not filings"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/sec/insider": {
+    "relevant": true,
+    "why": "Form 4 insider trades by company"
+   },
+   "https://api.vextorium.com/v1/company-filings": {
+    "relevant": true,
+    "why": "company filings filterable to Form 4"
+   },
+   "https://api.financialdatasets.ai/insider-trades": {
+    "relevant": true,
+    "why": "Insider trades from SEC Forms 4 and 5"
+   }
+  },
+  "stock-quote": {
+   "https://netintel.dev/crypto/market": {
+    "relevant": false,
+    "why": "crypto market data, not stock quote"
+   },
+   "https://trader.rigoblock.com/api/quote": {
+    "relevant": false,
+    "why": "DEX swap quote, not stock"
+   },
+   "https://api.stocktrends.com/v1/decision/evaluate-symbol": {
+    "relevant": false,
+    "why": "stock evaluation signals, not price quote"
+   },
+   "https://edgar.apitoll.cloud/v1/edgar/insider": {
+    "relevant": false,
+    "why": "insider trades, not quote"
+   },
+   "https://tienda.textokit.store/api/crypto-prices": {
+    "relevant": false,
+    "why": "crypto prices, not stock"
+   },
+   "https://api.youraitools.co/cryptoprice/v1/price": {
+    "relevant": false,
+    "why": "crypto prices, not stock"
+   },
+   "https://chain.tollkit.dev/chain/price": {
+    "relevant": false,
+    "why": "crypto token price, not stock"
+   },
+   "https://horizonpulse.dev/api/pulse": {
+    "relevant": false,
+    "why": "crypto price, not stock"
+   },
+   "https://nojunk-stocks.mick8511.workers.dev/quote": {
+    "relevant": true,
+    "why": "stock quote latest price"
+   },
+   "https://agent402.tools/api/stock-quote": {
+    "relevant": true,
+    "why": "US equity quote (end-of-day)"
+   },
+   "https://agent402.tools/api/crypto-price": {
+    "relevant": false,
+    "why": "crypto price, not stock"
+   },
+   "https://nojunk-stocks.mick8511.workers.dev/quotes": {
+    "relevant": true,
+    "why": "stock quotes for multiple symbols"
+   },
+   "https://chainhilt.ai/api/v1/predict/polymarket/quotes": {
+    "relevant": false,
+    "why": "prediction market quote, not stock"
+   },
+   "https://squeezeos-api.onrender.com/api/quick/quote/AAPL": {
+    "relevant": true,
+    "why": "live US equity price quote"
+   },
+   "https://tools.nythosx.com/v1/price": {
+    "relevant": false,
+    "why": "native token price, not stock"
+   },
+   "https://orchard-data.letom1176.workers.dev/api/quote": {
+    "relevant": true,
+    "why": "live US stock quote"
+   },
+   "https://hubvibe-io.com/work/market/stock": {
+    "relevant": true,
+    "why": "live stock quote"
+   },
+   "https://www.x402financialdata.com/quote/:ticker": {
+    "relevant": true,
+    "why": "real-time stock quote"
+   },
+   "https://ozmium.org/v1/stocks": {
+    "relevant": false,
+    "why": "tokenized stock list on Base only"
+   },
+   "https://base-token-lens-phs6048.phs6048.chatgpt.site/api/v1/stocks/report": {
+    "relevant": false,
+    "why": "stock-token quote gate, not stock quote"
+   },
+   "https://2s.io/api/stocks/quote": {
+    "relevant": true,
+    "why": "latest stock quote for US ticker"
+   },
+   "https://www.x402financialdata.com/eth-price": {
+    "relevant": false,
+    "why": "ETH price, not stock"
+   },
+   "https://x402.ottoai.services/stock-token-quote": {
+    "relevant": false,
+    "why": "On-chain stock token swap quotes, not stock price"
+   },
+   "https://borro.markets/paid/prices": {
+    "relevant": false,
+    "why": "Stock token on-chain prices for arbitrage"
+   }
+  },
+  "crypto-price": {
+   "https://netintel.dev/currency-exchange/convert": {
+    "relevant": true,
+    "why": "crypto-to-USD conversion at live rates"
+   },
+   "https://netintel.dev/crypto/market": {
+    "relevant": true,
+    "why": "live crypto spot prices"
+   },
+   "https://asistent-crypto.vercel.app/api/x402/query": {
+    "relevant": true,
+    "why": "live BTC/ETH prices"
+   },
+   "https://crypto.apitoll.cloud/v1/crypto/global": {
+    "relevant": false,
+    "why": "global market cap overview, not token price"
+   },
+   "https://trader.rigoblock.com/api/quote": {
+    "relevant": false,
+    "why": "DEX swap quote, not USD price"
+   },
+   "https://currency-api-production-4a8d.up.railway.app/crypto/price": {
+    "relevant": true,
+    "why": "crypto price by symbol"
+   },
+   "https://api.ishob.com/v1/crypto/prices": {
+    "relevant": true,
+    "why": "live token prices from DEX pools"
+   },
+   "https://nojunk-crypto-price.mick8511.workers.dev/price": {
+    "relevant": true,
+    "why": "USD price for cryptocurrencies"
+   },
+   "https://402scrape.vercel.app/api/v1/crypto-price": {
+    "relevant": true,
+    "why": "crypto spot price"
+   },
+   "https://quickbuild.quynguyenbac.workers.dev/api/crypto/price": {
+    "relevant": true,
+    "why": "live crypto prices"
+   },
+   "https://tienda.textokit.store/api/crypto-prices": {
+    "relevant": true,
+    "why": "crypto price in USD"
+   },
+   "https://agent402.tools/api/crypto-price": {
+    "relevant": true,
+    "why": "live crypto spot price"
+   },
+   "https://x402-data-api.sigrunner.workers.dev/crypto/prices": {
+    "relevant": true,
+    "why": "crypto spot prices"
+   },
+   "https://x402.ochinimus.app/api/price": {
+    "relevant": true,
+    "why": "on-chain spot price SOL/BTC/ETH"
+   },
+   "https://api.anchor-x402.com/v1/price/token": {
+    "relevant": true,
+    "why": "USD token price"
+   },
+   "https://api.ishob.com/v1/crypto/swap-route": {
+    "relevant": false,
+    "why": "swap route, not price lookup"
+   },
+   "https://crypto.openverbs.com/v1/price": {
+    "relevant": true,
+    "why": "USD token prices"
+   },
+   "https://api.zkrobotics.fr/x402/crypto/price": {
+    "relevant": true,
+    "why": "token price in USD"
+   },
+   "https://x402-seller-pmlm.onrender.com/price": {
+    "relevant": true,
+    "why": "live token USD price"
+   },
+   "https://offercheck.offercheck.workers.dev/v1/price": {
+    "relevant": true,
+    "why": "current crypto prices"
+   },
+   "https://chain.cyberwarex.com/price": {
+    "relevant": true,
+    "why": "live token USD price"
+   },
+   "https://chain.tollkit.dev/chain/price": {
+    "relevant": true,
+    "why": "live token USD price on-chain"
+   },
+   "https://api.mekongtradeintel.com/tokenprice": {
+    "relevant": true,
+    "why": "live token price"
+   },
+   "https://prices.genexxis.com/token-price": {
+    "relevant": true,
+    "why": "current coin prices in USD"
+   },
+   "https://crypto.openverbs.com/v1/history": {
+    "relevant": false,
+    "why": "historical price series, not current"
+   },
+   "https://agentsvc.io/api/v1/proxy/crypto-prices": {
+    "relevant": true,
+    "why": "live crypto spot price"
+   },
+   "https://chain.cyberwarex.com/prices": {
+    "relevant": true,
+    "why": "USD prices for multiple coins"
+   },
+   "https://api.youraitools.co/cryptoprice/v1/price": {
+    "relevant": true,
+    "why": "current USD crypto prices"
+   },
+   "https://api.x402node.dev/finance/crypto": {
+    "relevant": true,
+    "why": "live crypto prices via CoinGecko"
+   },
+   "https://api.chainmarket-api.workers.dev/api/crypto/1inch-pathfinder-quotes": {
+    "relevant": false,
+    "why": "swap quote, not token price"
+   },
+   "https://api.chainmarket-api.workers.dev/api/crypto/dex-pool-liquidity": {
+    "relevant": false,
+    "why": "Single DEX pool snapshot, not token price lookup"
+   },
+   "https://x402.tbs-digital.com/crypto/price": {
+    "relevant": true,
+    "why": "Crypto token USD spot price"
+   },
+   "https://api.oblique.markets/api/v1/paid/crypto-price": {
+    "relevant": true,
+    "why": "Current USD price by token symbol"
+   }
+  },
+  "fx-convert": {
+   "https://netintel.dev/crypto/market": {
+    "relevant": false,
+    "why": "crypto market data, not fiat FX"
+   },
+   "https://coingecko.use.x402atlas.com/price": {
+    "relevant": false,
+    "why": "crypto price, not fiat FX"
+   },
+   "https://agents.crowdspark.me/v1/fx/rates": {
+    "relevant": true,
+    "why": "ECB exchange rates and conversion"
+   },
+   "https://tienda.textokit.store/api/fx-rates": {
+    "relevant": true,
+    "why": "FX rates and conversion"
+   },
+   "https://verify-oracle.run402.com/api/fx-rate": {
+    "relevant": true,
+    "why": "ECB fx rate EUR/USD"
+   },
+   "https://api.printmoneylab.com/api/v1/fx-rate": {
+    "relevant": false,
+    "why": "USD/KRW only"
+   },
+   "https://currency-api-production-4a8d.up.railway.app/crypto/price": {
+    "relevant": false,
+    "why": "crypto price, not fiat FX"
+   },
+   "https://nbu.navistri.com/v1/rates": {
+    "relevant": false,
+    "why": "UAH official rates only"
+   },
+   "https://nordata.hihat.workers.dev/valuta": {
+    "relevant": false,
+    "why": "NOK rates only"
+   },
+   "https://api.stablecoingateways.com/v1/fx/convert": {
+    "relevant": true,
+    "why": "converts amount, e.g. 250 USD to EUR"
+   },
+   "https://api.youraitools.co/fx/v1/rates": {
+    "relevant": true,
+    "why": "ECB rates for base currency"
+   },
+   "https://x402.ottoai.services/fx-rates": {
+    "relevant": true,
+    "why": "USD-based FX rates incl EUR"
+   },
+   "https://opendata402.com/v1/fx/latest": {
+    "relevant": true,
+    "why": "ECB euro reference rates"
+   },
+   "https://agent-tools.jbarkules.workers.dev/v1/fx/rates": {
+    "relevant": true,
+    "why": "ECB exchange rates and conversion"
+   },
+   "https://gogeta2-u35175.vm.elestio.app/agents/v1/fx/convert": {
+    "relevant": true,
+    "why": "converts amount between currencies"
+   },
+   "https://agent-toolbox.zafermemon87.workers.dev/v1/fx": {
+    "relevant": true,
+    "why": "FX rates and amount conversion"
+   },
+   "https://selectarank-data.vercel.app/v1/eu/ecb-fx": {
+    "relevant": true,
+    "why": "ECB EUR/USD rates"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/fx/reference": {
+    "relevant": true,
+    "why": "converts fiat amount at ECB rate"
+   },
+   "https://x402-apis.pages.dev/v1/fx-rates": {
+    "relevant": true,
+    "why": "ECB rates for conversion"
+   },
+   "https://www.x402pulse.dev/v1/travel/exchange-rates": {
+    "relevant": true,
+    "why": "ECB exchange rates any base"
+   },
+   "https://api.marketintelligenceapi.com/api/v1/eu/fx": {
+    "relevant": true,
+    "why": "ECB euro rates incl USD"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/fx-rates": {
+    "relevant": true,
+    "why": "FX rates and amount conversion"
+   },
+   "https://api.stablecoingateways.com/v1/fx/rates": {
+    "relevant": true,
+    "why": "ECB rates with amount conversion"
+   },
+   "https://api.zkrobotics.fr/x402/finance/fx-rates": {
+    "relevant": true,
+    "why": "FX rates with amount conversion"
+   },
+   "https://api.x402node.dev/finance/forex": {
+    "relevant": true,
+    "why": "forex rates USD to EUR"
+   },
+   "https://x402.agentutility.ai/exchange-rates": {
+    "relevant": true,
+    "why": "FX rates with amount conversion"
+   },
+   "https://apexfaucet.xyz/api/x402/fx-rate": {
+    "relevant": true,
+    "why": "Currency conversion with amount"
+   },
+   "https://x402-trends-server.onrender.com/api/exchange-rate": {
+    "relevant": true,
+    "why": "Fiat currency conversion with rates"
+   }
+  },
+  "funding-rates": {
+   "https://api.babyblueviper.com/signals/full": {
+    "relevant": true,
+    "why": "Hyperliquid perps read incl funding"
+   },
+   "https://intel.chainquery.com/v1/hodl-waves": {
+    "relevant": false,
+    "why": "Bitcoin HODL waves; unrelated"
+   },
+   "https://apexfaucet.xyz/api/x402/funding-rates": {
+    "relevant": true,
+    "why": "perp funding rates incl Hyperliquid"
+   },
+   "https://x402.ottoai.services/funding-rates": {
+    "relevant": true,
+    "why": "funding rates across venues incl Hyperliquid"
+   },
+   "https://x402.fablerlabs.com/market/funding-spreads": {
+    "relevant": true,
+    "why": "funding rates incl Hyperliquid"
+   },
+   "https://crypto.apitoll.cloud/v1/crypto/perps": {
+    "relevant": true,
+    "why": "Hyperliquid perps funding rate"
+   },
+   "https://api.nexismvp.com/market/funding": {
+    "relevant": false,
+    "why": "BTC funding on OKX only"
+   },
+   "https://chain.tollkit.dev/chain/perps": {
+    "relevant": true,
+    "why": "Hyperliquid perps funding rate"
+   },
+   "https://agentsvc.io/api/v1/proxy/perp-funding": {
+    "relevant": true,
+    "why": "funding rates incl Hyperliquid"
+   },
+   "https://api.usenami.io/v1/funding/current": {
+    "relevant": true,
+    "why": "funding rates per venue incl Hyperliquid"
+   },
+   "https://api.wickedapi.com/v1/funding-oi": {
+    "relevant": false,
+    "why": "Binance and Bybit only"
+   },
+   "https://cryptofeed402.site/perps/BTC": {
+    "relevant": true,
+    "why": "Hyperliquid perp funding snapshot"
+   },
+   "https://crypto.openverbs.com/v1/derivatives": {
+    "relevant": true,
+    "why": "Hyperliquid funding rates"
+   },
+   "https://agent402.tools/api/perp-funding": {
+    "relevant": true,
+    "why": "perp funding rate and history"
+   },
+   "https://derivs.duoleads.com/v1/funding-rates": {
+    "relevant": true,
+    "why": "funding rates incl Hyperliquid"
+   },
+   "https://api.youraitools.co/perpradar/v1/funding": {
+    "relevant": true,
+    "why": "funding rate from Hyperliquid and others"
+   },
+   "https://crypto.openverbs.com/v1/funding": {
+    "relevant": true,
+    "why": "live perp funding rates"
+   },
+   "https://api.sitecheck-api.workers.dev/api/crypto/funding": {
+    "relevant": true,
+    "why": "funding incl Hyperliquid"
+   },
+   "https://api.youraitools.co/perpradar/v1/lite": {
+    "relevant": true,
+    "why": "funding rates incl Hyperliquid"
+   },
+   "https://hyperliquid.use.x402atlas.com/funding": {
+    "relevant": true,
+    "why": "Hyperliquid perp funding rates"
+   },
+   "https://cryptofeed402.site/funding/extreme": {
+    "relevant": true,
+    "why": "Hyperliquid perp funding rates"
+   },
+   "https://api.agent-data.workers.dev/api/v1/funding": {
+    "relevant": true,
+    "why": "Funding rates including Hyperliquid"
+   }
+  },
+  "tts-mp3": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": true,
+    "why": "text to speech with MP3 output"
+   },
+   "https://api.xona-agent.com/base-main/audio/x-text-to-speech": {
+    "relevant": true,
+    "why": "ElevenLabs TTS to MP3"
+   },
+   "https://voice.madebydevx.com/v1/tts": {
+    "relevant": false,
+    "why": "TTS returns WAV only, not MP3"
+   },
+   "https://blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs text to speech"
+   },
+   "https://wafermap.xyz/v1/tts-melo": {
+    "relevant": true,
+    "why": "multilingual text to speech"
+   },
+   "https://api.language123.net/v1/tts": {
+    "relevant": true,
+    "why": "TTS returns MP3 or WAV"
+   },
+   "https://voice.forgemesh.io/v1/tts/base": {
+    "relevant": false,
+    "why": "TTS returns WAV only, not MP3"
+   },
+   "https://api.youraitools.co/transcribe/v1/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://ask.singitai.app/v1/audio/speech": {
+    "relevant": true,
+    "why": "TTS with selectable formats"
+   },
+   "https://api.neurodynamic.tech/v1/audio/speech": {
+    "relevant": true,
+    "why": "narration TTS to MP3"
+   },
+   "https://www.trezalabs.com/api/x402/speech": {
+    "relevant": true,
+    "why": "ElevenLabs TTS MP3 voiceover"
+   },
+   "https://x402.telnyx.com/v1/audio/speech": {
+    "relevant": true,
+    "why": "TTS returning mp3"
+   },
+   "https://agentsvc.io/api/v1/proxy/audio-transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://x402.telnyx.com/v1/audio/transcriptions": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/tts": {
+    "relevant": true,
+    "why": "text to speech, MP3 output"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/ai/speech": {
+    "relevant": true,
+    "why": "text to speech, MP3 output"
+   },
+   "https://agent402.tools/api/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, opposite direction"
+   }
+  },
+  "tts-neural-voice": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": true,
+    "why": "neural TTS with MP3 output"
+   },
+   "https://agentsvc.io/api/v1/proxy/tts": {
+    "relevant": true,
+    "why": "TTS proxy endpoint per URL"
+   },
+   "https://x402.forgemesh.io/speech-to-text": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://voice.madebydevx.com/v1/tts": {
+    "relevant": false,
+    "why": "TTS returns WAV only, not MP3"
+   },
+   "https://blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs neural TTS"
+   },
+   "https://api.language123.net/v1/tts": {
+    "relevant": true,
+    "why": "Kokoro neural TTS, MP3 output"
+   },
+   "https://voice.forgemesh.io/v1/tts/base": {
+    "relevant": false,
+    "why": "TTS returns WAV only, not MP3"
+   },
+   "https://api.youraitools.co/transcribe/v1/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://ask.singitai.app/v1/audio/speech": {
+    "relevant": true,
+    "why": "TTS with selectable formats"
+   },
+   "https://x402.forgemesh.io/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://www.trezalabs.com/api/x402/speech": {
+    "relevant": true,
+    "why": "ElevenLabs TTS MP3"
+   },
+   "https://x402.telnyx.com/v1/audio/speech": {
+    "relevant": true,
+    "why": "TTS returning mp3, many neural voices"
+   },
+   "https://agentsvc.io/api/v1/proxy/audio-transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/tts": {
+    "relevant": true,
+    "why": "neural TTS with MP3 output"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/ai/speech": {
+    "relevant": true,
+    "why": "neural TTS with MP3 output"
+   },
+   "https://llmrt-companion.manhliemcn4euwlu.workers.dev/speech-402": {
+    "relevant": true,
+    "why": "Neural voice TTS returning mp3"
+   }
+  },
+  "tts-narration": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": true,
+    "why": "text to spoken audio file"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/text-to-speech": {
+    "relevant": true,
+    "why": "TTS narration of short text"
+   },
+   "https://medien.halowerk.com/v1/audiobook": {
+    "relevant": false,
+    "why": "no description; unclear what it does"
+   },
+   "https://x402.ochinimus.app/api/transcribe": {
+    "relevant": false,
+    "why": "transcription, not TTS"
+   },
+   "https://ask.singitai.app/v1/audio/speech": {
+    "relevant": true,
+    "why": "text to speech"
+   },
+   "https://api.youraitools.co/transcribe/v1/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://api.neurodynamic.tech/v1/audio/speech": {
+    "relevant": true,
+    "why": "narration TTS to MP3"
+   },
+   "https://voice.madebydevx.com/v1/tts": {
+    "relevant": true,
+    "why": "TTS to WAV audio"
+   },
+   "https://voice.forgemesh.io/v1/tts/custom": {
+    "relevant": true,
+    "why": "expressive TTS incl narrator voice"
+   },
+   "https://voice.forgemesh.io/v1/tts/base": {
+    "relevant": true,
+    "why": "TTS to WAV audio"
+   },
+   "https://agentsvc.io/api/v1/proxy/audio-transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://voice.forgemesh.io/v1/tts/custom-long": {
+    "relevant": true,
+    "why": "long-text TTS narration"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/speech-to-text": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://vaaya.ai/api/run/deepgram/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not TTS"
+   },
+   "https://voice.forgemesh.io/v1/tts/base-long": {
+    "relevant": true,
+    "why": "Paragraph text to spoken WAV audio"
+   }
+  },
+  "image-generation": {
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "image editing, not generation"
+   },
+   "https://api.glianalabs.com/x402/music-v2": {
+    "relevant": false,
+    "why": "music generation, not image"
+   },
+   "https://payperwork.app/image/v1/generations": {
+    "relevant": true,
+    "why": "text to image generation"
+   },
+   "https://x402.freeq.one/tools/og_image_generator": {
+    "relevant": false,
+    "why": "templated OG card, not AI image generation"
+   },
+   "https://api.koinelix.com/v1/images/generations": {
+    "relevant": true,
+    "why": "text to image generation"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/image": {
+    "relevant": true,
+    "why": "FLUX text to image"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/v1/images/generations": {
+    "relevant": true,
+    "why": "FLUX text to image"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/image-gen": {
+    "relevant": true,
+    "why": "text to image generation"
+   },
+   "https://www.genbase.fun/api/image/create": {
+    "relevant": true,
+    "why": "GPT-Image-1 image creation"
+   },
+   "https://blockrun.ai/api/v1/images/generations": {
+    "relevant": true,
+    "why": "AI image generation"
+   },
+   "https://agent402.tools/v1/images/fast": {
+    "relevant": true,
+    "why": "text to image generation"
+   },
+   "https://seenly-video-clip.vercel.app/api/image": {
+    "relevant": true,
+    "why": "text-to-image generation"
+   },
+   "https://mystudios.fun/api/v1/images/generations": {
+    "relevant": true,
+    "why": "Image generation on many models"
+   }
+  },
+  "image-generation-long": {
+   "https://api.agentstools.dev/extract": {
+    "relevant": false,
+    "why": "web page extraction; unrelated"
+   },
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "image editing, not text to image"
+   },
+   "https://stablevoice.dev/api/speech": {
+    "relevant": false,
+    "why": "text to speech; unrelated"
+   },
+   "https://workspace-x402-paywall.onrender.com/ai/image": {
+    "relevant": true,
+    "why": "text to image with image URL"
+   },
+   "https://api.koinelix.com/v1/images/generations": {
+    "relevant": false,
+    "why": "returns base64 only, no public URL"
+   },
+   "https://agent402.tools/v1/images/fast": {
+    "relevant": false,
+    "why": "returns base64 only, no public URL"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/image-gen": {
+    "relevant": true,
+    "why": "text to image for illustrations"
+   },
+   "https://seenly-video-clip.vercel.app/api/image": {
+    "relevant": true,
+    "why": "text to image with hosted URL"
+   },
+   "https://x402.freeq.one/tools/image_generate": {
+    "relevant": true,
+    "why": "text to image with permanent URL"
+   },
+   "https://payperwork.app/image/v1/generations": {
+    "relevant": false,
+    "why": "returns base64 only, no public URL"
+   },
+   "https://agent402.tools/v1/images/pro": {
+    "relevant": false,
+    "why": "returns base64 only, no public URL"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/modern-manga-colorizer": {
+    "relevant": false,
+    "why": "manga colorizer, not text to image"
+   },
+   "https://www.trezalabs.com/api/x402/image": {
+    "relevant": true,
+    "why": "text-to-image, multiple models"
+   },
+   "https://imagcon.app/routes/x402/generate-image": {
+    "relevant": true,
+    "why": "Text-to-image including mascot illustrations"
+   },
+   "https://api.x402node.dev/image/ocr": {
+    "relevant": false,
+    "why": "OCR, not image generation"
+   }
+  },
+  "image-edit": {
+   "https://gg402.vercel.app/image_generator": {
+    "relevant": false,
+    "why": "text to image, not editing"
+   },
+   "https://api.jarvisclaw.ai/v1/marketplace/api/image-edit": {
+    "relevant": true,
+    "why": "image-edit endpoint per URL"
+   },
+   "https://x402.aispace.bot/api/v1/image/edit": {
+    "relevant": true,
+    "why": "image edit endpoint per URL"
+   },
+   "https://deepai.pay.zeroclick.io/api/image-editor": {
+    "relevant": true,
+    "why": "image editor endpoint per URL"
+   },
+   "https://www.genbase.fun/api/image/create": {
+    "relevant": false,
+    "why": "image creation, not editing"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/image-gen": {
+    "relevant": false,
+    "why": "explicitly not for image edits"
+   },
+   "https://api.koinelix.com/v1/images/generations": {
+    "relevant": true,
+    "why": "supports reference images for editing"
+   },
+   "https://blockrun.ai/api/v1/images/generations": {
+    "relevant": false,
+    "why": "image generation, not editing"
+   },
+   "https://api.webbersites.com/api/generate-image": {
+    "relevant": false,
+    "why": "image generation, not editing"
+   },
+   "https://blockrun.ai/api/v1/images/image2image": {
+    "relevant": true,
+    "why": "AI image-to-image editing"
+   },
+   "https://agent402.tools/v1/images/edits": {
+    "relevant": true,
+    "why": "edits input image with prompt"
+   },
+   "https://api.delx.ai/api/v1/x402/image": {
+    "relevant": false,
+    "why": "text-to-image only, no input editing"
+   },
+   "https://api.useatelier.ai/api/x402/pay/svc_1780812536114_y6pg8e7aw": {
+    "relevant": false,
+    "why": "vague order acknowledgement"
+   },
+   "https://api.xona-agent.com/image/gpt-image-2": {
+    "relevant": false,
+    "why": "Generation only, no input-image editing stated"
+   }
+  },
+  "video-generation": {
+   "https://gg402.vercel.app/image_generator": {
+    "relevant": false,
+    "why": "image generation, not video"
+   },
+   "https://agents.crowdspark.me/v1/video/transcribe/upload": {
+    "relevant": false,
+    "why": "video transcription, not generation"
+   },
+   "https://vmi1759441.contaboserver.net/api/x402/text-to-video": {
+    "relevant": true,
+    "why": "text to video clip MP4"
+   },
+   "https://seenly-video-clip.vercel.app/api/image": {
+    "relevant": false,
+    "why": "image generation, not video"
+   },
+   "https://convert.guru/api/x402/v1/convert-file": {
+    "relevant": false,
+    "why": "file format conversion"
+   },
+   "https://video.cyberwarex.com/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript, not video generation"
+   },
+   "https://blockrun.ai/api/v1/videos/generations": {
+    "relevant": true,
+    "why": "AI video generation"
+   },
+   "https://youtube.use.x402atlas.com/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript, not video generation"
+   },
+   "https://hardoz.eu.cc/x402/v1/clip": {
+    "relevant": false,
+    "why": "Clips existing video, not generation"
+   },
+   "https://api.xona-agent.com/video/seedance-generation": {
+    "relevant": true,
+    "why": "Seedance text-to-video generation"
+   },
+   "https://mystudios.fun/api/v1/videos/generations": {
+    "relevant": true,
+    "why": "Prompt-to-video generation on many models"
+   }
+  },
+  "music-generation": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": false,
+    "why": "text to speech, not music"
+   },
+   "https://blockrun.ai/api/v1/audio/generations": {
+    "relevant": true,
+    "why": "AI music track generation"
+   },
+   "https://app.suedeai.ai/create-music": {
+    "relevant": true,
+    "why": "create-music endpoint per URL"
+   },
+   "https://agentsvc.io/api/v1/proxy/audio-transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not music"
+   },
+   "https://ask.singitai.app/v1/audio/speech": {
+    "relevant": false,
+    "why": "text to speech, not music"
+   },
+   "https://api.youraitools.co/transcribe/v1/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not music"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/text-to-speech": {
+    "relevant": false,
+    "why": "text to speech, not music"
+   },
+   "https://www.trezalabs.com/api/x402/speech": {
+    "relevant": false,
+    "why": "text to speech, not music"
+   },
+   "https://api.xona-agent.com/base-main/audio/x-text-to-speech": {
+    "relevant": false,
+    "why": "text to speech, not music"
+   },
+   "https://voice.forgemesh.io/v1/tts/custom-long": {
+    "relevant": false,
+    "why": "text to speech, not music"
+   },
+   "https://blockrun.ai/api/v1/audio/sound-effects": {
+    "relevant": false,
+    "why": "sound effects, not music track"
+   },
+   "https://x402.forgemesh.io/transcribe": {
+    "relevant": false,
+    "why": "speech-to-text, not music"
+   },
+   "https://voice.madebydevx.com/v1/stt": {
+    "relevant": false,
+    "why": "speech-to-text, not music"
+   },
+   "https://agent402.tools/api/tts": {
+    "relevant": false,
+    "why": "text-to-speech, not music"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/speech-to-text": {
+    "relevant": false,
+    "why": "speech-to-text, not music"
+   },
+   "https://sol.blockrun.ai/api/v1/audio/sound-effects": {
+    "relevant": false,
+    "why": "Sound effects, not music"
+   },
+   "https://siroagent.com/v1/eleven-music": {
+    "relevant": true,
+    "why": "ElevenLabs music track from description"
+   },
+   "https://medien.halowerk.com/v1/music-ducking": {
+    "relevant": false,
+    "why": "Mixes existing tracks, not generation"
+   }
+  },
+  "meme": {
+   "https://memegeneratorx402.vercel.app/api/generate-meme": {
+    "relevant": true,
+    "why": "generates captioned meme image"
+   },
+   "https://seenly-video-clip.vercel.app/api/image": {
+    "relevant": false,
+    "why": "generic image generation, not captioned meme"
+   },
+   "https://crowdcode.app/s/agent-service-kit/readme": {
+    "relevant": false,
+    "why": "badges and README generator; unrelated"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/image": {
+    "relevant": false,
+    "why": "generic image generation, not captioned meme"
+   },
+   "https://youtube.use.x402atlas.com/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript; unrelated"
+   },
+   "https://social.duoleads.com/v1/youtube/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript; unrelated"
+   },
+   "https://api.strale.io/x402/image-to-text": {
+    "relevant": false,
+    "why": "OCR; unrelated"
+   },
+   "https://www.apinow.fun/api/endpoints/ai-factory/meme_caption_generator": {
+    "relevant": false,
+    "why": "Caption text only, no meme image"
+   },
+   "https://api.gadgethumans.com/caption": {
+    "relevant": false,
+    "why": "Image description, not meme"
+   },
+   "https://api.delx.ai/api/v1/x402/caption-image": {
+    "relevant": false,
+    "why": "Alt-text captioning, not meme"
+   }
+  },
+  "youtube-download": {
+   "https://agent402.tools/v1/videos/generations": {
+    "relevant": false,
+    "why": "video generation, not download"
+   },
+   "https://video.cyberwarex.com/meta": {
+    "relevant": false,
+    "why": "metadata only, never downloads video"
+   },
+   "https://api.influship.com/v1/raw/youtube/search": {
+    "relevant": false,
+    "why": "YouTube search, not download"
+   },
+   "https://video.cyberwarex.com/transcript": {
+    "relevant": false,
+    "why": "transcript, not video download"
+   },
+   "https://api.fadeandco.workers.dev/api/dev/loom-video-downloader": {
+    "relevant": false,
+    "why": "Loom metadata only, no download"
+   },
+   "https://youtube.use.x402atlas.com/transcript": {
+    "relevant": false,
+    "why": "transcript, not video download"
+   },
+   "https://api.getanyapi.com/v1/run/youtube.video_transcript": {
+    "relevant": false,
+    "why": "transcript, not video download"
+   },
+   "https://mpp.orthogonal.com/fiber/v1/youtube/channel": {
+    "relevant": false,
+    "why": "channel info, not download"
+   },
+   "https://api.fastaf.co/x402/v1/youtube": {
+    "relevant": false,
+    "why": "Transcripts, not video download"
+   },
+   "https://api.agent-data.workers.dev/api/v1/youtube/transcript": {
+    "relevant": false,
+    "why": "Transcript, not video download"
+   },
+   "https://mpp.orthogonal.com/fiber/v1/youtube/video-details": {
+    "relevant": false,
+    "why": "Video metadata, not download"
+   },
+   "https://agent-data.centorprat.workers.dev/tools/youtube-transcript-scraper": {
+    "relevant": false,
+    "why": "Transcripts, not video download"
+   },
+   "https://mpp.orthogonal.com/fiber/v1/youtube/video-comments": {
+    "relevant": false,
+    "why": "Comments, not video download"
+   },
+   "https://api.weblens.dev/social/youtube/transcript": {
+    "relevant": false,
+    "why": "Transcript, not video download"
+   }
+  },
+  "ocr": {
+   "https://stableenrich.dev/api/exa/contents": {
+    "relevant": false,
+    "why": "URL content retrieval, not image OCR"
+   },
+   "https://mpp.orthogonal.com/riveter/v1/scrape": {
+    "relevant": false,
+    "why": "webpage scraping, not image OCR"
+   },
+   "https://api.agentstools.dev/extract": {
+    "relevant": false,
+    "why": "web page extraction, not image OCR"
+   },
+   "https://api.firstmention.uk/s/web-extract/extract": {
+    "relevant": false,
+    "why": "web page extraction, not image OCR"
+   },
+   "https://vennatta-core.onrender.com/api/v1/extract-document": {
+    "relevant": false,
+    "why": "document text extraction, not image OCR"
+   },
+   "https://voice.madebydevx.com/v1/ocr": {
+    "relevant": true,
+    "why": "OCR text from image"
+   },
+   "https://agent.pocket.network/v1/ocr-document-parsing": {
+    "relevant": true,
+    "why": "OCR on image or PDF"
+   },
+   "https://api.strale.io/x402/image-to-text": {
+    "relevant": true,
+    "why": "image to text OCR"
+   },
+   "https://geld-machen-x402.fly.dev/product/image-ocr.json": {
+    "relevant": true,
+    "why": "Tesseract OCR on image"
+   },
+   "https://agents.crowdspark.me/v1/ocr": {
+    "relevant": true,
+    "why": "OCR text from image URL"
+   },
+   "https://workbot1.oddsys.org/ocr": {
+    "relevant": false,
+    "why": "PDF OCR only, not image input"
+   },
+   "https://agent-tools.jbarkules.workers.dev/v1/ocr": {
+    "relevant": true,
+    "why": "OCR text from image URL"
+   },
+   "https://web.cyberwarex.com/ocr": {
+    "relevant": true,
+    "why": "OCR text from image URL"
+   },
+   "https://x402.james.bot/v1/ocr": {
+    "relevant": true,
+    "why": "OCR text extraction from image"
+   },
+   "https://ai.kagurazaka.dev/v1/image-text": {
+    "relevant": true,
+    "why": "Detects text in images"
+   },
+   "https://agent-tools-production-e6aa.up.railway.app/v1/ocr": {
+    "relevant": true,
+    "why": "OCR for photos and scans"
+   }
+  },
+  "send-email": {
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "domain email config check, not sending"
+   },
+   "https://stableemail.dev/api/inbox/buy": {
+    "relevant": false,
+    "why": "buys inbox, does not send"
+   },
+   "https://api.ibanforge.com/v1/iban/validate": {
+    "relevant": false,
+    "why": "IBAN validation; unrelated"
+   },
+   "https://win.oneshotagent.com/v1/tools/email/send": {
+    "relevant": true,
+    "why": "sends email"
+   },
+   "https://stableemail.dev/api/inbox/send": {
+    "relevant": true,
+    "why": "sends email from inbox"
+   },
+   "https://stableemail.dev/api/subdomain/send": {
+    "relevant": true,
+    "why": "sends email from subdomain"
+   },
+   "https://x402.openwebninja.com/email-search/search-emails": {
+    "relevant": false,
+    "why": "email address search, not sending"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/drafts/:draft_id/send": {
+    "relevant": true,
+    "why": "sends a draft email"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": true,
+    "why": "sends email message"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": true,
+    "why": "sends email message from inbox"
+   },
+   "https://resolve402.dev/api/verify-email": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://netintel.dev/email/verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-check": {
+    "relevant": false,
+    "why": "email validation, not sending"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-batch": {
+    "relevant": false,
+    "why": "bulk email validation, not sending"
+   },
+   "https://agentsvc.io/api/v1/proxy/email-verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://api.aiskills402.com/v1/skills/cold-email/file": {
+    "relevant": false,
+    "why": "writes email text, does not send"
+   },
+   "https://api.inboxguardstest.com/v1/report": {
+    "relevant": false,
+    "why": "Spam deliverability test, not sending"
+   }
+  },
+  "email-sending": {
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "domain email config check, not sending"
+   },
+   "https://stableemail.dev/api/inbox/buy": {
+    "relevant": false,
+    "why": "buys inbox, does not send"
+   },
+   "https://tanod.dev/v1/email/verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://agentsvc.io/api/v1/proxy/email-verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": true,
+    "why": "sends email message from inbox"
+   },
+   "https://gate-network.matsutake-lab.workers.dev/v1/gates/:id/preflight": {
+    "relevant": false,
+    "why": "SMS payload preflight, not email sending"
+   },
+   "https://x402.openwebninja.com/email-search/search-emails": {
+    "relevant": false,
+    "why": "email address search, not sending"
+   },
+   "https://stableemail.dev/api/inbox/send": {
+    "relevant": true,
+    "why": "sends email from inbox"
+   },
+   "https://ai-mail.sh/inbox/day": {
+    "relevant": false,
+    "why": "receive-only inbox, not sending"
+   },
+   "https://resolve402.dev/api/verify-email": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-check": {
+    "relevant": false,
+    "why": "email validation, not sending"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-batch": {
+    "relevant": false,
+    "why": "bulk email validation, not sending"
+   },
+   "https://api.aiskills402.com/v1/skills/cold-email/file": {
+    "relevant": false,
+    "why": "writes email text, does not send"
+   },
+   "https://agent402.tools/api/email-deliverability": {
+    "relevant": false,
+    "why": "Deliverability check, not sending"
+   },
+   "https://win.oneshotagent.com/v1/tools/email/send": {
+    "relevant": true,
+    "why": "Sends email"
+   }
+  },
+  "email-outreach": {
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "domain email config check, not sending"
+   },
+   "https://stablephone.dev/api/call": {
+    "relevant": false,
+    "why": "phone call, not email"
+   },
+   "https://stableemail.dev/api/inbox/buy": {
+    "relevant": false,
+    "why": "buys inbox, does not send"
+   },
+   "https://win.oneshotagent.com/v1/tools/email/send": {
+    "relevant": true,
+    "why": "sends email"
+   },
+   "https://x402-agent-api.onrender.com/api/v1/email-verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://netintel.dev/email/verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://x402-v2-mint-email-deliverability.vercel.app/v1/email-check": {
+    "relevant": false,
+    "why": "deliverability check, not sending"
+   },
+   "https://tanod.dev/v1/email/verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://agent-vending-production.up.railway.app/v1/email-risk": {
+    "relevant": false,
+    "why": "email validation, not sending"
+   },
+   "https://gogeta2-u35175.vm.elestio.app/agents/v1/email/check": {
+    "relevant": false,
+    "why": "email validation, not sending"
+   },
+   "https://agentsvc.io/api/v1/proxy/email-verify": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://api.avedaris.com/v1/paid/email-domain-check": {
+    "relevant": false,
+    "why": "domain MX check, not sending"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/email": {
+    "relevant": false,
+    "why": "email verification, not sending"
+   },
+   "https://mpp.orthogonal.com/contactout/v1/linkedin/enrich": {
+    "relevant": false,
+    "why": "contact enrichment, not sending"
+   },
+   "https://mpp.orthogonal.com/contactout/v1/people/enrich": {
+    "relevant": false,
+    "why": "contact enrichment, not sending"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-check": {
+    "relevant": false,
+    "why": "email validation, not sending"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-batch": {
+    "relevant": false,
+    "why": "bulk email validation, not sending"
+   },
+   "https://stableemail.dev/api/inbox/send": {
+    "relevant": true,
+    "why": "sends email from inbox"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": true,
+    "why": "sends email message from inbox"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": true,
+    "why": "sends email message"
+   },
+   "https://api.aiskills402.com/v1/skills/cold-email/file": {
+    "relevant": false,
+    "why": "writes email text, does not send"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/:message_id/reply": {
+    "relevant": false,
+    "why": "reply to existing message only"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/:message_id/forward": {
+    "relevant": false,
+    "why": "forwards existing message only"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/messages/:message_id/forward": {
+    "relevant": false,
+    "why": "forwards existing message only"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/:message_id/reply-all": {
+    "relevant": false,
+    "why": "reply-all to existing message only"
+   },
+   "https://gethirepulse.xyz/v1/extract-contacts": {
+    "relevant": false,
+    "why": "Contact extraction, not sending email"
+   },
+   "https://agdata.shveik.dev/x402/domain-contacts": {
+    "relevant": false,
+    "why": "Contact finder, not sending email"
+   }
+  },
+  "disposable-inbox": {
+   "https://stableemail.dev/api/send": {
+    "relevant": false,
+    "why": "sends email, does not create inbox"
+   },
+   "https://ausca.com/v1/open-inbox": {
+    "relevant": true,
+    "why": "temporary receive-only inbox"
+   },
+   "https://api.mekler.ai/v1/email/inboxes/create-private-inbox": {
+    "relevant": true,
+    "why": "create private inbox per URL"
+   },
+   "https://email-verify-api-production-d262.up.railway.app/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://agent-vending-production.up.railway.app/v1/email-risk": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://agents.crowdspark.me/v1/email/check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/email/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://agent-tools.jbarkules.workers.dev/v1/email/check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://atkvn.com/agent/v1/email-verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://api.oldcolonyweb.com/v1/email/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://netintel.dev/email/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://api.sitecheck-api.workers.dev/api/email-check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://nojunk-email-check.mick8511.workers.dev/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://tanod.dev/v1/email/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://fiatdock.com/v1/email/check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://resolve402.dev/api/verify-email": {
+    "relevant": false,
+    "why": "email verification, not inbox"
+   },
+   "https://x402-agent-tools.nerolabs.workers.dev/email-check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/email-check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://api.mekler.ai/v1/messaging/mailboxes/create-mailbox": {
+    "relevant": true,
+    "why": "creates mailbox receiving incoming email"
+   },
+   "https://api.inboxguardstest.com/v1/email-check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/email-check": {
+    "relevant": false,
+    "why": "email validation, not inbox"
+   },
+   "https://codepulse-api.hahavoid0.workers.dev/mailbox/messages": {
+    "relevant": false,
+    "why": "polls existing inbox, does not create one"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/email": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://api.paywallwatch.com/v1/email/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://gogeta2-u35175.vm.elestio.app/agents/v1/email/check": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://api.glowewebsites.com/agent/email-check": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://hubvibe-io.com/work/email/verify": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://agentsvc.io/api/v1/proxy/email-verify": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://x402-agent-api.onrender.com/api/v1/email-verify": {
+    "relevant": false,
+    "why": "email verification, not inbox creation"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/lists/:direction/:type": {
+    "relevant": false,
+    "why": "List entry on existing inbox, not creation"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/drafts": {
+    "relevant": false,
+    "why": "Creates draft, not inbox"
+   },
+   "https://agent-exec.448c.org/inbox": {
+    "relevant": true,
+    "why": "Disposable receive-only inbox"
+   }
+  },
+  "phone-call": {
+   "https://stablephone.dev/api/lookup": {
+    "relevant": false,
+    "why": "iMessage/FaceTime lookup, not call"
+   },
+   "https://mpp.orthogonal.com/agentphone/v0/agent/verify": {
+    "relevant": false,
+    "why": "account OTP setup, not call"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/agents/:agentId/numbers/:numberId": {
+    "relevant": false,
+    "why": "detach number, not call"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/phone/validate": {
+    "relevant": false,
+    "why": "phone validation, not call"
+   },
+   "https://agentshield.live/calling": {
+    "relevant": false,
+    "why": "country calling code lookup"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/numbers/:numberId": {
+    "relevant": false,
+    "why": "release number, not call"
+   },
+   "https://api.x402node.dev/validate/phone": {
+    "relevant": false,
+    "why": "phone validation, not call"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/agents/:agentId/numbers": {
+    "relevant": false,
+    "why": "attach number, not call"
+   },
+   "https://agentshield.live/phone": {
+    "relevant": false,
+    "why": "phone validation, not call"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/messages": {
+    "relevant": false,
+    "why": "sends SMS, not phone call"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/numbers/:numberId/messages": {
+    "relevant": false,
+    "why": "lists SMS messages, no calls"
+   },
+   "https://api.agentline.cloud/v1/billing/topup/x402/pay": {
+    "relevant": false,
+    "why": "Billing top-up endpoint, not a call"
+   },
+   "https://api.gadgethumans.com/contacts": {
+    "relevant": false,
+    "why": "Extracts contact details; does not place calls"
+   }
+  },
+  "sms": {
+   "https://stablephone.dev/api/lookup": {
+    "relevant": false,
+    "why": "iMessage lookup, not SMS"
+   },
+   "https://stablephone.dev/api/call": {
+    "relevant": false,
+    "why": "phone call, not SMS"
+   },
+   "https://mpp.orthogonal.com/agentphone/v0/agent/verify": {
+    "relevant": false,
+    "why": "account OTP setup, not SMS"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/agents/:agentId/numbers/:numberId": {
+    "relevant": false,
+    "why": "detach number, not SMS"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/numbers/:numberId": {
+    "relevant": false,
+    "why": "release number, not SMS"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/messages": {
+    "relevant": true,
+    "why": "sends SMS from agent number"
+   },
+   "https://api.x-402.online/v1/sms/inbox": {
+    "relevant": false,
+    "why": "reads received SMS, not sending"
+   },
+   "https://toolrail.dev/validate/phone": {
+    "relevant": false,
+    "why": "phone validation, not SMS"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/text/pii": {
+    "relevant": false,
+    "why": "PII redaction; unrelated"
+   },
+   "https://mpp.orthogonal.com/agentphone/v1/numbers/:numberId/messages": {
+    "relevant": false,
+    "why": "lists messages, does not send SMS"
+   },
+   "https://palmyr.ai/phone/numbers/:id/messages": {
+    "relevant": false,
+    "why": "Reads received SMS, not sending"
+   }
+  },
+  "x-search": {
+   "https://deeptrawler.com/v1/telegram/search/public-posts": {
+    "relevant": false,
+    "why": "Telegram search, not X"
+   },
+   "https://api.socialfetch.dev/v1/twitter/search": {
+    "relevant": true,
+    "why": "searches X posts"
+   },
+   "https://social.duoleads.com/v1/x/search": {
+    "relevant": true,
+    "why": "latest tweets by keyword"
+   },
+   "https://x402.botsmith.dev/x/search": {
+    "relevant": true,
+    "why": "X tweet search"
+   },
+   "https://twitter.use.x402atlas.com/search": {
+    "relevant": true,
+    "why": "Twitter/X search"
+   },
+   "https://glim.sh/api/v1/twitter/get": {
+    "relevant": false,
+    "why": "fetches single tweet/user, not search"
+   },
+   "https://x402.twit.sh/tweets/search": {
+    "relevant": true,
+    "why": "tweet search, most recent first"
+   },
+   "https://api.shopsocial-api.workers.dev/api/social/threads-search": {
+    "relevant": false,
+    "why": "Threads search, not X"
+   },
+   "https://api.oblique.markets/api/v1/paid/tweets-search": {
+    "relevant": true,
+    "why": "tweet search with date filters"
+   },
+   "https://x402.apidirect.io/v1/reddit/posts": {
+    "relevant": false,
+    "why": "Reddit search, not X"
+   },
+   "https://x402.apidirect.io/v1/twitter/posts": {
+    "relevant": true,
+    "why": "tweet search by keyword"
+   },
+   "https://x402.ottoai.services/tweet-search": {
+    "relevant": true,
+    "why": "X tweet search"
+   },
+   "https://twitter.use.x402atlas.com/tweet-details": {
+    "relevant": false,
+    "why": "single tweet details, not search"
+   },
+   "https://readx.sh/api/:name": {
+    "relevant": false,
+    "why": "user timeline, not search"
+   },
+   "https://readx.sh/api/search/tweets": {
+    "relevant": true,
+    "why": "tweet search by query"
+   },
+   "https://twitter.surf.cascade.fyi/api/v1/twitter/tweets/search": {
+    "relevant": true,
+    "why": "tweet search"
+   },
+   "https://api.shopsocial-api.workers.dev/api/social/x-com": {
+    "relevant": false,
+    "why": "single X post, not search"
+   },
+   "https://agent402.tools/api/x-search-recent": {
+    "relevant": true,
+    "why": "recent tweet search last 7 days"
+   },
+   "https://social.duoleads.com/v1/social/search": {
+    "relevant": false,
+    "why": "X only conditional on key"
+   },
+   "https://twitter.surf.cascade.fyi/api/v1/reddit/search": {
+    "relevant": false,
+    "why": "Reddit search, not X"
+   },
+   "https://app.gtxagent.com/x402/aggregate/x-search": {
+    "relevant": true,
+    "why": "Searches recent X posts"
+   }
+  },
+  "web-search": {
+   "https://mpp.orthogonal.com/seltz/v1/search": {
+    "relevant": true,
+    "why": "web search with URLs"
+   },
+   "https://mpp.browserbase.com/search": {
+    "relevant": true,
+    "why": "web search"
+   },
+   "https://win.oneshotagent.com/v1/tools/search": {
+    "relevant": true,
+    "why": "web search"
+   },
+   "https://api.webintel-api.workers.dev/api/search/wechat-articles": {
+    "relevant": false,
+    "why": "WeChat article search only"
+   },
+   "https://api.axongate.one/v1/search": {
+    "relevant": true,
+    "why": "live web search"
+   },
+   "https://mpp.orthogonal.com/serper/search": {
+    "relevant": true,
+    "why": "Google search results"
+   },
+   "https://api.webintel-api.workers.dev/api/search/google-search": {
+    "relevant": true,
+    "why": "Brave web search results"
+   },
+   "https://api.fastaf.co/x402/v1/serp": {
+    "relevant": true,
+    "why": "Google SERP"
+   },
+   "https://api.webintel-api.workers.dev/api/search/bing-search": {
+    "relevant": true,
+    "why": "Bing web search"
+   },
+   "https://websearch.use.x402atlas.com/search": {
+    "relevant": true,
+    "why": "real-time web search"
+   },
+   "https://search.cyberwarex.com/search": {
+    "relevant": true,
+    "why": "live web search"
+   },
+   "https://tolca.tonbot.ca/v1/web-search": {
+    "relevant": true,
+    "why": "web search with page content"
+   },
+   "https://4yearcycle.com/x402/web-search": {
+    "relevant": true,
+    "why": "Tavily web search"
+   },
+   "https://api.aisa.one/apis/v1/brave/web/search": {
+    "relevant": true,
+    "why": "Brave web search"
+   },
+   "https://api.agentsearchhq.com/x402/v1/search_and_read": {
+    "relevant": true,
+    "why": "web search plus page reading"
+   },
+   "https://search.cyberwarex.com/v1/search": {
+    "relevant": true,
+    "why": "web search API"
+   },
+   "https://pennyregwatch.com/v1/search": {
+    "relevant": true,
+    "why": "real-time web search"
+   },
+   "https://api.you.com/v1/search": {
+    "relevant": true,
+    "why": "You.com web search"
+   },
+   "https://api.agentsearchhq.com/x402/v1/search": {
+    "relevant": true,
+    "why": "web search API"
+   },
+   "https://api.agentstools.dev/search": {
+    "relevant": true,
+    "why": "multi-engine web search"
+   },
+   "https://nojunk-web-search.mick8511.workers.dev/search": {
+    "relevant": true,
+    "why": "web search results"
+   },
+   "https://web.tollkit.dev/search": {
+    "relevant": true,
+    "why": "Google web search results"
+   },
+   "https://x402.agentindex.world/search": {
+    "relevant": true,
+    "why": "Web search ranked results"
+   },
+   "https://api.weblens.dev/search/autocomplete": {
+    "relevant": false,
+    "why": "Autocomplete suggestions, not search results"
+   },
+   "https://x402.orthogonal.com/serper/search": {
+    "relevant": true,
+    "why": "Google web search"
+   }
+  },
+  "web-research-citations": {
+   "https://dripstack.xyz/api/v1/publications/{publicationSlug}/{postSlug}": {
+    "relevant": false,
+    "why": "fetches a newsletter post, not search"
+   },
+   "https://glim.sh/api/v1/web/search": {
+    "relevant": true,
+    "why": "Exa web search with date filter"
+   },
+   "https://x402.agentutility.ai/hacker-news-search": {
+    "relevant": false,
+    "why": "Hacker News only, not web news"
+   },
+   "https://scout.hugen.tokyo/scout/research": {
+    "relevant": false,
+    "why": "synthesized report, not cited search results"
+   },
+   "https://x402.ottoai.services/crypto-news": {
+    "relevant": false,
+    "why": "crypto headlines only"
+   },
+   "https://web.tollkit.dev/search": {
+    "relevant": true,
+    "why": "Google web/news search with dates"
+   },
+   "https://search.cyberwarex.com/news": {
+    "relevant": true,
+    "why": "news brief with sources and links"
+   },
+   "https://api.webintel-api.workers.dev/api/search/techcrunch-articles": {
+    "relevant": false,
+    "why": "TechCrunch RSS only"
+   },
+   "https://pennyregwatch.com/v1/search": {
+    "relevant": true,
+    "why": "real-time web search with sources"
+   },
+   "https://search.cyberwarex.com/search": {
+    "relevant": true,
+    "why": "web/news search with sources"
+   },
+   "https://api.you.com/v1/search": {
+    "relevant": true,
+    "why": "web and news search, citable"
+   },
+   "https://api.fastaf.co/x402/v1/news": {
+    "relevant": true,
+    "why": "Google News search with URLs"
+   },
+   "https://web.tollkit.dev/search/read": {
+    "relevant": true,
+    "why": "web/news search plus page text"
+   },
+   "https://agentsvc.io/api/v1/proxy/search-read": {
+    "relevant": true,
+    "why": "news search with page content"
+   },
+   "https://api.agent-data.workers.dev/api/v1/news/search": {
+    "relevant": true,
+    "why": "news search with source links"
+   },
+   "https://mentionforge.mentionforge.workers.dev/v1/research_mentions": {
+    "relevant": false,
+    "why": "brand monitoring, not web news search"
+   },
+   "https://websearch.use.x402atlas.com/search": {
+    "relevant": true,
+    "why": "real-time web and news search"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/search": {
+    "relevant": true,
+    "why": "web search with sources"
+   },
+   "https://api.hivemindos.app/v1/x402/web-data/web.search": {
+    "relevant": true,
+    "why": "fresh web search to cite"
+   },
+   "https://api.weblens.dev/search/news": {
+    "relevant": true,
+    "why": "News search with sources"
+   },
+   "https://apix402data.com/api/search": {
+    "relevant": true,
+    "why": "Web and news search with URLs"
+   },
+   "https://mpp.orthogonal.com/serper/news": {
+    "relevant": true,
+    "why": "Google News search with sources"
+   },
+   "https://api.webintel-api.workers.dev/api/search/google-news": {
+    "relevant": true,
+    "why": "Google News search with links"
+   },
+   "https://agentsvc.io/api/v1/proxy/news-search": {
+    "relevant": true,
+    "why": "News search with URLs and sources"
+   },
+   "https://x402.orthogonal.com/serper/news": {
+    "relevant": true,
+    "why": "Google News search with sources"
+   }
+  },
+  "article-extract": {
+   "https://mpp.orthogonal.com/bytemine/crawl/map": {
+    "relevant": false,
+    "why": "URL discovery map, no content"
+   },
+   "https://mpp.orthogonal.com/riveter/v1/scrape": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://web.cyberwarex.com/fetch": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://offercheck.offercheck.workers.dev/v1/read": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.webbersites.com/api/scrape": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://x402.charliemorrison.dev/extract": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.clawfetch.ai/fetch": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://tienda.textokit.store/api/web-read": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.agentsearchhq.com/x402/v1/extract": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.youraitools.co/webread/v1/lite": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.munition.io/v1/exa/contents": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/links": {
+    "relevant": false,
+    "why": "extracts links only, not content"
+   },
+   "https://paid-md.hihat.workers.dev/md": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://win.oneshotagent.com/v1/tools/web-read": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://web-scraper-api-production-bf20.up.railway.app/scrape/text": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://netintel.dev/web/extract": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://websearch.use.x402atlas.com/extract": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://read.vigilix.fr/v1/read": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.mekler.ai/v1/web/pages/extract-static-content": {
+    "relevant": true,
+    "why": "fetches page and extracts main content"
+   },
+   "https://api.firstmention.uk/s/web-extract/extract": {
+    "relevant": true,
+    "why": "extracts article text from URL"
+   },
+   "https://api.fadeandco.workers.dev/api/agent-intel/reader-markdown-extract": {
+    "relevant": true,
+    "why": "page content as markdown"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/extract": {
+    "relevant": true,
+    "why": "scrapes page to markdown"
+   },
+   "https://rooms.aurmada.com/x402/v1/web/extract": {
+    "relevant": true,
+    "why": "readable page text extraction"
+   },
+   "https://ask.singitai.app/v1/exa/contents": {
+    "relevant": true,
+    "why": "web page contents extraction"
+   },
+   "https://agent-data.centorprat.workers.dev/web/read": {
+    "relevant": true,
+    "why": "URL to clean markdown"
+   },
+   "https://api.gadgethumans.com/read": {
+    "relevant": true,
+    "why": "Reads page main text"
+   },
+   "https://api.webbersites.com/api/summarize": {
+    "relevant": false,
+    "why": "Extractive summary, not full text"
+   }
+  },
+  "page-to-markdown": {
+   "https://api.agentstools.dev/extract": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://xl402.agentsats.org/v1/web-extract": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://web.cyberwarex.com/fetch": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.webbersites.com/api/scrape": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://agents.crowdspark.me/v1/web/markdown": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://tienda.textokit.store/api/web-read": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.clawfetch.ai/fetch": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.mrscraper.com/agentic-market/api/mrscraper/scraperAPI": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://agentsvc.io/api/v1/proxy/web-scrape": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://web.kagurazaka.dev/v1/read": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/rag-web-browser": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://agent-tools.jbarkules.workers.dev/v1/web/markdown": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.agentsearchhq.com/x402/v1/extract": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://agent-read-proxy.agent-read-proxy.workers.dev/v1/read": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://apexfaucet.xyz/api/x402/page-markdown": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://win.oneshotagent.com/v1/tools/web-read": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://fetchdelta.com/api/resolve": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://websearch.use.x402atlas.com/extract": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.youraitools.co/webread/v1/read": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://159-65-130-200.sslip.io/api/url-to-markdown": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://freetier-agent-api.pages.dev/api/page-markdown": {
+    "relevant": true,
+    "why": "converts web page to markdown"
+   },
+   "https://api.fastaf.co/x402/v1/scrape": {
+    "relevant": true,
+    "why": "webpage URL to markdown"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/markdown/to-html": {
+    "relevant": false,
+    "why": "markdown to HTML, wrong direction"
+   },
+   "https://pagetext.apexlabs-cloudflare.workers.dev/v1/convert": {
+    "relevant": true,
+    "why": "Web page to Markdown"
+   }
+  },
+  "html-pdf": {
+   "https://agent-tools-production-e6aa.up.railway.app/v1/make-pdf": {
+    "relevant": true,
+    "why": "HTML to PDF via Chrome"
+   },
+   "https://api.relaystation.ai/v1/pdf/from-html": {
+    "relevant": true,
+    "why": "PDF from HTML per URL"
+   },
+   "https://1gateway.dev/v1/render/pdf": {
+    "relevant": false,
+    "why": "no description; source format unclear"
+   },
+   "https://tanod.dev/v1/pdf/html-to-pdf": {
+    "relevant": true,
+    "why": "HTML to PDF per URL"
+   },
+   "https://fetchdelta.com/api/resolve": {
+    "relevant": false,
+    "why": "web page to markdown, not PDF"
+   },
+   "https://web.cyberwarex.com/fetch": {
+    "relevant": false,
+    "why": "web scraping, not PDF rendering"
+   },
+   "https://apexfaucet.xyz/api/x402/page-markdown": {
+    "relevant": false,
+    "why": "web page to markdown, not PDF"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/extract": {
+    "relevant": false,
+    "why": "web page to markdown, not PDF"
+   },
+   "https://apexfaucet.xyz/api/x402/pdf-text": {
+    "relevant": false,
+    "why": "PDF to text, reverse direction"
+   },
+   "https://netintel.dev/web/extract": {
+    "relevant": false,
+    "why": "web/PDF to markdown, not PDF rendering"
+   },
+   "https://api.fastaf.co/x402/v1/scrape": {
+    "relevant": false,
+    "why": "web scraping, not PDF rendering"
+   },
+   "https://gardenpatch.xyz/api/v1/tools/markdown-to-html/call": {
+    "relevant": false,
+    "why": "markdown to HTML, not PDF"
+   },
+   "https://url2md.io/v1/md": {
+    "relevant": false,
+    "why": "to markdown, not PDF rendering"
+   },
+   "https://api.pdfzen.site/v402/render/pdf": {
+    "relevant": true,
+    "why": "renders PDF from HTML or template"
+   },
+   "https://quantagentshop.com/v1/pdf/from-markdown": {
+    "relevant": false,
+    "why": "markdown to PDF, not HTML"
+   },
+   "https://api.x402node.dev/convert/markdown-html": {
+    "relevant": false,
+    "why": "markdown/HTML conversion, no PDF"
+   },
+   "https://quantagentshop.com/v1/pdf/from-url": {
+    "relevant": false,
+    "why": "URL text-only PDF, not HTML rendering"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/doc-to-markdown": {
+    "relevant": false,
+    "why": "documents to markdown, not PDF"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/pdf": {
+    "relevant": false,
+    "why": "PDF text extraction, not rendering"
+   },
+   "https://api.shrinkwise.io/v1/convert/html-to-pdf": {
+    "relevant": true,
+    "why": "HTML to PDF rendering"
+   },
+   "https://resolve402.dev/api/markdown-to-pdf": {
+    "relevant": false,
+    "why": "Markdown input, not HTML"
+   }
+  },
+  "markdown-pdf": {
+   "https://agentsvc.io/api/v1/proxy/doc-parse": {
+    "relevant": false,
+    "why": "document to markdown, reverse direction"
+   },
+   "https://flat-rate-llm.kikoribera03.workers.dev/v1/ai/document": {
+    "relevant": false,
+    "why": "no description; unclear"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/doc-to-markdown": {
+    "relevant": false,
+    "why": "document to markdown, reverse direction"
+   },
+   "https://agent-toolbox.zafermemon87.workers.dev/v1/markdown": {
+    "relevant": false,
+    "why": "document to markdown, reverse direction"
+   },
+   "https://agent.pocket.network/v1/ocr-document-parsing": {
+    "relevant": false,
+    "why": "OCR/parsing, not PDF creation"
+   },
+   "https://agents.crowdspark.me/v1/pdf/text": {
+    "relevant": false,
+    "why": "PDF to text, reverse direction"
+   },
+   "https://workbot1.oddsys.org/ocr": {
+    "relevant": false,
+    "why": "PDF OCR, reverse direction"
+   },
+   "https://agent-tools.jbarkules.workers.dev/v1/pdf/text": {
+    "relevant": false,
+    "why": "PDF to text, reverse direction"
+   },
+   "https://api.weblens.dev/pdf": {
+    "relevant": false,
+    "why": "PDF text extraction, reverse direction"
+   },
+   "https://x402-agent-tools.nerolabs.workers.dev/pdf-extract": {
+    "relevant": false,
+    "why": "PDF text extraction, reverse direction"
+   },
+   "https://mart402.com/v1/document-pipeline": {
+    "relevant": false,
+    "why": "invoice PDF pipeline, reverse direction"
+   },
+   "https://scribe.vimabrosta.com/v1/convert": {
+    "relevant": false,
+    "why": "converts to markdown/HTML/text, not PDF"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/pdf-text": {
+    "relevant": false,
+    "why": "PDF text extraction, not rendering"
+   },
+   "https://agentsvc.io/api/v1/proxy/html-to-pdf": {
+    "relevant": false,
+    "why": "HTML or URL input, not markdown"
+   },
+   "https://resolve402.dev/api/markdown-to-pdf": {
+    "relevant": true,
+    "why": "Markdown to PDF"
+   },
+   "https://agent402.tools/api/docx-create": {
+    "relevant": false,
+    "why": "Produces DOCX, not PDF"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/pdf": {
+    "relevant": false,
+    "why": "PDF text extraction, opposite direction"
+   },
+   "https://agent-tools-production-e6aa.up.railway.app/v1/make-pdf": {
+    "relevant": false,
+    "why": "HTML input, not markdown"
+   }
+  },
+  "file-upload": {
+   "https://stabletube.dev/api/download": {
+    "relevant": false,
+    "why": "YouTube download job, not file upload"
+   },
+   "https://relay.payweave.services/inboxes": {
+    "relevant": false,
+    "why": "webhook inbox, not file hosting"
+   },
+   "https://file.skuuy.com/drop": {
+    "relevant": true,
+    "why": "file drop endpoint per URL"
+   },
+   "https://stableupload.dev/api/site": {
+    "relevant": false,
+    "why": "static site zip hosting, not file share"
+   },
+   "https://stablestudio.dev/api/upload": {
+    "relevant": true,
+    "why": "direct upload to Vercel Blob"
+   },
+   "https://vaaya.ai/api/run/fal/upload": {
+    "relevant": true,
+    "why": "uploads file, returns CDN file URL"
+   },
+   "https://tanod.dev/v1/files/upload": {
+    "relevant": true,
+    "why": "upload file, get download link"
+   },
+   "https://api.x402-hosting.com/v1/uploads": {
+    "relevant": false,
+    "why": "Next.js site deployment upload"
+   },
+   "https://base64encode.use.x402atlas.com/base64-encode-url": {
+    "relevant": false,
+    "why": "URL to base64; unrelated"
+   },
+   "https://api.x402-hosting.com/v1/projects/:id/uploads": {
+    "relevant": false,
+    "why": "project deploy upload, not file sharing"
+   },
+   "https://x402-paywall.huntercarver24.workers.dev/files": {
+    "relevant": true,
+    "why": "Upload file, get public URL"
+   },
+   "https://1gateway.dev/v1/files/visibility": {
+    "relevant": false,
+    "why": "Changes visibility of stored file, not upload"
+   }
+  },
+  "reddit": {
+   "https://stableenrich.dev/api/exa/search": {
+    "relevant": false,
+    "why": "general web search, not Reddit"
+   },
+   "https://x402.agentutility.ai/hacker-news-search": {
+    "relevant": false,
+    "why": "Hacker News search, not Reddit"
+   },
+   "https://agentbit.app/v1/social/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://reddit.apitoll.cloud/v1/reddit/search": {
+    "relevant": true,
+    "why": "Reddit keyword search"
+   },
+   "https://api.shopsocial-api.workers.dev/api/social/reddit-posts-comments": {
+    "relevant": true,
+    "why": "subreddit discussions and threads"
+   },
+   "https://x402.apidirect.io/v1/reddit/post/comments": {
+    "relevant": false,
+    "why": "comments for one known post, not search"
+   },
+   "https://glim.sh/api/v1/reddit/get": {
+    "relevant": true,
+    "why": "fetches subreddit/post discussions"
+   },
+   "https://glim.sh/api/v1/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://x402.apidirect.io/v1/reddit/posts": {
+    "relevant": true,
+    "why": "Reddit post search by keyword"
+   },
+   "https://surf.cascade.fyi/api/v1/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://twitter.surf.cascade.fyi/api/v1/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://x402.apidirect.io/v1/reddit/subreddits": {
+    "relevant": false,
+    "why": "subreddit name search, not discussions"
+   },
+   "https://api.socialfetch.dev/v1/reddit/posts/comments": {
+    "relevant": false,
+    "why": "comments for one known post, not search"
+   },
+   "https://stableenrich.dev/api/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://api.socialfetch.dev/v1/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://social.duoleads.com/v1/reddit/search": {
+    "relevant": true,
+    "why": "Reddit post search"
+   },
+   "https://api.socialfetch.dev/v1/reddit/subreddits/search": {
+    "relevant": true,
+    "why": "Searches posts in a subreddit"
+   },
+   "https://x402.apidirect.io/v1/reddit/comments": {
+    "relevant": true,
+    "why": "Keyword search of Reddit comments"
+   },
+   "https://mpp.orthogonal.com/scrapecreators/v1/reddit/subreddit/search": {
+    "relevant": false,
+    "why": "Too vague; may search subreddits only"
+   }
+  },
+  "google-trends": {
+   "https://twitr.sh/api/tools/radar": {
+    "relevant": false,
+    "why": "trending topics, not term popularity over time"
+   },
+   "https://readx.sh/api/search": {
+    "relevant": false,
+    "why": "tweet search; unrelated"
+   },
+   "https://keywords.duoleads.com/v1/trend": {
+    "relevant": true,
+    "why": "Google Trends interest over time"
+   },
+   "https://google-trends.use.x402atlas.com/trend-over-time": {
+    "relevant": true,
+    "why": "Google Trends interest over time"
+   },
+   "https://attention-trends.shopttyass-85f.workers.dev/trend": {
+    "relevant": false,
+    "why": "Wikipedia pageviews, not search interest"
+   },
+   "https://attention-trends.shopttyass-85f.workers.dev/compare": {
+    "relevant": false,
+    "why": "Wikipedia pageview comparison, not search interest"
+   },
+   "https://google-trends.use.x402atlas.com/related-topics": {
+    "relevant": false,
+    "why": "related topics, not interest over time"
+   },
+   "https://google-trends.use.x402atlas.com/related-queries": {
+    "relevant": false,
+    "why": "related queries, not interest over time"
+   },
+   "https://datastand.dev/api/search/bazaar": {
+    "relevant": false,
+    "why": "x402 service directory search, meta-service"
+   }
+  },
+  "headless-browser": {
+   "https://api.agentstools.dev/extract": {
+    "relevant": false,
+    "why": "One-shot page extract, not a drivable browser session"
+   },
+   "https://api.onkernel.com/": {
+    "relevant": true,
+    "why": "Cloud browser infrastructure for agents"
+   },
+   "https://api.agentstools.dev/code/scan": {
+    "relevant": false,
+    "why": "Static code security scan, unrelated"
+   },
+   "https://offercheck.offercheck.workers.dev/v1/read": {
+    "relevant": false,
+    "why": "Page-to-markdown reader, no browser session"
+   },
+   "https://web.cyberwarex.com/fetch": {
+    "relevant": false,
+    "why": "One-shot JS render scrape, not an interactive session"
+   },
+   "https://tienda.textokit.store/api/web-read": {
+    "relevant": false,
+    "why": "Page-to-markdown reader, no browser session"
+   },
+   "https://tariffmonkee.com/paid/content": {
+    "relevant": false,
+    "why": "One-shot rendered page to markdown, not a session"
+   },
+   "https://api.webintel-api.workers.dev/api/search/website-content-crawler": {
+    "relevant": false,
+    "why": "Static page reader, no JS, no session"
+   },
+   "https://agent.wingmanprotocol.com/v1/web_read": {
+    "relevant": false,
+    "why": "One-shot rendered page read, not a session"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/extract": {
+    "relevant": false,
+    "why": "Static page scraper"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/rag-web-browser": {
+    "relevant": false,
+    "why": "Static page reader"
+   },
+   "https://api.weblens.dev/fetch/basic": {
+    "relevant": false,
+    "why": "Static fetch to markdown, no JS"
+   },
+   "https://apexfaucet.xyz/api/x402/page-markdown": {
+    "relevant": false,
+    "why": "One-shot render to markdown, not a session"
+   },
+   "https://agent402.tools/api/render": {
+    "relevant": false,
+    "why": "One-shot render, not a drivable session"
+   },
+   "https://api.agentsearchhq.com/x402/v1/render": {
+    "relevant": false,
+    "why": "One-shot render, not a drivable session"
+   },
+   "https://apexfaucet.xyz/api/x402/page-extract": {
+    "relevant": false,
+    "why": "One-shot render extract, not a session"
+   },
+   "https://x402.api.browser-use.com/api/v3/sessions": {
+    "relevant": true,
+    "why": "Remote cloud browser sessions that navigate and interact"
+   },
+   "https://api.mekler.ai/v1/web/pages/extract-rendered-content": {
+    "relevant": false,
+    "why": "single render, no driveable session"
+   },
+   "https://agentsvc.io/api/v1/proxy/webpage-reader": {
+    "relevant": false,
+    "why": "single page read, no session"
+   },
+   "https://agent.pocket.network/v1/agentsearch-web-render-v1": {
+    "relevant": false,
+    "why": "single render, no driveable session"
+   },
+   "https://api.clawfetch.ai/render": {
+    "relevant": false,
+    "why": "single render, no driveable session"
+   },
+   "https://mpp.browserbase.com/browser/session/:id/extend": {
+    "relevant": false,
+    "why": "Extends existing session only"
+   },
+   "https://mpp.browserbase.com/browser/session/create": {
+    "relevant": true,
+    "why": "Creates remote browser session"
+   },
+   "https://tools.miniframe.com.br/url-to-markdown": {
+    "relevant": false,
+    "why": "Page-to-markdown, not drivable session"
+   }
+  },
+  "dns-lookup": {
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "Domain health score, not raw DNS lookup"
+   },
+   "https://dripstack.xyz/api/v1/publications/{publicationSlug}/{postSlug}": {
+    "relevant": false,
+    "why": "Newsletter post content, unrelated"
+   },
+   "https://scan.convrgent.ai/api/aeo/audit": {
+    "relevant": false,
+    "why": "AEO/SEO audit, unrelated"
+   },
+   "https://agent402.tools/api/dns": {
+    "relevant": true,
+    "why": "DNS record lookup A/MX/TXT"
+   },
+   "https://quartermaster.surewhynot.app/v1/dns": {
+    "relevant": true,
+    "why": "DNS-over-HTTPS record resolution as JSON"
+   },
+   "https://shop.lordevo.com/api/quick/dns-lookup": {
+    "relevant": true,
+    "why": "DNS lookup A/MX/TXT records"
+   },
+   "https://agent-reader.agent-reader.workers.dev/dns": {
+    "relevant": true,
+    "why": "DNS lookup with structured JSON answers"
+   },
+   "https://atkvn.com/agent/v1/dns": {
+    "relevant": true,
+    "why": "Public DNS records A/MX/TXT"
+   },
+   "https://x402.ottoai.services/dns-lookup": {
+    "relevant": true,
+    "why": "DNS lookup A/MX/TXT records"
+   },
+   "https://netintel.dev/dns/lookup": {
+    "relevant": true,
+    "why": "DNS lookup A/MX/TXT records"
+   },
+   "https://keyronne.com/api/dns": {
+    "relevant": true,
+    "why": "DNS records resolution over DoH"
+   },
+   "https://api.youraitools.co/stackdetect/v1/detect": {
+    "relevant": false,
+    "why": "Tech stack detector, not DNS lookup"
+   },
+   "https://api.stablecoingateways.com/v1/domain-facts": {
+    "relevant": true,
+    "why": "Returns DNS records A/MX/TXT plus WHOIS"
+   },
+   "https://agent-toolbox.zafermemon87.workers.dev/v1/dns": {
+    "relevant": true,
+    "why": "DNS records lookup over DoH"
+   },
+   "https://api.zkrobotics.fr/x402/domain/dns": {
+    "relevant": true,
+    "why": "DNS lookup A/MX/TXT records"
+   },
+   "https://agentreader.dev/dns": {
+    "relevant": true,
+    "why": "DNS lookup with structured JSON answers"
+   },
+   "https://agent.pocket.network/v1/dns-whois-rdap": {
+    "relevant": true,
+    "why": "DNS records A/MX/TXT plus RDAP"
+   },
+   "https://api.x402node.dev/url/dns-lookup": {
+    "relevant": true,
+    "why": "DNS records lookup"
+   },
+   "https://agentsvc.io/api/v1/proxy/dns-lookup": {
+    "relevant": true,
+    "why": "DNS records lookup"
+   },
+   "https://api.sitecheck-api.workers.dev/api/dns": {
+    "relevant": true,
+    "why": "DNS records incl A MX TXT"
+   },
+   "https://agent402.tools/api/dns-lookup": {
+    "relevant": true,
+    "why": "DNS records any type"
+   },
+   "https://api.vextorium.com/v1/dns-lookup": {
+    "relevant": true,
+    "why": "DNS records with TTL"
+   },
+   "https://dns.use.x402atlas.com/txt": {
+    "relevant": true,
+    "why": "TXT record lookup"
+   },
+   "https://delx.ai/mcp/tools/util_dns_lookup": {
+    "relevant": true,
+    "why": "Structured DNS records lookup"
+   }
+  },
+  "geo-dns": {
+   "https://tools.ipintel.ai/dns-lookup": {
+    "relevant": false,
+    "why": "Standard DNS lookup, no per-country resolution"
+   },
+   "https://x402-data-api.onrender.com/api/geo": {
+    "relevant": false,
+    "why": "IP geolocation, not DNS"
+   },
+   "https://x402.forgemesh.io/resolve-dns": {
+    "relevant": false,
+    "why": "Standard DNS resolver, no geographic view"
+   },
+   "https://ip402.xyz/v1/geo": {
+    "relevant": false,
+    "why": "IP geolocation, not DNS"
+   },
+   "https://api.data4agents.dev/v1/latency/global": {
+    "relevant": false,
+    "why": "LLM provider latency data, unrelated"
+   },
+   "https://x402.ochinimus.app/api/domain/:domain": {
+    "relevant": false,
+    "why": "Domain DNS and TLS, no geographic resolution"
+   },
+   "https://netintel.dev/ip-geo/locate": {
+    "relevant": false,
+    "why": "IP geolocation, not DNS"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/dns/consensus": {
+    "relevant": false,
+    "why": "Multi-resolver consensus, explicitly not worldwide view"
+   },
+   "https://api.interzoid.com/globallatency": {
+    "relevant": false,
+    "why": "Page load latency, not per-country DNS records"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/domain-intel": {
+    "relevant": false,
+    "why": "Domain intel, no geographic DNS"
+   },
+   "https://intel.rallylive.ca/dns/a": {
+    "relevant": false,
+    "why": "Plain A lookup, no per-country resolution"
+   },
+   "https://horizonpulse.dev/api/dns/records": {
+    "relevant": false,
+    "why": "Single-resolver lookup, no geographic resolution"
+   },
+   "https://apexfaucet.xyz/api/x402/dns-records": {
+    "relevant": false,
+    "why": "Plain DNS lookup; no per-country resolution or latency"
+   }
+  },
+  "security-headers": {
+   "https://x402.ottoai.services/generate-meme": {
+    "relevant": false,
+    "why": "Meme generation, unrelated"
+   },
+   "https://x402.ottoai.services/hyperliquid-market": {
+    "relevant": false,
+    "why": "Hyperliquid market data, unrelated"
+   },
+   "https://api.node4all.com/v1/x402-test": {
+    "relevant": false,
+    "why": "x402 payment demo fortune"
+   },
+   "https://api.venice.ai/api/v1/x402/top-up": {
+    "relevant": false,
+    "why": "Venice credit top-up, payment endpoint"
+   },
+   "https://api.fadeandco.workers.dev/api/agent-intel/x402-endpoint-health-vetting": {
+    "relevant": false,
+    "why": "x402 endpoint health vetting, meta-service"
+   },
+   "https://x402-doctor.fizzl.eu/api/v1/preflight": {
+    "relevant": false,
+    "why": "x402 payment preflight, meta-service"
+   },
+   "https://settled.tools/v1/endpoints": {
+    "relevant": false,
+    "why": "x402 endpoint directory, meta-service"
+   },
+   "https://quartermaster.surewhynot.app/v1/x402/simulate": {
+    "relevant": false,
+    "why": "x402 payment simulation, meta-service"
+   },
+   "https://x402-bazaar-rank.x402-bazaar-rank-worker.workers.dev/x402-echo": {
+    "relevant": false,
+    "why": "x402 debugging echo, payment test"
+   },
+   "https://health-api.tail11a58f.ts.net/ping": {
+    "relevant": false,
+    "why": "x402 payment test endpoint"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/url/preflight": {
+    "relevant": false,
+    "why": "URL reachability preflight, no security header audit"
+   },
+   "https://api.webbersites.com/api/ping": {
+    "relevant": false,
+    "why": "Liveness ping, not header validation"
+   },
+   "https://x402-factory.com/v1/ping": {
+    "relevant": false,
+    "why": "x402 payment pipeline ping"
+   },
+   "https://json-repair-api-9ybv.onrender.com/trust/x402/preflight": {
+    "relevant": false,
+    "why": "x402 payment preflight, meta-service"
+   },
+   "https://windtrapdata.dev/v1/reliability/probe": {
+    "relevant": false,
+    "why": "x402 endpoint validator, meta-service"
+   },
+   "https://web.openverbs.com/v1/headers": {
+    "relevant": true,
+    "why": "Fetches headers and audits HSTS, CSP, X-Frame-Options"
+   },
+   "https://x402-gateway.ai/api/v1/ping": {
+    "relevant": false,
+    "why": "x402 payment ping test"
+   },
+   "https://api.youraitools.co/x402fix/v1/lite": {
+    "relevant": false,
+    "why": "x402 endpoint tester for sellers, meta-service"
+   },
+   "https://horizonpulse.dev/api/x402-check/deep": {
+    "relevant": false,
+    "why": "x402 endpoint checker, meta-service"
+   },
+   "https://apiaudit.madebydevx.com/v1/quick": {
+    "relevant": false,
+    "why": "General API health grade, not header validation"
+   },
+   "https://pulsefeed.dev/trust": {
+    "relevant": false,
+    "why": "x402 seller trust check, meta-service"
+   },
+   "https://x402-wallet-readiness-service.vercel.app/api/x402/services/quick-review": {
+    "relevant": false,
+    "why": "x402 endpoint diagnostics, meta-service"
+   },
+   "https://predator-ubuntu.taild9a745.ts.net/v1/preflight": {
+    "relevant": false,
+    "why": "x402 listing QA probe, meta-service"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/x402-check": {
+    "relevant": false,
+    "why": "x402 endpoint check, meta-service"
+   },
+   "https://bot-bazaar.fly.dev/v1/x402/bazaar-lint": {
+    "relevant": false,
+    "why": "x402 bazaar lint, meta-service"
+   },
+   "https://api.kit-rx.com/v1/x402/preflight": {
+    "relevant": false,
+    "why": "x402 preflight, meta-service"
+   },
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "DNS/email health, not HTTP headers"
+   }
+  },
+  "ics": {
+   "https://api.kakerapetit.dev/v1/calendar/ics": {
+    "relevant": true,
+    "why": "Generates ICS calendar invite"
+   },
+   "https://gardenpatch.xyz/api/v1/tools/calendar-ics/call": {
+    "relevant": true,
+    "why": "Builds RFC 5545 .ics event file"
+   },
+   "https://tanod.dev/v1/calendar/ics-build": {
+    "relevant": true,
+    "why": "URL path indicates ICS calendar build"
+   },
+   "https://api.vextorium.com/v1/ics-to-json": {
+    "relevant": false,
+    "why": "Parses ICS to JSON, not generation"
+   },
+   "https://agent402.tools/api/ics-parse": {
+    "relevant": false,
+    "why": "Parses ICS to JSON, not generation"
+   },
+   "https://fastx402.tools/ics-event": {
+    "relevant": true,
+    "why": "Generates .ics calendar invite"
+   }
+  },
+  "json-validate": {
+   "https://tools.ipintel.ai/dns-lookup": {
+    "relevant": false,
+    "why": "DNS lookup, unrelated"
+   },
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "Domain health check, unrelated"
+   },
+   "https://agentstack-research-3bnlllaboa-ts.a.run.app/v1/us/announcements/:ticker": {
+    "relevant": false,
+    "why": "Stock announcements, unrelated"
+   },
+   "https://api.coregroupimmo.com/v1/json/validate": {
+    "relevant": true,
+    "why": "Validates JSON against schema"
+   },
+   "https://api.sitecheck-api.workers.dev/api/json-validate": {
+    "relevant": true,
+    "why": "Validates JSON against JSON Schema"
+   },
+   "https://api.agent-payload-tools.workers.dev/json-validate": {
+    "relevant": true,
+    "why": "Validates JSON payload against schema"
+   },
+   "https://api.vextorium.com/v1/json-schema-validate": {
+    "relevant": true,
+    "why": "Validates JSON against JSON Schema"
+   },
+   "https://x402-v2-mint-json-schema-validate.vercel.app/v1/json-schema-validate": {
+    "relevant": true,
+    "why": "Offline JSON Schema validation"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/json/validate": {
+    "relevant": true,
+    "why": "Validates JSON against schema subset"
+   },
+   "https://keyronne.com/api/validate-json": {
+    "relevant": true,
+    "why": "Validates JSON against schema with coercion"
+   },
+   "https://shop.lordevo.com/api/quick/json-validate": {
+    "relevant": true,
+    "why": "JSON Schema validation"
+   },
+   "https://agent.kihustle.tech/services/json-schema-repair/jobs": {
+    "relevant": false,
+    "why": "Primarily JSON repair job, validation optional"
+   }
+  },
+  "json-diff": {
+   "https://api.x402node.dev/ai/json-repair": {
+    "relevant": false,
+    "why": "JSON repair, not diff"
+   },
+   "https://json-suite.underscoredone.com/json": {
+    "relevant": true,
+    "why": "JSON multi-tool with diff of two documents op"
+   },
+   "https://defi-api.agenticfi.wtf/api/wallet/nfts/:address": {
+    "relevant": false,
+    "why": "Wallet NFTs, unrelated"
+   },
+   "https://api.agentstools.dev/code/scan": {
+    "relevant": false,
+    "why": "Code security scan, unrelated"
+   },
+   "https://agi.apify.com/protocols/mpp/prepaid-tokens": {
+    "relevant": false,
+    "why": "Apify prepaid token purchase"
+   },
+   "https://api.vextorium.com/v1/jsonpath": {
+    "relevant": false,
+    "why": "JSONPath query, not diff"
+   },
+   "https://api.coregroupimmo.com/v1/json/validate": {
+    "relevant": false,
+    "why": "JSON schema validation, not diff"
+   },
+   "https://api.vextorium.com/v1/json-repair": {
+    "relevant": false,
+    "why": "JSON repair, not diff"
+   },
+   "https://www.cultos.dev/services/json-toolbox": {
+    "relevant": false,
+    "why": "Vague JSON toolbox, unclear capability"
+   },
+   "https://api.aiskills402.com/v1/run/jsonl-repair": {
+    "relevant": false,
+    "why": "JSONL repair, not diff"
+   },
+   "https://coinslot.dev/api/convert": {
+    "relevant": false,
+    "why": "JSON/CSV conversion, not diff"
+   },
+   "https://api.agent-payload-tools.workers.dev/json-validate": {
+    "relevant": false,
+    "why": "JSON validation, not diff"
+   },
+   "https://stationfx.com/util/convert/json-to-toon": {
+    "relevant": false,
+    "why": "JSON to TOON conversion, not diff"
+   },
+   "https://agentbit.app/v1/util/transform": {
+    "relevant": false,
+    "why": "Utility transforms without JSON diff"
+   },
+   "https://2-28-111-166.sslip.io/v1/convert": {
+    "relevant": false,
+    "why": "CSV/JSON conversion, not diff"
+   },
+   "https://api.vextorium.com/v1/json-diff": {
+    "relevant": true,
+    "why": "Deep diff between two JSON documents"
+   },
+   "https://route-a-worker.frostskynet-api.workers.dev/clean": {
+    "relevant": false,
+    "why": "JSONL cleaning, not diff"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/json/diff": {
+    "relevant": true,
+    "why": "Deep diff of two JSON values"
+   },
+   "https://cheap-utilities.x402tookit.com/json-diff": {
+    "relevant": true,
+    "why": "Structural diff of two JSON documents"
+   },
+   "https://x402-v2-mint-json-toolkit.vercel.app/v1/json-toolkit": {
+    "relevant": true,
+    "why": "RFC 6902 patch and structural diff of JSON"
+   },
+   "https://api.vextorium.com/v1/format-convert": {
+    "relevant": false,
+    "why": "Format conversion, not diff"
+   },
+   "https://api.mekler.ai/v1/data/json/repair-or-convert-document": {
+    "relevant": false,
+    "why": "JSON repair/convert, not diff"
+   },
+   "https://toolshed.lemon-agent.dev/convert/yaml-json": {
+    "relevant": true,
+    "why": "Diff between two JSON documents"
+   },
+   "https://x402.agentindex.world/json/diff": {
+    "relevant": false,
+    "why": "YAML to JSON conversion"
+   },
+   "https://http--forest-gas-station-mainnet--lcjl27p8lmjs.code.run/json/query": {
+    "relevant": false,
+    "why": "JSON path query, not diff"
+   }
+  },
+  "ip-geo": {
+   "https://x402.orth.sh/serper/maps": {
+    "relevant": false,
+    "why": "Google Maps search, not IP geolocation"
+   },
+   "https://lionx402.com/api/x402/location-solar-enrichment-json": {
+    "relevant": false,
+    "why": "Address solar enrichment, not IP"
+   },
+   "https://dns.use.x402atlas.com/a": {
+    "relevant": false,
+    "why": "DNS A record lookup, not geolocation"
+   },
+   "https://netintel.dev/ip-geo/locate": {
+    "relevant": true,
+    "why": "IP geolocation lookup"
+   },
+   "https://x402.agentutility.ai/ip-asn": {
+    "relevant": true,
+    "why": "IP ASN and geolocation lookup"
+   },
+   "https://shop.lordevo.com/api/quick/ip-info": {
+    "relevant": false,
+    "why": "RDAP IP owner, explicitly no geolocation"
+   },
+   "https://agents.ai-rook.com/api/ip-lookup": {
+    "relevant": true,
+    "why": "IP geolocation and ASN"
+   },
+   "https://agents.crowdspark.me/v1/ip/lookup": {
+    "relevant": false,
+    "why": "RDAP registry data, not geolocation"
+   },
+   "https://agentsvc.io/api/v1/proxy/ip-lookup": {
+    "relevant": true,
+    "why": "IP geolocation lookup"
+   },
+   "https://geoip.bip-rep.com/lookup": {
+    "relevant": true,
+    "why": "IP geolocation lookup"
+   },
+   "https://api.vextorium.com/v1/my-ip": {
+    "relevant": false,
+    "why": "Returns caller IP, not geolocation lookup"
+   },
+   "https://flat-rate-llm.kikoribera03.workers.dev/v1/red/ip": {
+    "relevant": false,
+    "why": "RDAP ownership and ASN, not geolocation"
+   },
+   "https://ip-geo-api-production.up.railway.app/lookup/ip": {
+    "relevant": true,
+    "why": "IP geolocation lookup"
+   },
+   "https://api.fadeandco.workers.dev/api/agent-intel/ip-fraud-reputation-score": {
+    "relevant": false,
+    "why": "IP fraud/proxy type check, not geolocation"
+   },
+   "https://api.webbersites.com/api/geo": {
+    "relevant": true,
+    "why": "IP geolocation lookup"
+   },
+   "https://x402.tbs-digital.com/geo/forward": {
+    "relevant": false,
+    "why": "address geocoding, not IP"
+   },
+   "https://nojunk-geo.mick8511.workers.dev/geocode": {
+    "relevant": false,
+    "why": "address geocoding, not IP"
+   },
+   "https://mpp.orthogonal.com/serper/maps": {
+    "relevant": false,
+    "why": "maps search, not IP"
+   },
+   "https://api.webbersites.com/api/timezone": {
+    "relevant": false,
+    "why": "timezone from coords, not IP"
+   },
+   "https://agent402.tools/api/geocode": {
+    "relevant": false,
+    "why": "address geocoding, not IP"
+   },
+   "https://x402-seller.onrender.com/geo/lookup": {
+    "relevant": false,
+    "why": "address geocoding, not IP"
+   },
+   "https://api.sitecheck-api.workers.dev/api/us-geocode": {
+    "relevant": false,
+    "why": "US address geocoding, not IP"
+   },
+   "https://keyronne.com/api/geocode": {
+    "relevant": false,
+    "why": "place geocoding, not IP"
+   },
+   "https://nojunk-geo.mick8511.workers.dev/reverse": {
+    "relevant": false,
+    "why": "reverse geocoding, not IP"
+   },
+   "https://fittings.sh/v1/geo/forward-geocode": {
+    "relevant": false,
+    "why": "address geocoding, not IP"
+   },
+   "https://x402-seller.onrender.com/geo/reverse": {
+    "relevant": false,
+    "why": "reverse geocoding, not IP"
+   },
+   "https://twin.unykorn.org/geocode": {
+    "relevant": false,
+    "why": "address geocoding, not IP"
+   },
+   "https://nordata.hihat.workers.dev/adresse": {
+    "relevant": false,
+    "why": "Norway address geocoding, not IP"
+   },
+   "https://quickbuild.quynguyenbac.workers.dev/api/ip": {
+    "relevant": false,
+    "why": "Caller's own IP only, not lookup"
+   },
+   "https://tools.ipintel.ai/ip-lookup": {
+    "relevant": true,
+    "why": "IP geolocation lookup"
+   }
+  },
+  "cve": {
+   "https://api.vextorium.com/v1/cve-info": {
+    "relevant": true,
+    "why": "CVE details by identifier"
+   },
+   "https://agent402.tools/api/cve-lookup": {
+    "relevant": true,
+    "why": "CVE lookup by id"
+   },
+   "https://x402.agentutility.ai/cve": {
+    "relevant": true,
+    "why": "CVE NVD record lookup"
+   },
+   "https://agentsvc.io/api/v1/proxy/cve-lookup": {
+    "relevant": true,
+    "why": "CVE/GHSA vulnerability lookup"
+   },
+   "https://agentdatafeed.com/v1/security-advisories": {
+    "relevant": false,
+    "why": "KEV advisories feed, not lookup by CVE id"
+   },
+   "https://cve.genexxis.com/packages": {
+    "relevant": false,
+    "why": "Package dependency scan, not CVE lookup"
+   },
+   "https://cve.genexxis.com/cve": {
+    "relevant": true,
+    "why": "CVE lookup by id"
+   },
+   "https://dependency-risk.use.x402atlas.com/batch": {
+    "relevant": false,
+    "why": "Batch package vulnerability check, not CVE lookup"
+   },
+   "https://x402-hono-api.inraby.workers.dev/api/v1/cve-lookup": {
+    "relevant": true,
+    "why": "CVE ID lookup via OSV"
+   }
+  },
+  "chain-info": {
+   "https://crypto.apitoll.cloud/v1/crypto/price": {
+    "relevant": false,
+    "why": "Token prices, not chain network info"
+   },
+   "https://intel.chainquery.com/v1/hodl-waves": {
+    "relevant": false,
+    "why": "Bitcoin HODL waves analytics"
+   },
+   "https://basehub-alpha.vercel.app/api/x402-payment": {
+    "relevant": false,
+    "why": "Web3 XP platform, unrelated"
+   },
+   "https://apiacre.com/v1/crypto/base-network-status": {
+    "relevant": true,
+    "why": "Latest Base block and fee history"
+   },
+   "https://ai-data-marketplace-1042299154756.us-central1.run.app/api/v1/evm_block_number": {
+    "relevant": true,
+    "why": "Current EVM block height"
+   },
+   "https://rpc.nodeflare.app/robinhood/x402": {
+    "relevant": false,
+    "why": "Raw JSON-RPC access, not structured network info"
+   },
+   "https://tanod.dev/v1/chain/info": {
+    "relevant": true,
+    "why": "Chain id, latest block and gas price"
+   },
+   "https://tanod.dev/v1/chain/block-number": {
+    "relevant": true,
+    "why": "Latest block number and age"
+   },
+   "https://api.losbeto.xyz/chain-block": {
+    "relevant": true,
+    "why": "Current Base block and gas usage"
+   },
+   "https://tanod.dev/v1/chain/block": {
+    "relevant": true,
+    "why": "Latest block with base fee and gas"
+   },
+   "https://agent402.tools/api/block-info": {
+    "relevant": true,
+    "why": "Block header info incl. latest, base fee"
+   },
+   "https://agent402.tools/api/block-number": {
+    "relevant": true,
+    "why": "Latest block number across chains"
+   },
+   "https://oraclepost.higgsfield.app/api/gas": {
+    "relevant": true,
+    "why": "Base gas price and latest block"
+   },
+   "https://blockchain-api.x402-chain-tools.workers.dev/chain/block": {
+    "relevant": true,
+    "why": "Latest Base block number"
+   },
+   "https://wafermap.xyz/v1/gas-now": {
+    "relevant": true,
+    "why": "Gas price and latest block"
+   },
+   "https://toolsmith-api.dassad10.workers.dev/t/crypto/gas": {
+    "relevant": true,
+    "why": "Gas price and latest block"
+   },
+   "https://api.wickedapi.com/v1/chain-block": {
+    "relevant": true,
+    "why": "Latest block header with base fee"
+   },
+   "https://agent402.tools/api/chain/pending": {
+    "relevant": false,
+    "why": "Pending block congestion, not latest chain info"
+   },
+   "https://402rpc.com/rpc": {
+    "relevant": false,
+    "why": "Raw Ethereum JSON-RPC, not structured network info"
+   },
+   "https://agent402.tools/api/chain-info": {
+    "relevant": true,
+    "why": "Chain id, latest block and gas price"
+   },
+   "https://store.agentexchange.work/chain/block-number": {
+    "relevant": true,
+    "why": "Latest block number across chains"
+   },
+   "https://www.blockchainiq.co/api/x402/v1/dashboards/:slug/:panel": {
+    "relevant": false,
+    "why": "Analytics dashboard chart, not chain info"
+   },
+   "https://www.blockchainiq.co/api/x402/v1/networks": {
+    "relevant": false,
+    "why": "Weekly chain activity metrics, not live block/gas"
+   },
+   "https://89-116-220-218.sslip.io/base/network": {
+    "relevant": true,
+    "why": "Base head block, base fee and gas price"
+   },
+   "https://pyfile-agent.taile3ff35.ts.net/data/chain/network-info": {
+    "relevant": true,
+    "why": "chain id, latest block, gas price"
+   },
+   "https://keyronne.com/api/chain-block": {
+    "relevant": true,
+    "why": "latest block header with base fee"
+   },
+   "https://api.chainmarket-api.workers.dev/api/crypto/mantle-da-eigenlayer": {
+    "relevant": true,
+    "why": "Mantle latest block and gas price"
+   },
+   "https://api.chainmarket-api.workers.dev/api/crypto/sui-move-objects": {
+    "relevant": false,
+    "why": "Sui epoch info, no latest block"
+   },
+   "https://api.vextorium.com/v1/chain-info": {
+    "relevant": false,
+    "why": "Static chain reference, no block or gas"
+   },
+   "https://x402.agentindex.world/base/network-info": {
+    "relevant": true,
+    "why": "Chain ID, block height, gas price"
+   }
+  },
+  "llm-chat": {
+   "https://agi.apify.com/protocols/mpp/prepaid-tokens": {
+    "relevant": false,
+    "why": "Apify token purchase, not LLM chat"
+   },
+   "https://listing-roast-x402-service-production.up.railway.app/api/listing-roast": {
+    "relevant": false,
+    "why": "Listing rewrite tool, not general LLM chat"
+   },
+   "https://gigsai.xyz/v1/chat/completions": {
+    "relevant": true,
+    "why": "Standard chat completions endpoint path"
+   },
+   "https://x402.agentindex.world/llm/llama": {
+    "relevant": false,
+    "why": "No description; too vague to tell"
+   },
+   "https://pool.linkrra.com/api/billing/x402/models/gemma-4-26b-a4b-it/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible chat completions"
+   },
+   "https://api.rentaipower.app/v1/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible chat completions"
+   },
+   "https://ask.singitai.app/v1/responses": {
+    "relevant": true,
+    "why": "LLM Responses API, pay per call"
+   },
+   "https://synap402.com/api/billing/x402/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible chat completions"
+   },
+   "https://agent402.tools/v1/metered/chat/completions": {
+    "relevant": true,
+    "why": "Metered chat completions"
+   },
+   "https://pool.linkrra.com/api/billing/x402/models/gpt-oss-20b/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible chat completions"
+   },
+   "https://x402.telnyx.com/v1/chat/completions/_t/llama-3.1-8b": {
+    "relevant": true,
+    "why": "Chat completions Llama 3.1 8B"
+   },
+   "https://x402.telnyx.com/v1/chat/completions/_t/glm-5.3-flash": {
+    "relevant": true,
+    "why": "Chat completions GLM flash"
+   },
+   "https://x402.onhub.ai/v1/chat/completions": {
+    "relevant": true,
+    "why": "Chat completion with selectable model"
+   },
+   "https://ask.singitai.app/v1/chat/completions": {
+    "relevant": true,
+    "why": "LLM chat completions multiple models"
+   },
+   "https://coord.taifoon.dev/v1/chat/completions/llama-3.3-70b": {
+    "relevant": true,
+    "why": "Chat completion Llama 3.3 70B"
+   },
+   "https://agentdata-api.sander-van-aard.workers.dev/llm/chat": {
+    "relevant": true,
+    "why": "Flat-priced LLM chat completion"
+   },
+   "https://x402.telnyx.com/v1/chat/completions/_t/gemma-4-26b": {
+    "relevant": true,
+    "why": "Chat completions Gemma 4"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/llm-chat": {
+    "relevant": true,
+    "why": "LLM chat completion, cheap model"
+   },
+   "https://agent402.tools/api/llm": {
+    "relevant": true,
+    "why": "OpenAI-format chat completion proxy"
+   },
+   "https://api.glianalabs.com/x402/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible LLM chat"
+   },
+   "https://api.opencheap.si/v1/chat/completions": {
+    "relevant": true,
+    "why": "pay-per-call chat completions"
+   },
+   "https://synap.linkrra.com/api/billing/x402/chat/completions": {
+    "relevant": true,
+    "why": "pay-per-call chat completions"
+   },
+   "https://keyless.run/fast/v1/chat/completions": {
+    "relevant": true,
+    "why": "pay-per-call chat completions"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/v1/responses": {
+    "relevant": true,
+    "why": "pay-per-request LLM responses"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/v1/chat/completions": {
+    "relevant": true,
+    "why": "pay-per-request chat completions"
+   },
+   "https://pool.linkrra.com/api/billing/x402/chat/completions": {
+    "relevant": true,
+    "why": "pay-per-call chat completions"
+   },
+   "https://chat.madebydevx.com/v1/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible chat completions"
+   },
+   "https://api.laminarity.uk/v1/chat/completions": {
+    "relevant": true,
+    "why": "Pay-per-request chat completions"
+   }
+  },
+  "code-review": {
+   "https://api.aiskills402.com/v1/skills/code-review/file": {
+    "relevant": false,
+    "why": "No description; likely skill file download, unclear"
+   },
+   "https://agents.datalegion.ai/company/base": {
+    "relevant": false,
+    "why": "Person/company data, unrelated"
+   },
+   "https://x402-hono-api.inraby.workers.dev/api/v1/cloudflare-worker-security-review": {
+    "relevant": false,
+    "why": "Narrow Worker security checklist, not PR code review"
+   },
+   "https://api.agentstools.dev/code/scan": {
+    "relevant": false,
+    "why": "Static security scan, not AI code review"
+   },
+   "https://claudelines.com/api/download": {
+    "relevant": false,
+    "why": "Status line purchase, unrelated"
+   },
+   "https://api.delx.ai/api/v1/x402/http-codes": {
+    "relevant": false,
+    "why": "HTTP status code lookup, unrelated"
+   },
+   "https://x402.asterpay.io/v1/ai/code-review": {
+    "relevant": true,
+    "why": "AI code review returning bugs and improvements"
+   },
+   "https://money-reactor.makar52nn2016.workers.dev/api/ai-code-review": {
+    "relevant": true,
+    "why": "AI code review of code"
+   },
+   "https://fachada.chelsea-hermes.workers.dev/scan/v1/code/scan": {
+    "relevant": false,
+    "why": "Static secret/vuln scan, not AI code review"
+   },
+   "https://api.aiskills402.com/v1/skills/github-actions-security-review/file": {
+    "relevant": false,
+    "why": "GitHub Actions workflow security review only"
+   },
+   "https://synap402.com/api/billing/x402/tasks/review-code": {
+    "relevant": true,
+    "why": "Code review of unified diff with issues"
+   },
+   "https://x402-hono-api.inraby.workers.dev/api/v1/:id": {
+    "relevant": false,
+    "why": "Cloudflare worker security scan, not PR review"
+   },
+   "https://api.aiskills402.com/v1/skills/stripe-webhook-review/file": {
+    "relevant": false,
+    "why": "Stripe webhook review skill file"
+   },
+   "https://api.aiskills402.com/v1/skills/agent-loop-review/file": {
+    "relevant": false,
+    "why": "agent loop review skill file"
+   },
+   "https://x402-wallet-readiness-service.vercel.app/api/x402/services/quick-review": {
+    "relevant": false,
+    "why": "x402 endpoint diagnostics, not pull request code review"
+   },
+   "https://api.xynaptic.io/v1/code-review": {
+    "relevant": true,
+    "why": "AI code review with findings"
+   }
+  },
+  "weather": {
+   "https://x402.tbs-digital.com/weather/current": {
+    "relevant": true,
+    "why": "Current weather and forecast bundle"
+   },
+   "https://stabletravel.dev/api/flightaware/airports/KAUS/weather/observations": {
+    "relevant": false,
+    "why": "Airport METAR observations only"
+   },
+   "https://seoul-weather-402.fly.dev/weather/seoul/current": {
+    "relevant": false,
+    "why": "Fixed Seoul-only current weather"
+   },
+   "https://skycast.clawca.sh/weather": {
+    "relevant": true,
+    "why": "Current weather for city or coordinates"
+   },
+   "https://agent402.tools/api/weather-forecast": {
+    "relevant": true,
+    "why": "US weather forecast"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/weather-forecast": {
+    "relevant": true,
+    "why": "Weather forecast and current weather"
+   },
+   "https://api.delx.ai/api/v1/x402/weather-forecast": {
+    "relevant": true,
+    "why": "US NWS weather forecast"
+   },
+   "https://x402.agentutility.ai/weather": {
+    "relevant": true,
+    "why": "Current conditions and forecast"
+   },
+   "https://nordata.hihat.workers.dev/vaer": {
+    "relevant": true,
+    "why": "Norway current weather and forecast"
+   },
+   "https://modelmarket.dev/x402/weather-now": {
+    "relevant": true,
+    "why": "Current weather at a place"
+   },
+   "https://weather.cyberwarex.com/forecast": {
+    "relevant": true,
+    "why": "Weather forecast anywhere"
+   },
+   "https://x402.tbs-digital.com/weather/flood": {
+    "relevant": false,
+    "why": "River flood forecast, not weather"
+   },
+   "https://opendata402.com/v1/weather/forecast": {
+    "relevant": true,
+    "why": "48-hour weather forecast"
+   },
+   "https://x402.tbs-digital.com/weather/marine": {
+    "relevant": false,
+    "why": "Marine sea-state forecast, not general weather"
+   },
+   "https://api.kadec0.xyz/v1/weather": {
+    "relevant": true,
+    "why": "Current weather and forecast"
+   },
+   "https://api.zkrobotics.fr/x402/weather/forecast": {
+    "relevant": true,
+    "why": "Current conditions and forecast"
+   },
+   "https://store.agentexchange.work/weather/forecast": {
+    "relevant": true,
+    "why": "Global weather forecast by city"
+   },
+   "https://data.tollkit.dev/weather": {
+    "relevant": true,
+    "why": "7-day weather forecast"
+   },
+   "https://agent402.tools/api/weather-daily": {
+    "relevant": true,
+    "why": "daily weather forecast"
+   },
+   "https://vibesprings.net/api/forecast": {
+    "relevant": true,
+    "why": "weather forecast"
+   },
+   "https://agentsvc.io/api/v1/proxy/weather": {
+    "relevant": true,
+    "why": "current weather and forecast"
+   },
+   "https://data.greeneris.io/v1/wx/forecast": {
+    "relevant": true,
+    "why": "hourly weather forecast"
+   },
+   "https://netintel.dev/weather/current": {
+    "relevant": true,
+    "why": "current weather plus forecast"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/weather/forecast": {
+    "relevant": true,
+    "why": "current weather and forecast"
+   },
+   "https://www.x402pulse.dev/v1/travel/airport-forecast": {
+    "relevant": false,
+    "why": "airport aviation forecast only"
+   },
+   "https://api.x402node.dev/weather/forecast": {
+    "relevant": true,
+    "why": "daily weather forecast"
+   },
+   "https://x402-v2-mint-weather-forecast.vercel.app/v1/weather-forecast": {
+    "relevant": true,
+    "why": "US current weather and forecast"
+   },
+   "https://eltociear-tokenguard.hf.space/weather": {
+    "relevant": true,
+    "why": "Current weather and forecast"
+   },
+   "https://api.x402node.dev/weather/hourly": {
+    "relevant": true,
+    "why": "Hourly weather forecast"
+   },
+   "https://webtools402.176-109-107-191.sslip.io/forecast": {
+    "relevant": true,
+    "why": "NWS weather forecast"
+   }
+  },
+  "water-gauge": {
+   "https://waterpulse.theaslangroupllc.com/api/water/gauge": {
+    "relevant": true,
+    "why": "Water gauge endpoint, same service as expected"
+   },
+   "https://saylorinnovations.com/api/water/usgs/:site": {
+    "relevant": true,
+    "why": "USGS water site reading per URL"
+   },
+   "https://opendata402.com/v1/rivers/us": {
+    "relevant": true,
+    "why": "US rivers gauge data per URL"
+   },
+   "https://api.tradeenergy-api.workers.dev/api/logistics/rhine-river-water-levels": {
+    "relevant": false,
+    "why": "German waterway gauge, not USGS"
+   },
+   "https://agent402.tools/api/earthquakes": {
+    "relevant": false,
+    "why": "USGS earthquakes, not water gauges"
+   },
+   "https://x402stock.xyz/api/v1/gdp": {
+    "relevant": false,
+    "why": "US GDP, unrelated"
+   },
+   "https://api.chainmarket-api.workers.dev/api/crypto/curve-gauge-weights": {
+    "relevant": false,
+    "why": "Curve Finance gauges, unrelated"
+   },
+   "https://api.x402node.dev/text/readability": {
+    "relevant": false,
+    "why": "text readability, unrelated"
+   },
+   "https://api.realtimeapi.ai/v1/sensordata/water/gauge/:id/history": {
+    "relevant": true,
+    "why": "USGS gauge readings, newest first"
+   },
+   "https://api.realtimeapi.ai/v1/sensordata/water/gauge/:id": {
+    "relevant": true,
+    "why": "Latest USGS river gauge height and discharge"
+   }
+  },
+  "air-quality": {
+   "https://x402.tbs-digital.com/weather/air-quality": {
+    "relevant": true,
+    "why": "Air quality endpoint per URL path"
+   },
+   "https://x402.tbs-digital.com/weather/current": {
+    "relevant": true,
+    "why": "Weather bundle by city includes AQI"
+   },
+   "https://api.vextorium.com/v1/airport-lookup": {
+    "relevant": false,
+    "why": "Airport lookup, unrelated"
+   },
+   "https://api.x402node.dev/weather/air-quality": {
+    "relevant": true,
+    "why": "Current AQI by city or coordinates"
+   },
+   "https://api.munition.io/v1/airports/search": {
+    "relevant": false,
+    "why": "Airport search, unrelated"
+   },
+   "https://tariffmonkee.com/paid/tw-weather-check": {
+    "relevant": true,
+    "why": "Real-time AQI for Taiwan cities"
+   },
+   "https://coil.trade/api/board/indices": {
+    "relevant": false,
+    "why": "market index scores, unrelated"
+   },
+   "https://api.gadgethumans.com/air-quality": {
+    "relevant": true,
+    "why": "AQI for a location"
+   },
+   "https://x402-seller.onrender.com/air/quality": {
+    "relevant": true,
+    "why": "EPA AQI for location"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/air-quality": {
+    "relevant": true,
+    "why": "Current air quality index"
+   }
+  },
+  "flights": {
+   "https://stabletravel.dev/api/flightaware/airports": {
+    "relevant": false,
+    "why": "Airport list, not flight prices"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/google-flights": {
+    "relevant": true,
+    "why": "Google Flights prices for a route and date"
+   },
+   "https://tanod.dev/v1/aviation/distance": {
+    "relevant": false,
+    "why": "Aviation distance, not flight prices"
+   },
+   "https://stabletravel.dev/api/flightaware/airports/KDFW/weather/observations": {
+    "relevant": false,
+    "why": "Airport weather observations"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/momondo": {
+    "relevant": true,
+    "why": "Momondo flight prices between two cities"
+   },
+   "https://api.fastaf.co/x402/v1/flights": {
+    "relevant": true,
+    "why": "Google Flights fares between two airports"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/airport-delays": {
+    "relevant": false,
+    "why": "FAA airport delays, not prices"
+   },
+   "https://api.munition.io/v1/airports/search": {
+    "relevant": false,
+    "why": "Airport reference search"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/skyscanner": {
+    "relevant": true,
+    "why": "Skyscanner flight prices between routes"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/flightaware-public-tracker": {
+    "relevant": false,
+    "why": "Single flight tracker, not prices"
+   },
+   "https://travel.forgemesh.io/api/fare-pulse": {
+    "relevant": false,
+    "why": "Fixed JFK fare snapshot, no route input"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/flightradar24-live-flights": {
+    "relevant": false,
+    "why": "Live aircraft positions, not prices"
+   },
+   "https://api.vextorium.com/v1/us-airport-delays": {
+    "relevant": false,
+    "why": "Airport delays, not prices"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/kayak": {
+    "relevant": true,
+    "why": "KAYAK route fares between two airports"
+   },
+   "https://www.x402pulse.dev/v1/travel/trip-check": {
+    "relevant": false,
+    "why": "Flight delay risk, not prices"
+   },
+   "https://airports-reference.x402tookit.com/airport-distance": {
+    "relevant": false,
+    "why": "Airport distance, not prices"
+   },
+   "https://stabletravel.dev/api/flightaware/airports/:id/weather/observations": {
+    "relevant": false,
+    "why": "Airport weather observations, not flight prices"
+   }
+  },
+  "drug-info": {
+   "https://clinicalintelpulse.theaslangroupllc.com/api/clinical/recall-check": {
+    "relevant": false,
+    "why": "Medication recall check, not drug info"
+   },
+   "https://x402-factory.com/v1/recalls": {
+    "relevant": false,
+    "why": "Product recalls, not drug info"
+   },
+   "https://fda-drugs.use.x402atlas.com/label": {
+    "relevant": true,
+    "why": "FDA prescribing label lookup"
+   },
+   "https://clinicalintelpulse.theaslangroupllc.com/api/clinical/drug-check": {
+    "relevant": false,
+    "why": "No description; drug-check purpose unclear"
+   },
+   "https://www.x402pulse.dev/v1/health/drug-label": {
+    "relevant": true,
+    "why": "FDA drug label information"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/usps-prescription-ship": {
+    "relevant": false,
+    "why": "Prescription mailing rules, not drug info"
+   },
+   "https://www.x402pulse.dev/v1/health/drug-approvals": {
+    "relevant": false,
+    "why": "Recent approvals feed, not drug lookup"
+   },
+   "https://api.companyrecords-api.workers.dev/api/gov/openfda-drugsfda": {
+    "relevant": true,
+    "why": "Drugs@FDA product records by drug name"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/cms-medicare-part-d": {
+    "relevant": false,
+    "why": "Medicare prescriber claims data"
+   },
+   "https://www.x402pulse.dev/v1/health/drug-safety": {
+    "relevant": false,
+    "why": "Adverse event statistics, not drug information lookup"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/fda-adverse-events-faers": {
+    "relevant": false,
+    "why": "adverse event reports, not drug info"
+   },
+   "https://api.vextorium.com/v1/drug-info": {
+    "relevant": true,
+    "why": "drug label facts lookup"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/fda-drug-shortages": {
+    "relevant": false,
+    "why": "shortage listings only"
+   },
+   "https://agent.pocket.network/v1/med-safety": {
+    "relevant": true,
+    "why": "medication label highlights and safety"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/fda-orange-book": {
+    "relevant": false,
+    "why": "approval applications, not drug information"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/daily-med-label-spl": {
+    "relevant": false,
+    "why": "label listings without content"
+   },
+   "https://api.findmydirectdoctor.com/v1/costs/medication": {
+    "relevant": false,
+    "why": "Medication cost benchmarks, not drug info"
+   }
+  },
+  "fda-recalls": {
+   "https://api.rxatlas.dev/v1/drugs": {
+    "relevant": false,
+    "why": "Drug product search, not recalls"
+   },
+   "https://api.gocreativeai.com/v1/leads/fda-recalls/:var1": {
+    "relevant": false,
+    "why": "No description; leads endpoint unclear"
+   },
+   "https://api.fadeandco.workers.dev/api/agent-intel/consumer-product-recalls": {
+    "relevant": true,
+    "why": "Recalls including FDA food enforcement"
+   },
+   "https://www.x402pulse.dev/v1/health/recalls": {
+    "relevant": true,
+    "why": "FDA drug and food recalls"
+   },
+   "https://api.boscolabs.dev/v1/product-recalls": {
+    "relevant": true,
+    "why": "Recall check incl. FDA food/drug/device"
+   },
+   "https://fda-drugs.use.x402atlas.com/recalls": {
+    "relevant": true,
+    "why": "FDA drug recall lookup"
+   },
+   "https://recallscout.scalpstream.com/recalls": {
+    "relevant": true,
+    "why": "FDA/NHTSA/CPSC recall search"
+   },
+   "https://api.recallsapi.com/v1/recalls": {
+    "relevant": true,
+    "why": "Recall search incl. FDA"
+   },
+   "https://recall-check.walshmona1.workers.dev/check": {
+    "relevant": true,
+    "why": "Recall check incl. FDA food"
+   },
+   "https://x402-filings.datalayer.workers.dev/v1/fda/enforcement": {
+    "relevant": true,
+    "why": "FDA recall enforcement records"
+   },
+   "https://api.vextorium.com/v1/fda-recalls": {
+    "relevant": true,
+    "why": "FDA recalls search"
+   },
+   "https://api.healthtravel-api.workers.dev/api/health/fda-recalls-enforcement": {
+    "relevant": true,
+    "why": "FDA drug recall enforcement reports"
+   }
+  },
+  "company-enrich": {
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "Domain email/DNS health, not firmographics"
+   },
+   "https://app.domainhelp.com/api/v1/domain-availability/tinyquillpress.com": {
+    "relevant": false,
+    "why": "Domain availability, not company enrichment"
+   },
+   "https://jmt-x402-proxy.jmthomasofficial.workers.dev/v2/api/domain-trust-score": {
+    "relevant": false,
+    "why": "Domain trust/fraud score, not firmographics"
+   },
+   "https://api.kadec0.xyz/v1/enrich": {
+    "relevant": false,
+    "why": "No description; enrich target unclear"
+   },
+   "https://mpp.orthogonal.com/company-enrich/companies/enrich/batch": {
+    "relevant": true,
+    "why": "Batch company enrichment by domain"
+   },
+   "https://mpp.orthogonal.com/company-enrich/companies": {
+    "relevant": false,
+    "why": "Profile by internal ID, not from domain"
+   },
+   "https://api.vextorium.com/v1/company-enrich": {
+    "relevant": false,
+    "why": "Website/DNS profile, lacks firmographics"
+   },
+   "https://x402.orthogonal.com/tomba/v1/companies/find": {
+    "relevant": true,
+    "why": "Company information from a domain"
+   },
+   "https://x402.orthogonal.com/company-enrich/companies/enrich": {
+    "relevant": true,
+    "why": "Company firmographics enrichment by domain"
+   },
+   "https://mpp.orthogonal.com/contactout/v1/domain/enrich": {
+    "relevant": true,
+    "why": "Company information from domain names"
+   },
+   "https://agent-vending-production.up.railway.app/v1/company-enrichment": {
+    "relevant": true,
+    "why": "Company profile from domain incl. HQ, legal name"
+   },
+   "https://x402.agentindex.world/company-enrich": {
+    "relevant": true,
+    "why": "Firmographic lookup by domain"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/company/enrichment": {
+    "relevant": false,
+    "why": "Tech stack and DNS profile, not firmographics"
+   },
+   "https://agent-data.centorprat.workers.dev/enrich/company": {
+    "relevant": true,
+    "why": "company enrichment from domain"
+   },
+   "https://x402.freeq.one/tools/enrich_company": {
+    "relevant": true,
+    "why": "Company firmographics by domain"
+   },
+   "https://enrich.agentdiet.dev/v1/b2b-account-firmographics": {
+    "relevant": true,
+    "why": "Domain firmographics enrichment"
+   }
+  },
+  "translate": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": false,
+    "why": "Text to speech, not translation"
+   },
+   "https://api.x402node.dev/image/ocr": {
+    "relevant": false,
+    "why": "OCR, not translation"
+   },
+   "https://flat-rate-llm.kikoribera03.workers.dev/v1/ai/translate": {
+    "relevant": true,
+    "why": "AI translate endpoint per URL path"
+   },
+   "https://quartermaster.surewhynot.app/v1/translate": {
+    "relevant": true,
+    "why": "AI text translation to any language"
+   },
+   "https://agentforge-taupe.vercel.app/v1/translate": {
+    "relevant": true,
+    "why": "Text translation with auto-detect"
+   },
+   "https://voice.madebydevx.com/v1/translate": {
+    "relevant": true,
+    "why": "Machine translation 100 languages"
+   },
+   "https://agentsvc.io/api/v1/proxy/translate": {
+    "relevant": true,
+    "why": "Text translation incl. English"
+   },
+   "https://api.losbeto.xyz/translate": {
+    "relevant": true,
+    "why": "Text translation any language pair"
+   },
+   "https://x402.asterpay.io/v1/ai/translate": {
+    "relevant": true,
+    "why": "AI text translation"
+   },
+   "https://tolca.tonbot.ca/v1/translate": {
+    "relevant": true,
+    "why": "French to English translation"
+   },
+   "https://netintel.dev/translate/short": {
+    "relevant": true,
+    "why": "Short text translation to English"
+   },
+   "https://gibbr.app/agent/translate": {
+    "relevant": true,
+    "why": "text translation"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/speech-to-text": {
+    "relevant": false,
+    "why": "audio transcription, not text"
+   },
+   "https://wafermap.xyz/v1/translate": {
+    "relevant": true,
+    "why": "text translation 100 languages"
+   },
+   "https://api.youraitools.co/transcribe/v1/transcribe": {
+    "relevant": false,
+    "why": "audio transcription, not text"
+   },
+   "https://nojunk-speech.mick8511.workers.dev/translate": {
+    "relevant": true,
+    "why": "text translation 100 languages"
+   },
+   "https://api.vextorium.com/v1/detect-language": {
+    "relevant": false,
+    "why": "language detection only"
+   },
+   "https://api.sumvid.app/v1/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript, not translation"
+   },
+   "https://tanod.dev/v1/text/translate": {
+    "relevant": true,
+    "why": "Translates between English and languages"
+   },
+   "https://api.kit-rx.com/v1/text/translate": {
+    "relevant": true,
+    "why": "AI translation to target language"
+   }
+  },
+  "video-10s": {
+   "https://api.glianalabs.com/x402/music-v2": {
+    "relevant": false,
+    "why": "Music generation resource, not video"
+   },
+   "https://gg402.vercel.app/image_generator": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "Image editing, not video"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/image/generate": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://nojunk-image.mick8511.workers.dev/generate": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://stablestudio.dev/api/generate/seedance-fast/i2v": {
+    "relevant": false,
+    "why": "Image-to-video needs input image, not prompt video"
+   },
+   "https://gg402.vercel.app/music_generator": {
+    "relevant": false,
+    "why": "music generator, not video"
+   },
+   "https://api.xona-agent.com/video/seedance-generation": {
+    "relevant": true,
+    "why": "Seedance 10-second video generation"
+   },
+   "https://emc2ai.io/x402/einstein/song-generate-draft": {
+    "relevant": false,
+    "why": "Music generation, not video"
+   },
+   "https://www.agentgram.site/api/generate/video": {
+    "relevant": true,
+    "why": "Video generation endpoint per URL"
+   }
+  },
+  "video-cinematic": {
+   "https://stablestudio.dev/api/generate/flux-2-pro/generate": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://opportunity-api-production.up.railway.app/api/market-brief": {
+    "relevant": false,
+    "why": "Market brief, unrelated"
+   },
+   "https://x402engine.app/api/video/hailuo": {
+    "relevant": true,
+    "why": "Hailuo video generation per URL path"
+   },
+   "https://chat-api.memchat.io/api/v1/x402/video-gen": {
+    "relevant": true,
+    "why": "AI video generation"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/yt/script": {
+    "relevant": false,
+    "why": "Writes video script, not video"
+   },
+   "https://stablestudio.dev/api/generate/seedance-fast/i2v": {
+    "relevant": false,
+    "why": "Image-to-video needs input image, not prompt video"
+   },
+   "https://video.cyberwarex.com/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript, not generation"
+   },
+   "https://getvideos.app/api/v1/generate": {
+    "relevant": true,
+    "why": "Video generation endpoint"
+   },
+   "https://www.apinow.fun/api/endpoints/ai-factory/blog_post_to_video_script_transformer": {
+    "relevant": false,
+    "why": "Video script text, not video"
+   },
+   "https://api.xona-agent.com/video/seedance-generation": {
+    "relevant": true,
+    "why": "Seedance text-to-video generation, up to 10s"
+   }
+  },
+  "image-to-video": {
+   "https://agent402.tools/v1/videos/generations": {
+    "relevant": false,
+    "why": "Text-only prompt video, no image input"
+   },
+   "https://gg402.vercel.app/image_generator": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "Image editing, not video"
+   },
+   "https://medien.halowerk.com/v1/video-trim": {
+    "relevant": false,
+    "why": "Video trimming, not animation"
+   },
+   "https://seenly-video-clip.vercel.app/api/image": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://blockrun.ai/api/v1/videos/generations": {
+    "relevant": true,
+    "why": "Video generation API with image input field"
+   },
+   "https://mpp.orthogonal.com/scrapecreators/v1/youtube/video": {
+    "relevant": false,
+    "why": "YouTube video details scrape"
+   },
+   "https://app.suedeai.ai/agent/image": {
+    "relevant": false,
+    "why": "image generation, not video"
+   },
+   "https://hardoz.eu.cc/x402/v1/clip": {
+    "relevant": false,
+    "why": "Clips existing video, not image animation"
+   },
+   "https://ai-to-human.techandtoast.io/api/x402/review-media": {
+    "relevant": false,
+    "why": "Human review, not generation"
+   },
+   "https://medien.halowerk.com/v1/video-gif": {
+    "relevant": false,
+    "why": "Video to GIF, not image to video"
+   },
+   "https://medien.halowerk.com/v1/clip-finder": {
+    "relevant": false,
+    "why": "Finds clips in existing media; no image animation"
+   }
+  },
+  "veo-video": {
+   "https://agent402.tools/v1/videos/generations": {
+    "relevant": false,
+    "why": "Generic 4s video, not Veo 3.1"
+   },
+   "https://stablestudio.dev/api/generate/flux-2-pro/generate": {
+    "relevant": false,
+    "why": "Image generation, not video"
+   },
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "Image editing, not video"
+   },
+   "https://blockrun.ai/api/v1/videos/generations": {
+    "relevant": false,
+    "why": "Video gateway without stated Veo model"
+   },
+   "https://stablestudio.dev/api/generate/grok-video/generate": {
+    "relevant": false,
+    "why": "Grok video model, not Veo 3.1"
+   },
+   "https://mystudios.fun/api/v1/videos/generations": {
+    "relevant": false,
+    "why": "Veo not confirmed in model list"
+   },
+   "http://api.xona-agent.com/video/short-generation": {
+    "relevant": false,
+    "why": "No description"
+   }
+  },
+  "seedance-video": {
+   "https://siroagent.com/v1/seedance-2-5": {
+    "relevant": true,
+    "why": "Seedance 2.5 endpoint per URL path"
+   },
+   "https://stablestudio.dev/api/generate/seedance/i2v": {
+    "relevant": false,
+    "why": "Seedance image-to-video, not text-to-video"
+   },
+   "https://stablestudio.dev/api/generate/seedance-fast/i2v": {
+    "relevant": false,
+    "why": "Seedance image-to-video, not text-to-video"
+   },
+   "https://blockrun.ai/api/v1/videos/generations": {
+    "relevant": true,
+    "why": "Video gateway listing bytedance seedance with prompt"
+   },
+   "https://api.xona-agent.com/video/seedance-generation": {
+    "relevant": true,
+    "why": "Seedance text-to-video"
+   },
+   "https://www.studio-x.cc/api/generate/video-pro": {
+    "relevant": false,
+    "why": "Image-to-video only, not text-to-video"
+   }
+  },
+  "text-to-speech": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": true,
+    "why": "Generates speech audio from text"
+   },
+   "https://agent402.tools/api/count": {
+    "relevant": false,
+    "why": "Text counting, unrelated"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/text-to-speech": {
+    "relevant": true,
+    "why": "Text to speech"
+   },
+   "https://api.youraitools.co/transcribe/v1/transcribe": {
+    "relevant": false,
+    "why": "Speech-to-text, opposite direction"
+   },
+   "https://voice.forgemesh.io/v1/tts/base": {
+    "relevant": true,
+    "why": "Text to speech WAV"
+   },
+   "https://agentsvc.io/api/v1/proxy/audio-transcribe": {
+    "relevant": false,
+    "why": "Speech-to-text, opposite direction"
+   },
+   "https://api.sumvid.app/v1/transcript": {
+    "relevant": false,
+    "why": "YouTube transcript, not TTS"
+   },
+   "https://agent402.tools/api/tts-hd": {
+    "relevant": true,
+    "why": "text to speech"
+   },
+   "https://x402.forgemesh.io/speech-generator": {
+    "relevant": true,
+    "why": "Text to speech WAV"
+   }
+  },
+  "image-editing": {
+   "https://stablestudio.dev/api/generate/flux-2-pro/generate": {
+    "relevant": false,
+    "why": "Image generation, not editing"
+   },
+   "https://gg402.vercel.app/image_generator": {
+    "relevant": false,
+    "why": "Image generation from text, not editing"
+   },
+   "https://api.koinelix.com/v1/images/generations": {
+    "relevant": true,
+    "why": "Edits with reference input images"
+   }
+  },
+  "speech-to-text": {
+   "https://tanod.dev/v1/audio/speak": {
+    "relevant": false,
+    "why": "Text to speech, opposite direction"
+   },
+   "https://stablevoice.dev/api/speech": {
+    "relevant": false,
+    "why": "Text to speech job, opposite direction"
+   },
+   "https://api.x402node.dev/image/ocr": {
+    "relevant": false,
+    "why": "Image OCR, not audio transcription"
+   },
+   "https://agent402.tools/api/tts": {
+    "relevant": false,
+    "why": "Text to speech, opposite direction"
+   },
+   "https://api.fadeandco.workers.dev/api/agent-intel/speech-to-text-transcribe-turbo": {
+    "relevant": true,
+    "why": "Whisper audio transcription"
+   },
+   "https://sift.srv1996466.hstgr.cloud/v1/transcribe": {
+    "relevant": true,
+    "why": "Audio/video file transcription"
+   },
+   "https://agent-toolbox.zafermemon87.workers.dev/v1/transcribe": {
+    "relevant": true,
+    "why": "Whisper audio transcription"
+   },
+   "https://agent402.tools/api/skill/subtitle-pipeline": {
+    "relevant": true,
+    "why": "Transcribes audio into subtitles/transcript"
+   },
+   "https://x402-transcribe-mainnet.hustlescan-media.workers.dev/api/transcribe": {
+    "relevant": true,
+    "why": "Whisper audio transcription"
+   },
+   "https://api.x-402.online/v1/transcribe": {
+    "relevant": false,
+    "why": "Only social video URLs, not audio files"
+   }
+  },
+  "llm-inference": {
+   "https://agent-data-tools.revmesh2074.workers.dev/llm/inference": {
+    "relevant": true,
+    "why": "LLM inference endpoint per URL path"
+   },
+   "https://rubric-protocol.com/v1/x402/attested-inference": {
+    "relevant": true,
+    "why": "Attested LLM chat completion"
+   },
+   "https://api.deepentresearch.com/v1/agent/chat": {
+    "relevant": true,
+    "why": "Per-request LLM inference chat"
+   },
+   "https://coreforge-memory.onrender.com/x402/inference/chat/completions": {
+    "relevant": true,
+    "why": "Chat completions inference per URL path"
+   },
+   "https://llmpricer.xyz/api/compare": {
+    "relevant": false,
+    "why": "LLM price comparison, not inference"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/ai/chat-large": {
+    "relevant": true,
+    "why": "LLM inference with large model"
+   },
+   "https://inference.algono.co/v1/responses": {
+    "relevant": true,
+    "why": "OpenAI-compatible Responses inference"
+   },
+   "https://api.x-402.online/v1/llm": {
+    "relevant": true,
+    "why": "pay-per-call LLM completion"
+   },
+   "https://api.x-402.online/v1/llm/pro": {
+    "relevant": true,
+    "why": "LLM completion inference"
+   },
+   "https://exchangerebel.com/toll/inference/chat": {
+    "relevant": true,
+    "why": "LLM chat completions inference"
+   }
+  },
+  "embeddings": {
+   "https://quartermaster.surewhynot.app/v1/embed": {
+    "relevant": true,
+    "why": "Text embeddings for semantic search"
+   },
+   "https://tanod.dev/v1/embed": {
+    "relevant": true,
+    "why": "Text embeddings for semantic search"
+   },
+   "https://agent.pocket.network/v1/text-embeddings": {
+    "relevant": true,
+    "why": "Text embeddings for RAG"
+   },
+   "https://nojunk-llm.mick8511.workers.dev/v1/embeddings": {
+    "relevant": true,
+    "why": "OpenAI-compatible text embeddings"
+   },
+   "https://netintel.dev/api/v1/embeddings": {
+    "relevant": true,
+    "why": "OpenAI-compatible text embeddings"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/ai/embed": {
+    "relevant": true,
+    "why": "Text embeddings BGE-M3"
+   },
+   "https://watt.area21.io/v1/embeddings": {
+    "relevant": true,
+    "why": "text embeddings API"
+   }
+  },
+  "upscale-image": {
+   "https://tanod.dev/v1/image/upscale": {
+    "relevant": true,
+    "why": "Image upscale endpoint per URL path"
+   },
+   "https://x402.agentutility.ai/image-upscale": {
+    "relevant": true,
+    "why": "Image upscale endpoint per URL path"
+   },
+   "https://x402.agentutility.ai/upscale-image": {
+    "relevant": true,
+    "why": "Image upscale endpoint per URL path"
+   },
+   "https://x402.aispace.bot/api/v1/image/upscale": {
+    "relevant": true,
+    "why": "Image upscale endpoint per URL path"
+   },
+   "https://api.healthtravel-api.workers.dev/api/travel/modern-manga-colorizer": {
+    "relevant": false,
+    "why": "Manga colorizer, not upscaling"
+   },
+   "https://image.kagurazaka.dev/v1/thumbnail": {
+    "relevant": false,
+    "why": "Thumbnail crop, not upscaling"
+   },
+   "https://agent402.tools/v1/images/pro": {
+    "relevant": false,
+    "why": "Text-to-image generation, not upscaling"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/image-gen": {
+    "relevant": false,
+    "why": "text-to-image, not upscaling"
+   },
+   "https://api.koinelix.com/v1/images/generations": {
+    "relevant": false,
+    "why": "generation/edit, not upscaling"
+   },
+   "https://api.delx.ai/api/v1/x402/upscale-image-hq": {
+    "relevant": true,
+    "why": "Image upscaling"
+   }
+  },
+  "flux-image": {
+   "https://mwork.dev/v1/generate-ics": {
+    "relevant": false,
+    "why": "ICS invite generation, unrelated"
+   },
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "GPT image editing, not Flux generation"
+   },
+   "https://gg402.vercel.app/image_generator": {
+    "relevant": false,
+    "why": "Generic image generator, Flux not stated"
+   },
+   "https://nojunk-image.mick8511.workers.dev/generate": {
+    "relevant": true,
+    "why": "FLUX.1 schnell text-to-image"
+   },
+   "https://x402.freeq.one/tools/image_generate": {
+    "relevant": false,
+    "why": "Generic image generation, Flux not stated"
+   },
+   "https://stablestudio.dev/api/generate/flux-2-pro/edit": {
+    "relevant": false,
+    "why": "Flux editing, not generation from prompt"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/image": {
+    "relevant": true,
+    "why": "FLUX.1 schnell text-to-image"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/v1/images/generations": {
+    "relevant": true,
+    "why": "FLUX.1 schnell image generation"
+   },
+   "https://ask.singitai.app/v1/models/venice-flux-3-image/images": {
+    "relevant": true,
+    "why": "Flux 3 text-to-image"
+   },
+   "https://ask.singitai.app/v1/models/venice-flux-2-pro/images": {
+    "relevant": true,
+    "why": "Flux 2 Pro text-to-image"
+   }
+  },
+  "screenshot": {
+   "https://parallelmpp.dev/api/search": {
+    "relevant": false,
+    "why": "Web search, not screenshot"
+   },
+   "https://api.exa.ai/search": {
+    "relevant": false,
+    "why": "Web search, not screenshot"
+   },
+   "https://api.socialfetch.dev/v1/web/markdown": {
+    "relevant": false,
+    "why": "Page to markdown, no screenshot"
+   },
+   "https://api.agentstools.dev/extract": {
+    "relevant": false,
+    "why": "Page text extract, no screenshot"
+   },
+   "https://apexfaucet.xyz/api/x402/page-snap": {
+    "relevant": true,
+    "why": "Website screenshot in headless Chrome"
+   },
+   "https://web.cyberwarex.com/screenshot": {
+    "relevant": true,
+    "why": "Web page PNG screenshot"
+   },
+   "https://web.cyberwarex.com/pdf": {
+    "relevant": false,
+    "why": "Page to PDF, not screenshot image"
+   },
+   "https://softbot-screenshot-mainnet.softbot.workers.dev/v1/pdf": {
+    "relevant": false,
+    "why": "Page to PDF, not screenshot image"
+   },
+   "https://agent402.tools/api/screenshot": {
+    "relevant": true,
+    "why": "Web page screenshot PNG"
+   },
+   "https://api.mekler.ai/v1/web/pages/capture-screenshot": {
+    "relevant": true,
+    "why": "Web page screenshot capture"
+   },
+   "https://agentsvc.io/api/v1/proxy/screenshot": {
+    "relevant": true,
+    "why": "Website screenshot PNG"
+   },
+   "https://win.oneshotagent.com/v1/tools/web-read": {
+    "relevant": true,
+    "why": "Page read returning screenshot"
+   },
+   "https://agent.pocket.network/v1/agentsearch-web-render-v1": {
+    "relevant": true,
+    "why": "Headless render with optional screenshot"
+   },
+   "https://agentreader.dev/read": {
+    "relevant": false,
+    "why": "Article markdown reader, no screenshot"
+   },
+   "https://app.difficat.com/api/v1/screenshots": {
+    "relevant": true,
+    "why": "full-page web screenshot"
+   },
+   "https://toolcall.click/t/web/screenshot": {
+    "relevant": true,
+    "why": "Web page screenshot"
+   },
+   "https://mpp.orthogonal.com/brand-dev/v1/brand/screenshot": {
+    "relevant": true,
+    "why": "Website screenshot"
+   }
+  },
+  "whois": {
+   "https://tools.ipintel.ai/dns-lookup": {
+    "relevant": false,
+    "why": "DNS lookup, not WHOIS"
+   },
+   "https://tools.ipintel.ai/domain-health": {
+    "relevant": false,
+    "why": "Domain email health, not WHOIS"
+   },
+   "https://app.domainhelp.com/api/v1/domain-availability/tinyquillpress.com": {
+    "relevant": false,
+    "why": "Domain availability, not WHOIS record"
+   },
+   "https://www.domainanalysers.online/api/service": {
+    "relevant": false,
+    "why": "Tech stack detection, unrelated"
+   },
+   "https://jmt-x402-proxy.jmthomasofficial.workers.dev/v2/api/domain-trust-score": {
+    "relevant": false,
+    "why": "Domain trust score, not WHOIS lookup"
+   },
+   "https://app.domainhelp.com/api/v1/domain-availability/:domain": {
+    "relevant": false,
+    "why": "Domain availability, not WHOIS record"
+   },
+   "https://api.macaroonnetwork.com/execute/domain-dns-check-v1": {
+    "relevant": false,
+    "why": "DNS resolution check, not WHOIS"
+   },
+   "https://x402-tools-production-2755.up.railway.app/tools/domain": {
+    "relevant": true,
+    "why": "RDAP registration data, WHOIS successor"
+   },
+   "https://api.x402node.dev/url/dns-lookup": {
+    "relevant": false,
+    "why": "DNS lookup, not WHOIS"
+   },
+   "https://api.vextorium.com/v1/dns-lookup": {
+    "relevant": false,
+    "why": "DNS lookup, not WHOIS"
+   },
+   "https://api.zkrobotics.fr/x402/domain/dns": {
+    "relevant": false,
+    "why": "DNS lookup, not WHOIS"
+   },
+   "https://shop.lordevo.com/api/quick/domain-rdap": {
+    "relevant": true,
+    "why": "WHOIS domain lookup via RDAP"
+   },
+   "https://api.clawfetch.ai/domains/check": {
+    "relevant": false,
+    "why": "Bulk availability check only"
+   },
+   "https://agentsvc.io/api/v1/proxy/dns-lookup": {
+    "relevant": false,
+    "why": "DNS lookup, not WHOIS"
+   },
+   "https://dns.use.x402atlas.com/whois": {
+    "relevant": true,
+    "why": "Raw WHOIS domain lookup"
+   },
+   "https://dns-whois-lookup.underscoredone.com/lookup": {
+    "relevant": true,
+    "why": "DNS plus full WHOIS profile"
+   },
+   "https://api.kadec0.xyz/v1/domain-info": {
+    "relevant": true,
+    "why": "Domain WHOIS and DNS lookup"
+   },
+   "https://dns.use.x402atlas.com/rdap": {
+    "relevant": true,
+    "why": "RDAP domain registration lookup"
+   },
+   "https://api.stablecoingateways.com/v1/whois": {
+    "relevant": true,
+    "why": "WHOIS RDAP lookup"
+   },
+   "https://domainaudit.genexxis.com/domain-info": {
+    "relevant": true,
+    "why": "WHOIS RDAP lookup"
+   },
+   "https://percallapi.com/whois": {
+    "relevant": true,
+    "why": "WHOIS lookup"
+   },
+   "https://horizonpulse.dev/api/domain/whois": {
+    "relevant": true,
+    "why": "WHOIS RDAP for com/net/org"
+   },
+   "https://agosint.shveik.dev/x402/domain": {
+    "relevant": true,
+    "why": "domain intel incl WHOIS registrar"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/domain-intel": {
+    "relevant": true,
+    "why": "Domain lookup including whois"
+   }
+  },
+  "news-search": {
+   "https://dripstack.xyz/api/v1/publications/{publicationSlug}/{postSlug}": {
+    "relevant": false,
+    "why": "Newsletter post content, not news search"
+   },
+   "https://x402.ottoai.services/crypto-news": {
+    "relevant": false,
+    "why": "Fixed crypto headlines feed, not search"
+   },
+   "https://x402.agentutility.ai/hacker-news-search": {
+    "relevant": false,
+    "why": "Hacker News search, not news articles"
+   },
+   "https://twitr.sh/api/tools/radar": {
+    "relevant": false,
+    "why": "Trending topics radar, not article search"
+   },
+   "https://google-trends.use.x402atlas.com/trend": {
+    "relevant": false,
+    "why": "Google Trends interest, not news"
+   },
+   "https://x402-seller-pmlm.onrender.com/news": {
+    "relevant": true,
+    "why": "News search on any topic"
+   },
+   "https://api.webintel-api.workers.dev/api/search/reuters-articles": {
+    "relevant": false,
+    "why": "Reuters-only sitemap headlines, not general news search"
+   },
+   "https://percallapi.com/news": {
+    "relevant": true,
+    "why": "Brave News search"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/news": {
+    "relevant": true,
+    "why": "News headlines search"
+   },
+   "https://web-access-gateway.mattskowronis.workers.dev/v1/news": {
+    "relevant": true,
+    "why": "Recent coverage search last seven days"
+   },
+   "https://api.webintel-api.workers.dev/api/search/google-news": {
+    "relevant": true,
+    "why": "Google News search"
+   },
+   "https://api.x402node.dev/search/news": {
+    "relevant": true,
+    "why": "Recent news search via Google News"
+   },
+   "https://agentsvc.io/api/v1/proxy/search-read": {
+    "relevant": true,
+    "why": "Searches recent news articles with source news"
+   },
+   "https://search.openverbs.com/v1/news": {
+    "relevant": true,
+    "why": "Google News search"
+   },
+   "https://mpp.orthogonal.com/serper/news": {
+    "relevant": true,
+    "why": "Google News search"
+   },
+   "https://x402.orthogonal.com/serper/news": {
+    "relevant": true,
+    "why": "Google News search"
+   },
+   "https://api.hivemindos.app/v1/x402/web-data/web.news": {
+    "relevant": true,
+    "why": "News article search"
+   },
+   "https://api.agentsearchhq.com/x402/v1/news": {
+    "relevant": true,
+    "why": "News article search"
+   }
+  },
+  "academic-papers": {
+   "https://api.exa.ai/search": {
+    "relevant": false,
+    "why": "General web search, not academic"
+   },
+   "https://parallelmpp.dev/api/search": {
+    "relevant": false,
+    "why": "General web search, not academic"
+   },
+   "https://mpp.orthogonal.com/serper/search": {
+    "relevant": false,
+    "why": "General Google search, not academic"
+   },
+   "https://research.genexxis.com/papers": {
+    "relevant": true,
+    "why": "Academic paper search"
+   },
+   "https://mpp.orthogonal.com/serper/scholar": {
+    "relevant": true,
+    "why": "Google Scholar paper search"
+   },
+   "https://2s.io/api/papers/search": {
+    "relevant": true,
+    "why": "Scientific literature search"
+   },
+   "https://api.weblens.dev/search/scholar": {
+    "relevant": true,
+    "why": "Google Scholar search"
+   },
+   "https://papers.use.x402atlas.com/paper": {
+    "relevant": false,
+    "why": "Single paper lookup by id, not search"
+   },
+   "https://x402-filings.datalayer.workers.dev/v1/research/papers": {
+    "relevant": true,
+    "why": "Crossref paper search by topic"
+   },
+   "https://papers.use.x402atlas.com/search": {
+    "relevant": true,
+    "why": "Academic paper search"
+   },
+   "https://tensorfeed.ai/api/premium/research/citation-velocity": {
+    "relevant": false,
+    "why": "fixed ranking, no search"
+   }
+  },
+  "geocode": {
+   "https://x402-data-api.onrender.com/api/geo": {
+    "relevant": false,
+    "why": "IP geolocation, not address geocoding"
+   },
+   "https://x402.orth.sh/serper/maps": {
+    "relevant": false,
+    "why": "Maps place search, not address geocoding"
+   },
+   "https://twin.unykorn.org/geocode": {
+    "relevant": true,
+    "why": "Geocode street address to coordinates"
+   },
+   "https://api.agentstools.dev/geocode": {
+    "relevant": true,
+    "why": "Forward geocode address to coordinates"
+   },
+   "https://webtools402.176-109-107-191.sslip.io/geocode": {
+    "relevant": true,
+    "why": "Geocode endpoint per URL path"
+   },
+   "https://opendata402.com/v1/address/nl": {
+    "relevant": true,
+    "why": "Dutch address geocoding to coordinates"
+   },
+   "https://apiacre.com/v1/data/reverse-geocode": {
+    "relevant": false,
+    "why": "Reverse geocoding, opposite direction"
+   },
+   "https://data.greeneris.io/v1/fr/geocode": {
+    "relevant": true,
+    "why": "French address geocoding"
+   },
+   "https://agent402.tools/api/geo-lookup": {
+    "relevant": false,
+    "why": "Coordinates to FIPS codes, opposite direction"
+   },
+   "https://api.webbersites.com/api/geo": {
+    "relevant": false,
+    "why": "IP geolocation, not address geocoding"
+   },
+   "https://agent402.tools/api/geocode": {
+    "relevant": true,
+    "why": "Geocode address to lat/lon"
+   },
+   "https://x402-weather.onrender.com/reverse-geocode": {
+    "relevant": false,
+    "why": "Reverse geocoding, opposite direction"
+   },
+   "https://agent402.tools/api/reverse-geocode": {
+    "relevant": false,
+    "why": "Reverse geocoding, opposite direction"
+   },
+   "https://geospatial.openverbs.com/v1/geohash": {
+    "relevant": false,
+    "why": "Geohash encoding, not geocoding"
+   },
+   "https://x402-seller.onrender.com/geo/reverse": {
+    "relevant": false,
+    "why": "Reverse geocoding, opposite direction"
+   },
+   "https://x402.tbs-digital.com/geo/forward": {
+    "relevant": true,
+    "why": "Forward geocoding address to coordinates"
+   },
+   "https://win.oneshotagent.com/v1/tools/resolve/place": {
+    "relevant": true,
+    "why": "US street address to coordinates"
+   },
+   "https://x402-datashop-production.up.railway.app/v1/fr/geocode": {
+    "relevant": true,
+    "why": "French address geocoding"
+   },
+   "https://fittings.sh/v1/geo/forward-geocode": {
+    "relevant": true,
+    "why": "US street address to lat/lon"
+   },
+   "https://nordata.hihat.workers.dev/adresse": {
+    "relevant": true,
+    "why": "Norwegian address geocoding"
+   },
+   "https://api.sitecheck-api.workers.dev/api/address/parse": {
+    "relevant": false,
+    "why": "Address parsing, no coordinates"
+   },
+   "https://api.vextorium.com/v1/spain-reverse-geocode": {
+    "relevant": false,
+    "why": "Reverse geocoding, opposite direction"
+   },
+   "https://api.vextorium.com/v1/spain-geocode": {
+    "relevant": true,
+    "why": "Spanish address geocoding"
+   },
+   "https://api.agentstools.dev/geocode/reverse": {
+    "relevant": false,
+    "why": "Reverse geocoding, opposite direction"
+   },
+   "https://openweather.mpp.paywithlocus.com/openweather/geocode": {
+    "relevant": true,
+    "why": "geocoding endpoint"
+   },
+   "https://nojunk-geo.mick8511.workers.dev/reverse": {
+    "relevant": false,
+    "why": "reverse geocoding, wrong direction"
+   }
+  },
+  "pdf-text": {
+   "https://api.agentstools.dev/extract": {
+    "relevant": false,
+    "why": "Web page extraction, not PDF"
+   },
+   "https://mpp.orthogonal.com/riveter/v1/scrape": {
+    "relevant": false,
+    "why": "Web page scrape, not PDF"
+   },
+   "https://ocrext.xyz/api/extract": {
+    "relevant": false,
+    "why": "No description; OCR extract input unclear"
+   },
+   "https://xl402.agentsats.org/v1/web-extract": {
+    "relevant": false,
+    "why": "Web URL extraction, not PDF"
+   },
+   "https://api.x402node.dev/image/ocr": {
+    "relevant": false,
+    "why": "Image OCR, not PDF text"
+   },
+   "https://mart402.com/v1/pdf-pages": {
+    "relevant": false,
+    "why": "Splits PDF pages, no text extraction"
+   },
+   "https://api.weblens.dev/pdf": {
+    "relevant": true,
+    "why": "Extracts text from PDF"
+   },
+   "https://agent.pocket.network/v1/ocr-document-parsing": {
+    "relevant": true,
+    "why": "OCR/parse PDF to text"
+   },
+   "https://workbot1.oddsys.org/ocr": {
+    "relevant": true,
+    "why": "OCR scanned PDF to text"
+   },
+   "https://agents.crowdspark.me/v1/pdf/text": {
+    "relevant": true,
+    "why": "PDF to text per page"
+   },
+   "https://x402.agentindex.world/pdf": {
+    "relevant": true,
+    "why": "PDF to Markdown extraction"
+   },
+   "https://x402-gateway.blackwoodstate8.workers.dev/v1/pdf-text": {
+    "relevant": true,
+    "why": "PDF text extraction"
+   },
+   "https://x402-agent-tools.nerolabs.workers.dev/pdf-extract": {
+    "relevant": true,
+    "why": "PDF text extraction"
+   },
+   "https://readfetch.com/v1/pdf": {
+    "relevant": true,
+    "why": "PDF text extraction"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/pdf/text": {
+    "relevant": true,
+    "why": "PDF text extraction"
+   }
+  },
+  "phone-validate": {
+   "https://stablephone.dev/api/lookup": {
+    "relevant": false,
+    "why": "iMessage/FaceTime lookup, not validation"
+   },
+   "https://stablephone.dev/api/call": {
+    "relevant": false,
+    "why": "Makes AI phone calls"
+   },
+   "https://api.ibanforge.com/v1/iban/validate": {
+    "relevant": false,
+    "why": "IBAN validation, not phone"
+   },
+   "https://402utils.com/v1/json-validate": {
+    "relevant": false,
+    "why": "JSON validation, not phone"
+   },
+   "https://paidontempo.xyz/api/verify": {
+    "relevant": false,
+    "why": "Transaction verifier, unrelated"
+   },
+   "https://nzdata.zakwins.workers.dev/nz/validate/phone": {
+    "relevant": true,
+    "why": "Validates NZ phone numbers"
+   },
+   "https://api.glianalabs.com/x402/tools/phone-verify": {
+    "relevant": true,
+    "why": "Phone number validity check"
+   },
+   "https://avt-x402.ttsempelis.workers.dev/validate/phone": {
+    "relevant": true,
+    "why": "International phone validation"
+   },
+   "https://api.strale.io/x402/phone-validate": {
+    "relevant": true,
+    "why": "Phone format and numbering validation"
+   },
+   "https://x402-agent-tools.nerolabs.workers.dev/phone-check": {
+    "relevant": true,
+    "why": "Phone number validation batch"
+   },
+   "https://rexvalidate.com/api/agent/v1/phone": {
+    "relevant": true,
+    "why": "Phone number validation"
+   },
+   "https://api.strale.io/x402/v2/phone-validate": {
+    "relevant": true,
+    "why": "Phone validation, E.164"
+   },
+   "https://api.kadec0.xyz/v1/phone-validate": {
+    "relevant": true,
+    "why": "Phone validation and formatting"
+   }
+  },
+  "site-up": {
+   "https://x402.onchainexpat.com/api/x402-research/website-report": {
+    "relevant": false,
+    "why": "Competitive intelligence report"
+   },
+   "https://mpp.orthogonal.com/bytemine/crawl/map": {
+    "relevant": false,
+    "why": "Site URL mapping, not uptime"
+   },
+   "https://x402.shizu.me/markdown": {
+    "relevant": false,
+    "why": "Webpage to markdown"
+   },
+   "https://url-uptime-checker.underscoredone.com/check": {
+    "relevant": true,
+    "why": "URL reachability and response time"
+   },
+   "https://anywaypossible.com/api/check": {
+    "relevant": true,
+    "why": "URL uptime and health check"
+   },
+   "https://agent-tools-production-e6aa.up.railway.app/v1/site-check": {
+    "relevant": true,
+    "why": "Website up check with status"
+   },
+   "https://local-leads-api.vercel.app/api/v1/website-check": {
+    "relevant": true,
+    "why": "Website up/down health check"
+   },
+   "https://http-status-checker.underscoredone.com/check": {
+    "relevant": true,
+    "why": "HTTP status check for URLs"
+   },
+   "https://agent-data-tools.revmesh2074.workers.dev/url/uptime": {
+    "relevant": true,
+    "why": "Website uptime check"
+   },
+   "https://402oracle.com/verify/freshness": {
+    "relevant": true,
+    "why": "URL up and change check"
+   },
+   "https://horizonpulse.dev/api/site/audit": {
+    "relevant": false,
+    "why": "website audit, not uptime check"
+   },
+   "https://http-header-checker.underscoredone.com/check": {
+    "relevant": true,
+    "why": "requests URL, reports status and timing"
+   },
+   "https://ignoreo.com/v1/site-check/check": {
+    "relevant": false,
+    "why": "Pre-payment warning signs, not uptime check"
+   }
+  }
+ }
+}

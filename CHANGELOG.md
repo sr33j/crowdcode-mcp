@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Search over the whole index** (SRI-115 C13). `/api/services/find` now
+  searches every offering in the index (about 48k, in memory, a few
+  milliseconds a query) instead of a live search of the Bazaar's top 12 and
+  mpp.dev. It answers within the capability leaf or model asked for, and ranks
+  by a seeded Thompson draw of delivery × quality per effective dollar, with
+  `bad` left out. Each result says its `tier` and `why`, its `model`, price
+  and networks, and `explore: true` when the draw tried it ahead of the
+  best-known option; the response returns its `seed` (pass it back to
+  reproduce a list) and is about 700 tokens for five results. The live search
+  remains the fallback. The evaluation set grows to 80 cases (video, speech,
+  image editing, model names), each with the other offerings an independent
+  judge found to answer it (`also`, every verdict in `judged.json`): recall@3
+  0.533 → 0.772 and MRR 0.765 → 0.855 over the 80; on the original 60,
+  0.589 → 0.742 and 0.833 → 0.837.
 - **reliability-v2 for listed offerings.** `GET /api/reliability?url=` now
   evaluates an endpoint the index lists but does not track, using its Bazaar
   payers, the mpp.dev catalog and the leaderboard prior of the model it sells.

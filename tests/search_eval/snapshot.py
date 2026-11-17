@@ -1,12 +1,16 @@
-"""The directory and catalogs as they were, so CI can rank the evaluation set offline.
+"""The index, directory and catalogs as they were, so CI can rank the evaluation set offline.
 
-`snapshot.json` holds every listing (name, slug, endpoint, description and
-listing text), CrowdCode's evidence for every endpoint the searches return,
-the networks each service was seen on, the mpp.dev catalog, and the Coinbase
-Bazaar's answer to each case's query. `offline_search()` runs the real
-`find_services` over it with the real model, so CI scores exactly the ranking
-production would serve for that directory. Everything in it is public: it is
-what `/api/services` and the two catalogs publish.
+`snapshot.json` holds what the index search reads (`offerings.load_rows`:
+every offering's listing, schema field names, prices, networks, payer counts,
+capability classification and reliability), and, for the live fallback,
+every directory listing, CrowdCode's evidence for every endpoint the live
+searches return, the networks each service was seen on, the mpp.dev catalog,
+and the Coinbase Bazaar's answer to each case's query. `offline_search()`
+runs the real `find_services` over it with the real model and a fixed seed,
+so CI scores exactly the ranking production would serve for that index;
+`offline_search(live=True)` runs the live federated fallback. Everything in
+it is public: what the catalogs list and what CrowdCode's reliability pages
+and `/api/services` publish.
 
 Rebuild it with `python scripts/search_eval.py --snapshot` (DATABASE_URL; the
 catalogs are fetched live) when the directory has moved on, and say in the
@@ -64,7 +68,7 @@ def build_snapshot(path: Path = SNAPSHOT_PATH, overlay: Path | None = None, keep
     ``keep_catalogs``: keep the snapshot's catalog answers and refresh only
     the directory, so a comparison changes one thing at a time.
     """
-    from crowdcode import discovery
+    from crowdcode import discovery, offerings
     from crowdcode.db import connect
     from crowdcode.networks import fetch_service_networks
     from crowdcode.search_eval import load_cases
@@ -80,6 +84,7 @@ def build_snapshot(path: Path = SNAPSHOT_PATH, overlay: Path | None = None, keep
     with connect() as conn:
         rows = [dict(r) for r in discovery.directory_rows(conn)]
         networks = fetch_service_networks(conn)
+        index = _jsonable(offerings.load_rows(conn))
     extra = {}
     if overlay:
         for line in Path(overlay).read_text(encoding="utf-8").splitlines():
@@ -108,11 +113,26 @@ def build_snapshot(path: Path = SNAPSHOT_PATH, overlay: Path | None = None, keep
         "evidence": evidence,
         "mpp": mpp,
         "cdp": cdp,
+        "index": index,
     }
     with gzip.open(path, "wt", encoding="utf-8") as handle:
         json.dump(snapshot, handle, sort_keys=True, separators=(",", ":"))
     return {"listings": len(rows), "evidence": len(evidence), "cdp_queries": len(cdp),
-            "mpp_services": len(mpp["services"]), "bytes": path.stat().st_size}
+            "mpp_services": len(mpp["services"]), "offerings": len(index["resources"]), "bytes": path.stat().st_size}
+
+
+def _jsonable(value: Any) -> Any:
+    from decimal import Decimal
+
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, Any]:
@@ -150,33 +170,58 @@ class _Catalogs:
         return self.snapshot["mpp"]
 
 
-def offline_search(snapshot: dict[str, Any] | None = None, embedder: Any = "default",
-                   **overrides: Any) -> Callable[[str], list[str]]:
+SEED = 20261117
+_INDEXES: dict[tuple[int, int], Any] = {}
+
+
+def offline_index(snapshot: dict[str, Any], embedder: Any) -> Any:
+    """The snapshot's offering index, built once per snapshot and model."""
+    from crowdcode import offerings
+
+    key = (id(snapshot), id(embedder))
+    if key not in _INDEXES:
+        data = snapshot["index"]
+        ready = embedder is not None and getattr(embedder, "ready", lambda: False)()
+        _INDEXES[key] = offerings.OfferingIndex(offerings.offerings_from_rows(data), embedder=embedder if ready else None,
+                                                leaf_text=data.get("leaf_text"))
+    return _INDEXES[key]
+
+
+def offline_search(snapshot: dict[str, Any] | None = None, embedder: Any = "default", live: bool = False,
+                   seed: int = SEED, **overrides: Any) -> Callable[[str], list[str]]:
     """``search(query) -> ranked endpoints`` over the snapshot.
 
+    By default the index search (C13) with a fixed seed; ``live=True`` runs the
+    live federated fallback over the snapshot's directory and catalogs.
     ``embedder=None`` ranks by keywords alone (the model unavailable);
-    ``overrides`` patch discovery constants, for tuning experiments.
+    ``overrides`` patch discovery or offerings constants, for tuning experiments.
     """
-    from crowdcode import discovery, semantic
+    from crowdcode import discovery, offerings, semantic
 
     snapshot = snapshot or load_snapshot()
     if embedder == "default":
         semantic.EMBEDDER.warm(wait=True)
         embedder = semantic.EMBEDDER
+    model = embedder if embedder is not None else _NoModel()
     networks = snapshot["networks"]
+    index = None if live else offline_index(snapshot, embedder)
 
     @contextmanager
     def factory():
         yield _Conn(snapshot)
 
     def search(query: str) -> list[str]:
-        patches = [mock.patch.object(discovery, name, value) for name, value in overrides.items()]
+        patches = [mock.patch.object(offerings if hasattr(offerings, name) else discovery, name, value)
+                   for name, value in overrides.items()]
         patches.append(mock.patch.object(discovery, "_service_networks", lambda conn: networks))
         for patch in patches:
             patch.start()
         try:
-            result = discovery.find_services(query, limit=10, conn_factory=factory, catalogs=_Catalogs(snapshot),
-                                             embedder=embedder if embedder is not None else _NoModel())
+            if live:
+                result = discovery.find_live(query, discovery.DEFAULT_NETWORKS, None, None, 10, factory,
+                                             _Catalogs(snapshot), model)
+            else:
+                result = discovery.find_services(query, limit=10, index=index, embedder=model, seed=seed)
         finally:
             for patch in reversed(patches):
                 patch.stop()
@@ -190,3 +235,9 @@ class _NoModel:
 
     def similarities(self, query: str, documents: Any) -> None:
         return None
+
+    def encode(self, texts: Any) -> None:
+        return None
+
+    def ready(self) -> bool:
+        return False
