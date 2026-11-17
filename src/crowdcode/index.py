@@ -67,6 +67,7 @@ from crowdcode.index_models import (
     modality_hint,
     offering_model,
     priors_rows,
+    schema_models,
 )
 from crowdcode.index_probe import ProbeResult, ProbeTarget, probe_all
 
@@ -1300,8 +1301,8 @@ def update_models(conn: psycopg.Connection, entries: list[CatalogEntry], *, comp
     Otherwise only the offerings a catalog answered for are rewritten.
     """
     resources = conn.execute(
-        "select id, method, route_template, probe_url, description, service_name, model, model_family, modality "
-        "from index_resources"
+        "select id, method, route_template, probe_url, description, service_name, model, model_family, modality, "
+        "input_schema from index_resources"
     ).fetchall()
     by_url: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in resources:
@@ -1321,6 +1322,14 @@ def update_models(conn: psycopg.Connection, entries: list[CatalogEntry], *, comp
                 "models_endpoint", as_json(entry.pricing), entry.usd_per_second))
     for row in resources:
         if row["id"] in from_catalog:
+            continue
+        # The seller's own schema: a `model` enum lists what a router sells.
+        listed = schema_models(row.get("input_schema"))
+        if listed:
+            for model, seller_id, price in listed:
+                usd_per_second = (price["clip_usd"] / price["clip_seconds"]) if price and price["clip_seconds"] else None
+                rows[(row["id"], model.model)] = (row["id"], model.model, model.family, model.modality, seller_id,
+                                                  "schema", as_json(price), usd_per_second)
             continue
         path = row["route_template"].split("//", 1)[-1].split("/", 1)[-1] if row["route_template"] else ""
         found = offering_model("/" + path, row["description"], row["service_name"])

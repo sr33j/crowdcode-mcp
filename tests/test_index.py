@@ -639,3 +639,42 @@ def test_every_feed_is_listed_once_mpp_is_tracked_and_models_are_known(db):
             assert health["models"]["by_modality"]["video"] == {"offerings": 2, "models": 2}
     finally:
         fixture.server.shutdown()
+
+
+TREZA_SCHEMA = {"info": {"body": {"model": "minimax-h3", "prompt": "x"}}, "schema": {"properties": {"body": {"properties": {
+    "model": {"enum": ["minimax-h3", "veo-3.1-lite", "kling-3.0-pro", "seedance-2.5", "veo-3.1", "not-a-model"],
+              "description": "Prices: minimax-h3 (default) 5s $0.42, 10s $0.84; veo-3.1-lite 4s $0.28, 6s $0.42; "
+                             "kling-3.0-pro 5s $1.18; seedance-2.5 5s $1.64; veo-3.1 4s $2.24, 6s $3.36."},
+    "prompt": {"type": "string"}}}}}}
+
+
+def test_a_router_s_schema_names_the_models_it_sells_and_their_clip_prices():
+    from crowdcode.index_models import schema_models
+    found = {m.model: (seller_id, price) for m, seller_id, price in schema_models(TREZA_SCHEMA)}
+    assert set(found) == {"hailuo-3", "veo-3.1-lite", "kling-v3-pro", "seedance-2.5", "veo-3.1"}
+    # veo-3.1's price is its own, not veo-3.1-lite's.
+    assert found["veo-3.1"] == ("veo-3.1", {"clip_seconds": 4, "clip_usd": 2.24})
+    assert found["veo-3.1-lite"] == ("veo-3.1-lite", {"clip_seconds": 4, "clip_usd": 0.28})
+    assert found["hailuo-3"][0] == "minimax-h3"
+    assert schema_models({"schema": {"properties": {"body": {"properties": {"prompt": {}}}}}}) == []
+
+
+def test_update_models_takes_a_router_s_schema_between_the_catalog_and_the_route(db):
+    with db() as conn:
+        conn.execute((ROOT / "supabase/offerings-models.sql").read_text())
+        conn.execute((ROOT / "supabase/offerings-models.sql").read_text())  # idempotent
+        conn.execute(
+            """insert into index_resources (resource_key, method, origin, route_template, probe_url, description,
+                 input_schema) values ('POST https://treza.example/api/x402/video', 'POST', 'https://treza.example',
+                 'https://treza.example/api/x402/video', 'https://treza.example/api/x402/video',
+                 'Generate a video. 8 models including Google Veo 3.1, Kling 3.0 and Seedance 2.5', %s::jsonb)""",
+            (json.dumps(TREZA_SCHEMA),))
+        index.update_models(conn, [], complete=True)
+        rows = {r["model"]: r for r in conn.execute(
+            "select model, seller_model_id, source, usd_per_second, pricing from index_offering_models").fetchall()}
+        assert set(rows) == {"hailuo-3", "veo-3.1-lite", "kling-v3-pro", "seedance-2.5", "veo-3.1"}
+        assert {r["source"] for r in rows.values()} == {"schema"}
+        assert float(rows["veo-3.1"]["usd_per_second"]) == pytest.approx(0.56)
+        assert rows["veo-3.1"]["pricing"] == {"clip_seconds": 4, "clip_usd": 2.24}
+        resource = conn.execute("select model, modality from index_resources").fetchone()
+        assert (resource["model"], resource["modality"]) == (None, "video")
