@@ -270,6 +270,22 @@ def items(*texts: str) -> list[ct.Item]:
     return [ct.Item(f"r:{i}", {"d": t}, f"fp{i}") for i, t in enumerate(texts)]
 
 
+def test_an_item_the_model_skips_twice_is_stored_unclassified_not_resent(db):
+    seed(db)
+    with db() as conn:
+        conn.execute("update index_resources set description = 'skip this one' where service_id = 'svc_dns'")
+        conn.commit()
+    model = ScriptedModel()
+    report = ct.run(db, NOW, chat=model, reliability=ct.ReliabilityView(), settings=Settings())
+    assert report["classify"]["unclassifiable"] == 1
+    # One batch, then the retry of the skipped item alone.
+    assert [len(c["items"]) for c in model.calls if "items" in c] == [4, 1]
+    calls = len(model.calls)
+    assert ct.run(db, NOW + timedelta(hours=1), chat=model, reliability=ct.ReliabilityView(),
+                  settings=Settings())["pending"] == 0
+    assert len(model.calls) == calls
+
+
 def test_classify_batch_keeps_valid_pairs_and_leaves_the_rest_pending():
     spend = ct.Spend(model="gpt-5-mini", remaining_usd=1.0)
     result = ct.classify_batch(ScriptedModel(), spend, items("make a video", "web search", "skip me"), {})
@@ -287,6 +303,8 @@ def test_the_budget_stops_calls_before_they_are_made():
     # An unknown model is costed at the most expensive rate.
     assert ct.Spend(model="mystery", remaining_usd=1).price() == ct.UNKNOWN_MODEL_PRICE
     assert ct.Spend(model="gpt-5-mini-2025-08-07", remaining_usd=1).price() == ct.MODEL_PRICES["gpt-5-mini"]
+    # A failed call is None (its items stay pending), not an empty answer.
+    assert ct.classify_batch(ScriptedModel(fail=True), ct.Spend(model="gpt-5-mini", remaining_usd=1), items("x"), {}) is None
 
 
 def test_slugs_and_schema_keys():

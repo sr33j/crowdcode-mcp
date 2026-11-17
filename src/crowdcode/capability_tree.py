@@ -379,9 +379,9 @@ CLASSIFY_SYSTEM = (
 
 
 def classify_batch(chat: ChatFn, spend: Spend, batch: list[Item],
-                   known_facets: dict[str, list[str]]) -> dict[str, list[dict[str, str]]]:
+                   known_facets: dict[str, list[str]]) -> dict[str, list[dict[str, str]]] | None:
     """One model call for up to BATCH_SIZE items. Returns {item key: [{node, facet}]}
-    for the items the model answered validly; the rest stay pending."""
+    for the items the model answered validly, or None when the call failed."""
     payload = {
         "nodes": [{"id": node.id, "covers": node.hint} for node in NODES if node.hint],
         "known_facets": {node: facets[:20] for node, facets in known_facets.items() if facets},
@@ -400,7 +400,7 @@ def classify_batch(chat: ChatFn, spend: Spend, batch: list[Item],
     }
     parsed = _call(chat, spend, CLASSIFY_SYSTEM, payload, output_tokens=12 * len(batch) + 50)
     if not parsed or not isinstance(parsed.get("r"), dict):
-        return {}
+        return None
     out: dict[str, list[dict[str, str]]] = {}
     for index, value in parsed["r"].items():
         try:
@@ -1104,23 +1104,21 @@ def _write(connect: Callable[[], Any], spend: Spend, now: datetime,
 
 def classify_pending(connect: Callable[[], Any], chat: ChatFn, spend: Spend, items: list[Item],
                      now: datetime, max_batches: int = MAX_BATCHES_PER_RUN) -> dict[str, int]:
-    """Classify `items` in batches. No connection is open during a model call."""
+    """Classify `items` in batches. No connection is open during a model call.
+
+    An item the model leaves out of a batch it answered is sent once more at
+    the end of the run; left out again, it is stored with no assignment, so it
+    is not re-sent every hour (a changed description sends it again). Items in
+    a failed call stay pending.
+    """
     with connect() as conn:
         known = _known_facets(conn)
-    done = batches = 0
-    for start in range(0, len(items), BATCH_SIZE):
-        if batches >= max_batches:
-            break
-        batch = items[start:start + BATCH_SIZE]
-        try:
-            result = classify_batch(chat, spend, batch, known)
-        except BudgetExhausted:
-            break
-        batches += 1
-        by_key = {item.key: item for item in batch}
+    stats = Counter()
+    by_key = {item.key: item for item in items}
 
-        def save(conn: Any, result: dict[str, list[dict[str, str]]] = result) -> None:
-            for key, assignments in result.items():
+    def save(results: dict[str, list[dict[str, str]]]) -> None:
+        def write(conn: Any) -> None:
+            for key, assignments in results.items():
                 conn.execute(
                     """
                     insert into capability_classifications (item_key, fingerprint, assignments, classified_at)
@@ -1130,14 +1128,42 @@ def classify_pending(connect: Callable[[], Any], chat: ChatFn, spend: Spend, ite
                     """,
                     (key, by_key[key].fingerprint, json.dumps(assignments), now),
                 )
+        _write(connect, spend, now, write)
 
-        _write(connect, spend, now, save)
-        for assignments in result.values():
-            for a in assignments:
-                if a["facet"] not in known[a["node"]]:
-                    known[a["node"]].append(a["facet"])
-        done += len(result)
-    return {"pending": len(items), "classified": done, "batches": batches}
+    def batches(queue: list[Item]) -> Iterable[tuple[list[Item], dict[str, list[dict[str, str]]] | None]]:
+        for start in range(0, len(queue), BATCH_SIZE):
+            if stats["batches"] >= max_batches:
+                return
+            batch = queue[start:start + BATCH_SIZE]
+            try:
+                result = classify_batch(chat, spend, batch, known)
+            except BudgetExhausted:
+                return
+            stats["batches"] += 1
+            yield batch, result
+
+    skipped: list[Item] = []
+    for retry, queue in enumerate((items, None)):
+        if retry:
+            queue, skipped = skipped, []
+        for batch, result in batches(queue):
+            if result is None:
+                _write(connect, spend, now)
+                continue
+            missed = [item for item in batch if item.key not in result]
+            if retry:
+                result.update({item.key: [] for item in missed})
+                stats["unclassifiable"] += len(missed)
+            else:
+                skipped.extend(missed)
+            save(result)
+            for assignments in result.values():
+                for a in assignments:
+                    if a["facet"] not in known[a["node"]]:
+                        known[a["node"]].append(a["facet"])
+            stats["classified"] += sum(1 for v in result.values() if v)
+    return {"pending": len(items), "classified": stats["classified"], "batches": stats["batches"],
+            "unclassifiable": stats["unclassifiable"]}
 
 
 def _unmapped_facets(conn: Any) -> dict[str, list[tuple[str, int]]]:
