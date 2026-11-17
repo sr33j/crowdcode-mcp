@@ -31,6 +31,7 @@ from crowdcode.scoring import (
     compute_score,
     compute_trust_consensus,
     effective_weight,
+    score_from_votes,
     updated_raw_trust,
 )
 
@@ -96,7 +97,7 @@ def _run():
                     loo = compute_trust_consensus(
                         reviews[service], trust, NOW, exclude_owner=name
                     )
-                    raw[name] = updated_raw_trust(raw[name], loo.score, rating)
+                    raw[name] = updated_raw_trust(raw[name], loo.mean, rating)
                     trust[name] = TrustRow(raw_trust=raw[name])
                 reviews[service].append(
                     ReviewRow(
@@ -120,6 +121,7 @@ def _run():
 
     scored = [compute_score(reviews[s], trust, NOW) for s in range(len(RELIABILITY))]
     finals = [result.score for result in scored]
+    means = [result.mean for result in scored]
     n_effs = [result.n_eff for result in scored]
     # The evidence the scores are computed from: one bucket per trusted owner.
     buckets = [
@@ -130,7 +132,7 @@ def _run():
         ]
         for s in range(len(RELIABILITY))
     ]
-    return finals, trust, max_adversary_weight, crossed, n_effs, buckets
+    return finals, trust, max_adversary_weight, crossed, n_effs, buckets, means
 
 
 RESULT = _run()
@@ -139,7 +141,7 @@ RESULT = _run()
 def test_trusted_owner_votes_track_true_quality():
     """The evidence is accurate: each trusted owner's single vote is the mean
     of what it actually observed, which is the true expected honest rating."""
-    _, _, _, _, _, buckets = RESULT
+    _, _, _, _, _, buckets, _ = RESULT
     errors = [
         abs(bucket.rating - TARGETS[service])
         for service in range(len(RELIABILITY))
@@ -149,40 +151,41 @@ def test_trusted_owner_votes_track_true_quality():
     assert mae < 0.15, f"owner-vote MAE {mae:.3f}"
 
 
-def test_published_scores_are_the_shrunk_posterior_of_those_votes():
-    """And the published score is exactly the Bayesian shrinkage of them —
-    deliberately short of the truth while few owners have voted, which is what
-    n_eff is published for."""
-    finals, _, _, _, n_effs, buckets = RESULT
+def test_published_scores_are_the_posterior_of_those_votes():
+    """And the published score is exactly 5 x P(quality > 3) under the Beta
+    posterior of those votes, whose mean is v3.1's Bayesian shrinkage of them
+    (docs/SCORING.md v4 §3.1)."""
+    finals, _, _, _, n_effs, buckets, means = RESULT
     for service in range(len(RELIABILITY)):
         votes = buckets[service]
         assert n_effs[service] == len(votes), service
         expected = (sum(b.rating for b in votes) + KAPPA * MU0) / (len(votes) + KAPPA)
-        assert abs(finals[service] - expected) < 1e-9, service
+        assert abs(means[service] - expected) < 1e-9, service
+        assert abs(finals[service] - score_from_votes([(1.0, b.rating) for b in votes])[0]) < 1e-9, service
         # Shrinkage is towards the prior, never past the evidence.
-        assert min(MU0, TARGETS[service]) - 0.3 <= finals[service] <= max(MU0, TARGETS[service]) + 0.3
+        assert min(MU0, TARGETS[service]) - 0.3 <= means[service] <= max(MU0, TARGETS[service]) + 0.3
 
 
 def test_published_scores_rank_services_by_true_quality():
-    finals, _, _, _, _, _ = RESULT
+    finals, *_ = RESULT
     ranked = sorted(range(N_REAL), key=lambda s: -finals[s])
     assert ranked == list(range(N_REAL)), finals
 
 
 def test_no_adversary_ever_gains_weight():
-    _, _, max_adversary_weight, _, _, _ = RESULT
+    _, _, max_adversary_weight, *_ = RESULT
     assert max_adversary_weight == 0.0
 
 
 def test_honest_owners_earn_weight_despite_the_adversarial_majority():
-    _, trust, _, crossed, _, _ = RESULT
+    _, trust, _, crossed, *_ = RESULT
     assert crossed == {"seed", "hon0", "hon1", "hon2"}
     for name in crossed:
         assert effective_weight(trust[name]) > 0
 
 
 def test_trust_propagates_to_services_the_seed_never_reviewed():
-    _, _, _, _, n_effs, buckets = RESULT
+    _, _, _, _, n_effs, buckets, _ = RESULT
     for service in range(N_REAL):
         if service in SEEDED:
             continue
@@ -196,7 +199,7 @@ def test_trust_propagates_to_services_the_seed_never_reviewed():
 
 
 def test_wash_traded_scam_service_is_not_lifted():
-    finals, trust, _, _, n_effs, _ = RESULT
+    finals, trust, _, _, n_effs, *_ = RESULT
     # 5 pumper owners x 100 rounds = 500 five-star reviews on their own service,
     # every one of them a real judged hosted purchase, and none of them counted.
     for i in range(5):

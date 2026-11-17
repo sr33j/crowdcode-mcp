@@ -63,10 +63,11 @@ def public_reviews(alias: str = "") -> str:
 
 
 def weighted_reviews(alias: str = "") -> str:
-    """The ranking-weighted subset: a verified hosted gateway receipt whose
-    owner was neither self-dealing nor paying dust (docs/SCORING.md §3.6)."""
+    """The ranking-weighted subset (docs/SCORING.md v4 §3.2): a verified hosted
+    gateway receipt, or a paid review verified on chain, whose payer was
+    neither self-dealing nor paying dust."""
     p = _prefix(alias)
-    return f"({p}weight_basis = 'hosted' and {p}weight_exclusion is null)"
+    return f"({p}weight_basis in ('hosted', 'onchain') and {p}weight_exclusion is null)"
 
 
 def legacy_reviews(alias: str = "") -> str:

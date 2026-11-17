@@ -341,7 +341,7 @@ def test_two_agents_of_one_owner_are_one_vote(hosted):
     assert score["num_weighted_reviews"] == 2
     # Two weighted reviews, one trusted owner, one vote.
     assert score["n_eff"] == pytest.approx(1.0, abs=0.001)
-    assert score["score"] == pytest.approx((5 + 2 * 3.0) / 3, abs=0.001)
+    assert score["score"] == pytest.approx(3.75, abs=0.001)
 
 
 def test_a_review_of_a_service_its_own_owner_is_paid_by_carries_no_weight(hosted):
@@ -362,7 +362,7 @@ def test_a_review_of_a_service_its_own_owner_is_paid_by_carries_no_weight(hosted
     assert score["num_reviews"] == 1
     assert score["num_weighted_reviews"] == 0
     assert score["n_eff"] == 0.0
-    assert score["score"] == 3.0
+    assert score["score"] == 2.5
     # A different owner's payee is fine.
     tx2 = tx_hash("b2")
     ok = review(wallet=wallet("43"), tx=tx2, rating=5,
@@ -447,7 +447,7 @@ def test_trust_is_earned_per_owner_not_per_wallet(hosted):
     score = server_mod.get_service_score(api_endpoint=ENDPOINT)
     assert score["num_weighted_reviews"] == 3
     assert score["n_eff"] == 0.0
-    assert score["score"] == 3.0
+    assert score["score"] == 2.5
 
 
 def test_unsigned_placeholder_reviews_are_never_published(hosted):

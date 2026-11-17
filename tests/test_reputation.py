@@ -104,10 +104,13 @@ def test_recompute_stores_the_canonical_score():
     result = recompute_service_score(conn, "svc_1", NOW)
     # one trusted owner vote
     assert result.n_eff == 1.0
-    assert result.score == (1.0 * 5 + KAPPA * MU0) / (1.0 + KAPPA)
+    assert result.mean == (1.0 * 5 + KAPPA * MU0) / (1.0 + KAPPA)
+    assert abs(result.score - 3.75) < 1e-9
 
     update = conn.executed("update services")[0]
-    assert update[1] == (result.score, result.n_eff, 0.0, result.n_eff, NOW, "svc_1")
+    assert update[1] == (result.score, result.mean, result.n_eff, 0.0, result.n_eff, 0.0, 0.0,
+                         result.p_above_3, result.avg_rating_weighted, result.alpha, result.beta,
+                         NOW, "svc_1")
 
 
 def test_untrusted_owners_leave_the_service_at_the_prior():
@@ -125,7 +128,8 @@ def test_untrusted_owners_leave_the_service_at_the_prior():
         }
     )
     result = recompute_service_score(conn, "svc_1", NOW)
-    assert result.score == MU0
+    assert result.mean == MU0
+    assert result.score == 2.5
     assert result.n_eff == 0.0
 
 
@@ -145,7 +149,7 @@ def test_recompute_restores_a_pre_cutover_score_from_frozen_wallet_trust():
     # seed 1.0 x onchain 2.0 — v2's number, unchanged.
     assert result.n_eff_legacy == 2.0
     assert result.n_eff_hosted == 0.0
-    assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA) == 4.0
+    assert result.mean == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA) == 4.0
 
 
 def test_community_reviews_from_a_seed_owner_still_weigh_nothing():
@@ -160,7 +164,8 @@ def test_community_reviews_from_a_seed_owner_still_weigh_nothing():
         }
     )
     result = recompute_service_score(conn, "svc_1", NOW)
-    assert result.score == MU0
+    assert result.mean == MU0
+    assert result.score == 2.5
     assert result.n_eff == 0.0
 
 

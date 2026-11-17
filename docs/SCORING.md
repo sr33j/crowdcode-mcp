@@ -1,7 +1,40 @@
-# CrowdCode Scoring & Reputation — Design Doc (v3.1)
+# CrowdCode Scoring & Reputation — Design Doc (v4)
 
-Status: **implemented (`crowdcode-scoring-v3.1`); deployment requires a score replay**
-Updated: 2026-10-23
+Status: **implemented (`crowdcode-scoring-v4`); deployment requires a score replay**
+Updated: 2026-11-17
+
+**What v4 changed (SRI-118, owner decisions of 2026-11-17).** Reviews of
+services that were actually good were being shown, and ranked, as mediocre.
+One verified 5-star review of Financial Datasets displayed as 2.25 (a delivery
+prior of 0.75 × a quality stuck at the 3.0 prior), and its eight paid,
+on-chain-verified reviews weighed nothing. So:
+
+1. **The score is `min(weighted average rating, 5 × P(quality > 3))`** (§3.1).
+   P(quality > 3) is the probability, under a Beta posterior with a uniform
+   prior, that a vote beats a 3. The probability keeps one review from looking
+   excellent, and the average keeps a pile of 4-star reviews from looking like
+   a 5. A service with no weighted evidence is **unrated**; it sorts at 2.5.
+2. **Paid reviews verified on chain are votes**, weighing the same as a hosted
+   judged purchase (1.0), one per paying wallet per service, behind the guards
+   in §3.2. Unverified community reviews still weigh 0.
+3. **A signed failed purchase is a 1-star observation** (§3.1).
+4. **This is the one score shown everywhere**: the rankings, service pages,
+   `/api/services`, `get_service_score`, find_service, the capability tree and
+   reliability-v2. Reliability-v2's delivery estimate and outside popularity
+   (Bazaar payers, the curated catalog) decide tiers, tie-breaks and the
+   exploration allowance, never the score.
+5. **Providers.** Endpoints of one seller are grouped into one provider whose
+   score pools their evidence exactly (`crowdcode.providers`).
+
+The posterior mean `1 + 4·α/(α+β)` of the review votes alone is exactly v3.1's
+shrunk mean (κ = 2, μ₀ = 3). It is still published as `score_mean`, owner
+trust is still computed from it (so trust did not move), and the payment
+floors that refuse a service "below 2" compare it, not `score`: on the
+2026-11-17 corpus, comparing `score` with 2 would have newly refused 35
+services that real reviews put above it, Alchemy and stableenrich.dev among
+them.
+
+The text below is v3.1's, amended where v4 changed it.
 Regression simulation: `tests/test_scoring_sim.py` (deterministic, seed=42).
 Admission and manipulation scenarios: `tests/test_hosted_attestation.py`.
 The figures and sweep results in §6 are historical v1 evidence from
@@ -92,16 +125,40 @@ backtest — accuracy is a number we report, not a claim we make.
 ### 3.1 Score (per resource)
 
 ```
-score(s) = ( Σᵢ wᵢ·rᵢ + κ·μ₀ ) / ( Σᵢ wᵢ + κ )
+sᵢ = (rᵢ − 1) / 4                         goodness of vote i, in [0, 1]
+α  = 1 + Σᵢ wᵢ·sᵢ        β = 1 + Σᵢ wᵢ·(1 − sᵢ)        prior Beta(1, 1)
+P(>3) = P(θ > ½ | α, β) = 1 − I_½(α, β)    (I: regularized incomplete beta)
+avg   = Σᵢ wᵢ·rᵢ / Σᵢ wᵢ
+score = min(avg, 5 × P(>3))               with no evidence: unrated, sorts at 2.5
 ```
 
-- `rᵢ` — rating (1–5) of review i on resource s
-- `wᵢ` — weight of review i (below)
-- `κ = 2` — prior strength in pseudo-reviews
-- `μ₀ = 3.0` — public prior mean. It is fixed, not automatically fitted.
+- `rᵢ` — rating (1–5) of vote i on resource s. A signed failed purchase
+  (`seller_error`, `seller_rejected`, `no_receipt`, `authorization_expired`) is
+  a vote with r = 1 and weight 1 × decay.
+- `wᵢ` — weight of vote i (§3.2).
+- θ is the probability that a vote is good, so the expected rating is 1 + 4θ
+  and "better than a 3" is θ > ½.
 
-Published alongside the score: `n_eff = Σᵢ wᵢ`. A resource with `n_eff ≈ 0`
-must display as **unproven at the prior**, never as a starred rating.
+| votes (w = 1) | avg | 5 × P(>3) | score |
+|---|---|---|---|
+| none | — | 2.50 | unrated (sorts at 2.50) |
+| one 5★ | 5.00 | 3.75 | **3.75** |
+| one 4★ | 4.00 | 3.15 | **3.15** |
+| one 1★ | 1.00 | 1.25 | **1.00** |
+| two 5★ | 5.00 | 4.37 | **4.37** |
+| ten 4★ | 4.00 | 4.68 | **4.00** |
+| a 5★ and a 1★ | 3.00 | 2.50 | **2.50** |
+| twenty 3★ | 3.00 | 2.50 | **2.50** |
+| ten 2★ | 2.00 | 0.32 | **0.32** |
+| Financial Datasets' 8 (4,4,5,5,4,3,5,4) | 4.25 | 4.77 | **4.25** |
+
+Published alongside it: `avg_rating_weighted`, `p_above_3`, `rated`,
+`score_mean` (the review posterior mean, v3.1's number), `n_eff = Σᵢ wᵢ` over
+review votes and its parts (`n_eff_hosted`, `n_eff_onchain`, `n_eff_legacy`,
+`n_eff_failures`). Below one unit of evidence a score is labelled **early**,
+shown with its raw average and count ("5★ from 1 verified review"), never
+hidden. `I` is computed by continued fraction in `crowdcode.scoring` and agrees
+with `scipy.special.betainc` to 1e-12.
 
 The index `i` is an **owner/service** bucket, not an individual call and no
 longer a calendar day: **one vote per owner per service**, however many agents,
@@ -117,14 +174,34 @@ of multiplying it.
 wᵢ = weight(owner) × proof(i) × decay(Δtᵢ)
 ```
 
-- `proof(i)` — 1.0 for a weighted review, 0 for everything else:
+- `proof(i)` — by kind of evidence, configuration rather than code
+  (`CROWDCODE_WEIGHT_HOSTED`, `CROWDCODE_WEIGHT_ONCHAIN`,
+  `CROWDCODE_WEIGHT_FAILURE`; a consistency sweep republishes every score):
 
-  | level | multiplier | what it proves |
-  |---|---|---|
-  | `response_attested` | 1 | a gateway receipt binding this payment to the exact request and response, plus a platform-judge verdict (§3.6) — the tier this column always reserved, now issued |
-  | `onchain_verified` | 0 | an on-chain transfer to the service payee. Still verified, still displayed, no ranking weight: it proves money moved, not what was bought |
-  | `signature_only` | 0 | a wallet signature over the review |
-  | `unverified` | 0 | nothing beyond admission; never published at all |
+  | evidence | weight | one vote per | what it proves |
+  |---|---|---|---|
+  | hosted judged purchase (`response_attested`, `weight_basis = 'hosted'`) | 1.0 | owner per service | a gateway receipt binding the payment to the exact request and response, plus a platform-judge verdict (§3.6) |
+  | paid review verified on chain (`onchain_verified`, `weight_basis = 'onchain'`) | 1.0 | paying wallet per service, or its owner's when the wallet is a known hosted agent's | an on-chain transfer of pinned USDC from the reviewer's wallet to the service's payee |
+  | signed failed purchase | 1.0 (as a 1★) | each failure | the gateway's signed record that a paid call failed before delivery |
+  | `signature_only`, `unverified` | 0 | — | a wallet signature at most |
+
+  **Guards on an on-chain vote** (write path, `reputation.onchain_weight_exclusion`;
+  `scripts/backfill_onchain_votes.py` applies them to older rows):
+  - the payer is not the payee (`self_dealing`), nor a wallet of the hosted
+    account the payee belongs to, as gateway receipts record it (an agent
+    wallet's `owner_ref`, a payee's `payee_owner_ref`) (`self_dealing`);
+  - at least `CROWDCODE_MIN_WEIGHTED_AMOUNT_ATOMIC` ($0.001) paid
+    (`dust_payment`);
+  - one vote per paying wallet per service, and an owner whose hosted vote
+    already counts gets no second one through an agent wallet;
+  - trust only removes weight: a paying wallet nobody has penalized counts
+    `CROWDCODE_ONCHAIN_DEFAULT_TRUST` (1.0); a slashed wallet or owner, or one
+    whose trust is negative, weighs 0. A wallet is free to create, so the vote
+    is bounded by the payment and the payee checks, not by earned trust.
+  - Not done: a cap per funding-source cluster. The funder of a wallet is its
+    first inbound USDC transfer, and exchange hot wallets fund many unrelated
+    people; capping by funder would merge them. It needs a funder allowlist
+    to be safe, and is left for when sybil votes are seen.
 
   v2 priced *how much a payment claim proved* (1× signed, 2× on-chain). v3 has
   nothing left to price: a review either clears the hosted-receipt gate or
@@ -430,8 +507,9 @@ cutover: all 15 reproduce to within 0.003, every residual being time decay.
 
 | Param | Value | Meaning | How chosen |
 |---|---|---|---|
-| κ | 2 | prior pseudo-reviews | sweep (§6.4) |
-| μ₀ | 3.0 | public service prior mean | operator choice |
+| prior | Beta(1, 1) | uniform prior on θ; its mean is κ = 2 pseudo-reviews at μ₀ = 3.0 | owner decision, v4 |
+| score | min(avg, 5·P(θ>½)) | published score | owner decision, v4 |
+| hosted / on-chain / failure weight | 1.0 / 1.0 / 1.0 (as 1★) | evidence weights | owner decision, v4 |
 | trust μ₀ | 3.0 | internal reputation consensus prior | preserves v1 trust |
 | η | 0.02 | trust learning rate | sweep — larger values caused honest-wallet flicker and let random walkers transiently cross θ |
 | cap | 1.0 | max non-seed raw trust | sweep — the wide cap→θ gap keeps honest wallets far from the zero-weight cliff |

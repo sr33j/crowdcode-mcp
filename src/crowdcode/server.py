@@ -43,7 +43,9 @@ from crowdcode.identity import (
     resolve_service,
 )
 from crowdcode.payee_hints import PayeeHint, payee_hint
+from crowdcode.providers import group as group_providers, provider_key
 from crowdcode.payments import (
+    LEVEL_ONCHAIN_VERIFIED,
     LEVEL_RESPONSE_ATTESTED,
     REASON_HASH_RE,
     PaymentVerification,
@@ -73,6 +75,7 @@ from crowdcode.receipts import evaluate_attestation, published_keys
 from crowdcode.reputation import (
     ensure_owner,
     ensure_user,
+    onchain_weight_exclusion,
     recompute_service_score,
     sync_seed_owners,
 )
@@ -81,8 +84,42 @@ logger = logging.getLogger(__name__)
 from crowdcode.scoring import (
     ALGORITHM as SCORE_ALGORITHM,
     as_float,
+    is_early,
     is_unproven,
 )
+
+# The stored score columns every score payload reads (docs/SCORING.md v4).
+SCORE_COLUMNS = (
+    "score, score_mean, n_eff, n_eff_legacy, n_eff_hosted, n_eff_onchain, n_eff_failures, "
+    "p_above_3, avg_rating_weighted, score_alpha, score_beta"
+)
+
+
+def _score_fields(row: dict[str, Any] | None) -> dict[str, Any]:
+    """The published score and what it rests on. `score` is
+    min(avg_rating_weighted, 5 × p_above_3); without weighted evidence it is
+    2.5, a sort key, and `rated` is false (show "unrated"). `score_mean` is
+    the review posterior mean (v3.1's number) that payment floors compare
+    against 2: clients read `score_mean` and fall back to `score`."""
+    row = row or {}
+    n_eff = as_float(row.get("n_eff")) or 0.0
+    failures = as_float(row.get("n_eff_failures")) or 0.0
+    average = as_float(row.get("avg_rating_weighted"))
+    p = as_float(row.get("p_above_3"))
+    return {
+        "score": as_float(row.get("score")),
+        "rated": average is not None,
+        "avg_rating_weighted": average,
+        "p_above_3": p,
+        "score_mean": as_float(row.get("score_mean")),
+        "n_eff": n_eff,
+        "unproven": is_unproven(n_eff),
+        "early": is_early(n_eff + failures),
+        "n_eff_legacy": as_float(row.get("n_eff_legacy")) or 0.0,
+        "n_eff_hosted": as_float(row.get("n_eff_hosted")) or 0.0,
+        "n_eff_onchain": as_float(row.get("n_eff_onchain")) or 0.0,
+        "n_eff_failures": failures,
+    }
 from crowdcode.proposals import CACHE_KEY as PROPOSALS_CACHE_KEY
 from crowdcode.proposals import PAYLOAD_VERSION as PROPOSALS_VERSION
 from crowdcode.proposals import as_project_ideas
@@ -444,6 +481,11 @@ def get_service_score(
     transfers, deposits, withdrawals, staking, lending, escrow settlement, or
     purchases of financial instruments. Identify the service by service_id,
     api_endpoint, payment target, or directory_slug.
+
+    `score` (0-5) is the lower of the weighted average paid rating
+    (`avg_rating_weighted`) and 5 x `p_above_3`, how likely the service is to
+    be better than a 3. `rated: false` means no paid ratings yet (score 2.5 is
+    only a sort key); `early: true` means less than one rating's evidence.
     """
     try:
         identity = build_identity(
@@ -478,12 +520,11 @@ def get_service_score(
             (service["id"],),
         ).fetchone()
         stored = conn.execute(
-            "select score, n_eff, n_eff_legacy, n_eff_hosted, review_summary from services where id = %s",
+            f"select {SCORE_COLUMNS}, review_summary from services where id = %s",
             (service["id"],),
         ).fetchone()
 
     canonical_score = as_float(stored["score"]) if stored else None
-    n_eff = as_float(stored["n_eff"]) if stored else 0.0
     return {
         "service_id": service["id"],
         "service_name": service["name"],
@@ -499,9 +540,7 @@ def get_service_score(
             "directory_slug": resolved.identity.directory_slug,
         },
         "found": True,
-        "score": canonical_score,
-        "n_eff": n_eff,
-        "unproven": is_unproven(n_eff or 0.0),
+        **_score_fields(stored),
         "score_algorithm": SCORE_ALGORITHM,
         "avg_rating": as_float(score["avg_rating"]),
         "num_reviews": score["num_reviews"],
@@ -514,10 +553,6 @@ def get_service_score(
         "num_legacy_reviews": score["num_legacy_reviews"],
         "num_community_reviews": score["num_community_reviews"],
         "weighted_avg_rating": as_float(score["weighted_avg_rating"]),
-        # The two eras behind n_eff: frozen pre-cutover evidence, and trusted
-        # owner votes from judged hosted purchases.
-        "n_eff_legacy": as_float(stored["n_eff_legacy"]) if stored else 0.0,
-        "n_eff_hosted": as_float(stored["n_eff_hosted"]) if stored else 0.0,
         "verified_avg_rating": as_float(score["verified_avg_rating"]),
         # Deprecated alias of the canonical score, kept so pre-0.3.0 clients
         # silently upgrade instead of reading a dead formula.
@@ -573,8 +608,13 @@ def _score_not_found(service_id: str | None, reason: str) -> dict[str, Any]:
         "service_id": service_id,
         "found": False,
         "score": None,
+        "rated": False,
+        "avg_rating_weighted": None,
+        "p_above_3": None,
+        "score_mean": None,
         "n_eff": 0,
         "unproven": True,
+        "early": True,
         "score_algorithm": SCORE_ALGORITHM,
         "avg_rating": None,
         "num_reviews": 0,
@@ -990,6 +1030,18 @@ def review_service(
             # The legacy unsigned admission path (stripe/manual placeholders).
             # Stored for continuity, never published, never weighted.
             weight_exclusion = "unsigned_placeholder"
+        elif (verification.payment_verified and verification.reviewer_wallet
+              and verification.payment_verification_level == LEVEL_ONCHAIN_VERIFIED):
+            # A paid review verified on chain outside the hosted gateway is a
+            # vote (docs/SCORING.md v4 §3.2) unless its payer is the payee or
+            # the payee's own account, or it paid dust.
+            weight_exclusion = onchain_weight_exclusion(
+                conn,
+                wallet=verification.reviewer_wallet,
+                payee=effective_identity.payment_target_ref,
+                amount=verification.amount,
+                min_amount_atomic=get_settings().min_weighted_amount_atomic,
+            )
 
         # Only a successfully verified payer may claim the globally unique
         # canonical transaction reference. This check intentionally runs
@@ -1135,8 +1187,9 @@ def review_service(
                     attested.kid if attested else None,
                     Jsonb(_attestation_record(gateway_attestation)) if attested else None,
                     # Only the pre-cutover backfill writes 'legacy'; a review
-                    # submitted now is weighed by the hosted rules or not at all.
-                    "hosted" if (attested and weight_exclusion is None) else "none",
+                    # submitted now is a hosted judged vote, an on-chain vote,
+                    # or weighs nothing.
+                    _weight_basis(attested is not None, weight_exclusion),
                 ),
             ).fetchone()
 
@@ -1180,12 +1233,19 @@ def review_service(
         # A review names an endpoint, not what it does: read that from the
         # service's own 402, OpenAPI or landing page, off the request path.
         fill_in_background([service["id"]])
-    if attested is not None:
-        # A judged purchase is delivery evidence (C3): refresh the service's
-        # reliability now rather than at the next hourly recompute.
+    if attested is not None or weight_exclusion is None:
+        # A judged purchase is delivery evidence (C3), and any weighted vote
+        # moves the one score (v4): refresh the service's reliability now
+        # rather than at the next hourly recompute.
         reliability.recompute_in_background(connect, service["id"])
     return _review_accepted(service["id"], row["id"], verification, service_created,
                             weight_exclusion, attested is not None)
+
+
+def _weight_basis(attested: bool, weight_exclusion: str | None) -> str:
+    if weight_exclusion is not None:
+        return "none"
+    return "hosted" if attested else "onchain"
 
 
 def _payee_hint(identity: ServiceIdentity) -> PayeeHint | None:
@@ -1251,6 +1311,7 @@ def _review_accepted(service_id: str, review_id: int, verification: PaymentVerif
         "verified_source": "hosted_receipt" if attested else "community",
         "counts_towards_ranking": weight_exclusion is None,
         "weight_exclusion": weight_exclusion,
+        "weight_basis": _weight_basis(attested, weight_exclusion),
     }
 
 
@@ -1364,10 +1425,9 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
           s.payment_provider,
           s.metadata->>'description' as description,
           s.metadata->>'crowdcode_service_id' as crowdcode_service_id,
-          s.score,
-          s.n_eff,
-          s.n_eff_legacy,
-          s.n_eff_hosted,
+          s.score, s.score_mean, s.n_eff, s.n_eff_legacy, s.n_eff_hosted, s.n_eff_onchain,
+          s.n_eff_failures, s.p_above_3, s.avg_rating_weighted, s.score_alpha, s.score_beta,
+          s.canonical_origin,
           (s.review_summary->>'version' = '{SUMMARY_VERSION}') as has_summary,
           {{reliability_columns}}
           {review_counts('r')}
@@ -1402,9 +1462,7 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "canonical_endpoint": row.get("canonical_endpoint"),
             "payment_provider": row.get("payment_provider"),
             "crowdcode_service_id": row.get("crowdcode_service_id"),
-            "score": as_float(row["score"]),
-            "n_eff": as_float(row["n_eff"]),
-            "unproven": is_unproven(as_float(row["n_eff"]) or 0.0),
+            **_score_fields(row),
             "has_summary": bool(row["has_summary"]),
             "avg_rating": as_float(row["avg_rating"]),
             "num_reviews": row["num_reviews"],
@@ -1415,13 +1473,15 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
             "num_legacy_reviews": row["num_legacy_reviews"],
             "num_community_reviews": row["num_community_reviews"],
             "weighted_avg_rating": as_float(row["weighted_avg_rating"]),
-            "n_eff_legacy": as_float(row["n_eff_legacy"]) or 0.0,
-            "n_eff_hosted": as_float(row["n_eff_hosted"]) or 0.0,
             # Deprecated alias of the canonical score (pre-scoring-v1 field).
             "rank_score": as_float(row["score"]),
-            # reliability-v2 (C10): the tier and the one score CrowdCode's pages show
-            # (delivery estimate x quality). `score` above stays the v3.1 review
-            # score, the quality input, because clients validate it as 2-5.
+            # The Beta behind `score`, so endpoints pool into a provider exactly.
+            "score_alpha": as_float(row.get("score_alpha")),
+            "score_beta": as_float(row.get("score_beta")),
+            "provider_key": provider_key(row.get("canonical_endpoint"), row.get("canonical_origin")),
+            # reliability-v2 (C10): the tier, and since scoring v4 a
+            # reliability_score equal to `score` (the delivery estimate decides
+            # the tier only).
             "tier": row.get("tier") or "new",
             "reliability_score": as_float(row.get("reliability_score")),
             "reliability_state": row.get("reliability_state") or "unverified",
@@ -1429,9 +1489,15 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
         }
         for row in rows
     ]
+    providers = group_providers(services)
+    names = {p["provider_key"]: p["name"] for p in providers}
+    for service in services:
+        service["provider_name"] = names.get(service["provider_key"])
     return {
         "ok": True,
         "services": services,
+        # One row per seller with its endpoints underneath (SRI-118).
+        "providers": providers,
         "stats": {
             "num_services": len(services),
             "total_reviews": sum(s["num_reviews"] for s in services),
@@ -1442,9 +1508,9 @@ def _top_services_payload(limit: int | None = 10) -> dict[str, Any]:
 def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
     with connect() as conn:
         service = conn.execute(
-            """
+            f"""
             select id, name, directory_slug, canonical_endpoint,
-                   payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
+                   payment_provider, {SCORE_COLUMNS},
                    review_summary, metadata->>'description' as description,
                    metadata->>'crowdcode_service_id' as crowdcode_service_id
             from services
@@ -1515,9 +1581,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             "crowdcode_service_id": service.get("crowdcode_service_id"),
         },
         **networks,
-        "score": as_float(service["score"]),
-        "n_eff": n_eff,
-        "unproven": is_unproven(n_eff),
+        **_score_fields(service),
         "score_algorithm": SCORE_ALGORITHM,
         "tier": service.get("tier") or "new",
         "reliability_score": as_float(service.get("reliability_score")),
@@ -1530,8 +1594,6 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         "num_legacy_reviews": counts["num_legacy_reviews"],
         "num_community_reviews": counts["num_community_reviews"],
         "weighted_avg_rating": as_float(counts["weighted_avg_rating"]),
-        "n_eff_legacy": as_float(service["n_eff_legacy"]) or 0.0,
-        "n_eff_hosted": as_float(service["n_eff_hosted"]) or 0.0,
         "histogram": histogram,
         "weighted_histogram": weighted_histogram,
         # The reviews behind these numbers stay private; the summary is the
@@ -1549,7 +1611,7 @@ def _knowledge_evidence_payload() -> dict[str, Any]:
         services = conn.execute(
             f"""
             select id, name, directory_slug, canonical_endpoint,
-                   payment_provider, score, n_eff, n_eff_legacy, n_eff_hosted,
+                   payment_provider, {SCORE_COLUMNS},
                    review_summary
             from services
             where {directory_listed()}
@@ -1588,9 +1650,7 @@ def _knowledge_evidence_payload() -> dict[str, Any]:
                 "directory_slug": service.get("directory_slug"),
                 "canonical_endpoint": service.get("canonical_endpoint"),
                 "payment_provider": service.get("payment_provider"),
-                "score": as_float(service["score"]),
-                "n_eff": n_eff,
-                "unproven": is_unproven(n_eff),
+                **_score_fields(service),
                 "num_reviews": row.get("num_reviews", 0),
                 "num_verified_reviews": row.get("num_verified_reviews", 0),
                 "num_weighted_reviews": row.get("num_weighted_reviews", 0),

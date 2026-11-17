@@ -349,14 +349,31 @@ def evaluate(inputs: dict[str, Any]) -> dict[str, Any]:
     # Quality and the one score.
     q = inputs.get("quality") or {}
     quality = quality_for(q)
-    score = mean * quality
     prior_rating = _dec(q.get("prior_rating")) or QUALITY_DEFAULT_PRIOR
     v31 = _dec(q.get("v31_score"))
     n_eff = _dec(q.get("n_eff")) or Decimal(0)
-    rating_part = (f"judge ratings {_r(v31)} over {_r(n_eff, 1)} weighted reviews (review score v3.1)"
-                   if v31 is not None and n_eff > 0 else "no weighted ratings yet")
-    score_reason = (f"score {_r(score)} = delivery {_r(mean)} × quality {_r(quality)}: {rating_part}, shrunk to "
-                    f"{_r(prior_rating, 1)} from {q.get('prior_source') or 'the default prior'}")
+    review_score = _dec(q.get("review_score"))
+    if review_score is not None:
+        # Scoring v4 (SRI-118, owner 2026-11-17): the one score shown is the
+        # review score, min(weighted average, 5 × P(better than a 3)), with
+        # failed purchases as 1-star observations. Outside popularity and the
+        # delivery estimate decide the tier, never the score.
+        score = review_score
+        average = _dec(q.get("avg_rating_weighted"))
+        p = _dec(q.get("p_above_3"))
+        if average is None:
+            score_reason = "unrated: no weighted reviews or failed purchases yet (sorted as 2.50)"
+        else:
+            score_reason = (f"score {_r(score)} = the lower of the weighted average rating {_r(average)} and "
+                            f"5 × P(better than a 3) = 5 × {_r(p or Decimal(0))}; the delivery estimate decides "
+                            "the tier only")
+    else:
+        # Inputs published before v4 still recompute to what they said.
+        score = mean * quality
+        rating_part = (f"judge ratings {_r(v31)} over {_r(n_eff, 1)} weighted reviews (review score v3.1)"
+                       if v31 is not None and n_eff > 0 else "no weighted ratings yet")
+        score_reason = (f"score {_r(score)} = delivery {_r(mean)} × quality {_r(quality)}: {rating_part}, shrunk to "
+                        f"{_r(prior_rating, 1)} from {q.get('prior_source') or 'the default prior'}")
 
     if n_judged >= BAD_MIN_JUDGED and mean < BAD_MEAN_BELOW:
         bad.append(f"delivery estimate mean {_r(mean)} is below {BAD_MEAN_BELOW} after "
@@ -538,7 +555,12 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
     params["resources"] = resources
 
     flags = {r["id"]: r for r in conn.execute(
-        "select id, payee_rotates, payment_target_ref, created_at, score, n_eff from services where id = any(%(services)s)",
+        # score_mean is the review score's posterior mean, v3.1's shrunk mean
+        # exactly (scoring v4 publishes 5 × P(>3) as `score`); before the v4
+        # replay fills it, `score` still is that mean.
+        "select id, payee_rotates, payment_target_ref, created_at, coalesce(score_mean, score) as score, n_eff, "
+        "score as review_score, avg_rating_weighted, p_above_3, score_mean is not null as v4 "
+        "from services where id = any(%(services)s)",
         params).fetchall()}
     # Each registered payee with when CrowdCode first knew it: only a payee known
     # before a change can excuse that change.
@@ -697,7 +719,10 @@ def gather(conn: psycopg.Connection, as_of: datetime, service_ids: Iterable[str]
             },
             "failures_30d": failures.get(sid, {"total": 0, "test": 0, "by": {}}),
             "quality": {"v31_score": flag.get("score"), "n_eff": flag.get("n_eff"),
-                        "prior_rating": prior_rating, "prior_source": prior_source},
+                        "prior_rating": prior_rating, "prior_source": prior_source,
+                        **({"review_score": flag.get("review_score"),
+                            "avg_rating_weighted": flag.get("avg_rating_weighted"),
+                            "p_above_3": flag.get("p_above_3")} if flag.get("v4") else {})},
             "external_payers_30d": external.get(sid, 0),
         })
     return out

@@ -82,7 +82,7 @@ def test_sweep_applies_one_trust_event_per_owner_and_service(monkeypatch):
     # Two owners voted, but only the seed has trust, so the score rests on
     # exactly one vote. This is also the one-vote cap in action: the honest
     # owner's two reviews, from two wallets on two days, are one event.
-    assert abs(conn.executed("set score = %s, n_eff")[0][1][1] - 1.0) < 0.01
+    assert abs(conn.executed("set score = %s, score_mean = %s, n_eff")[0][1][2] - 1.0) < 0.01
 
 
 def test_sweep_ignores_community_reviews_entirely(monkeypatch):
@@ -114,9 +114,10 @@ def test_sweep_ignores_community_reviews_entirely(monkeypatch):
     )
     monkeypatch.setattr(cron, "connect", lambda: _fake_connect(conn))
     cron.run_consistency_sweep(NOW)
-    score, n_eff = conn.executed("set score = %s, n_eff")[0][1][:2]
+    score, mean, n_eff = conn.executed("set score = %s, score_mean = %s, n_eff")[0][1][:3]
     assert abs(n_eff - 1.0) < 0.01
-    assert abs(score - (5 + 2 * MU0) / 3) < 0.01
+    assert abs(mean - (5 + 2 * MU0) / 3) < 0.01
+    assert abs(score - 3.75) < 0.01
     assert {q[1][0] for q in conn.executed("update review_owners set raw_trust")} == {0.0}
     # Only owners behind weighted reviews are registered at all.
     assert {q[1][0] for q in conn.executed("insert into review_owners")} == {SEED_OWNER}

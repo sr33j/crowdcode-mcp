@@ -72,7 +72,8 @@ DEFAULT_NETWORKS = ("base", "solana", "tempo")
 TRANSFER_COST_USD = 0.03
 # Services rated below this with real evidence are refused by OpenCrowd's gateway.
 SCORE_FLOOR = 2.0
-PRIOR_SCORE = 3.0
+# An unrated service's sort key: 5 x P(>3) with no evidence (scoring v4).
+PRIOR_SCORE = 2.5
 # Within a quality band, services that several distinct payers used recently rank first.
 ADOPTED_PAYERS = 3
 
@@ -462,13 +463,13 @@ def evidence_by_endpoint(conn: psycopg.Connection, endpoints: list[str]) -> dict
           union
           select s.canonical_endpoint, s.id from services s where s.canonical_endpoint = any(%s)
         )
-        select m.endpoint, s.id as service_id, s.score, s.n_eff,
+        select m.endpoint, s.id as service_id, s.score, s.score_mean, s.n_eff,
                count(r.id)::int as num_reviews,
                count(r.id) filter (where r.payment_verified)::int as num_verified_reviews
         from matched m
         join services s on s.id = m.service_id
         left join reviews r on r.service_id = s.id
-        group by m.endpoint, s.id, s.score, s.n_eff
+        group by m.endpoint, s.id, s.score, s.score_mean, s.n_eff
         """,
         (endpoints, endpoints),
     ).fetchall()
@@ -477,13 +478,17 @@ def evidence_by_endpoint(conn: psycopg.Connection, endpoints: list[str]) -> dict
 
 def quality(evidence: dict[str, Any] | None) -> dict[str, Any]:
     if not evidence:
-        return {"score": PRIOR_SCORE, "reviewed": False, "unproven": True, "n_eff": 0.0, "num_reviews": 0,
-                "num_verified_reviews": 0}
+        return {"score": PRIOR_SCORE, "floor_score": 3.0, "reviewed": False, "unproven": True, "n_eff": 0.0,
+                "num_reviews": 0, "num_verified_reviews": 0}
     score = as_float(evidence.get("score"))
     n_eff = as_float(evidence.get("n_eff")) or 0.0
+    # The payment floor compares the review posterior mean (v3.1's number)
+    # with 2, as every payer does; ranking uses the published score.
+    floor_score = as_float(evidence.get("score_mean"))
     return {
         "service_id": evidence.get("service_id"),
         "score": score if score is not None else PRIOR_SCORE,
+        "floor_score": floor_score if floor_score is not None else (score if score is not None else 3.0),
         "reviewed": (evidence.get("num_reviews") or 0) > 0,
         "unproven": is_unproven(n_eff),
         "n_eff": n_eff,
@@ -547,7 +552,7 @@ def rank(candidates: list[Candidate], evidence: dict[str, dict[str, Any]], netwo
         if best is None:
             continue  # nothing this payer can settle
         q = quality(evidence.get(candidate.endpoint))
-        below_floor = not q["unproven"] and q["score"] < SCORE_FLOOR
+        below_floor = not q["unproven"] and q["floor_score"] < SCORE_FLOOR
         adopted = (candidate.unique_payers or 0) >= ADOPTED_PAYERS
         strength = match_strength(candidate.keyword or 0.0, candidate.similarity) if by_meaning else None
         merit = quality_band(q) + (RELEVANCE_WEIGHT * relevance_band(strength) if strength is not None else 0.0)
@@ -631,12 +636,12 @@ _TIE_BREAKS = (
 )
 RANKING = (
     "Ranked by how well each service matches the request (its meaning and words; `match`, 0-1) together with "
-    "CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at the 3.0 prior): "
+    "CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at 2.5, unrated): "
     f"a full match is worth {RELEVANCE_WEIGHT:g} quality point(s), so a much closer match beats a somewhat better score "
     "and on a near-tie in match the better-reviewed service wins; " + _TIE_BREAKS
 )
 RANKING_BY_QUALITY = (
-    "Ranked by CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at the 3.0 prior); "
+    "Ranked by CrowdCode quality (canonical score in quarter-point bands; unreviewed services sit at 2.5, unrated); "
     + _TIE_BREAKS
 )
 

@@ -1,4 +1,4 @@
-"""Exact-value tests for the canonical scoring math (docs/SCORING.md v3.1)."""
+"""Exact-value tests for the canonical scoring math (docs/SCORING.md v4)."""
 
 from __future__ import annotations
 
@@ -89,7 +89,10 @@ def test_only_attested_hosted_reviews_carry_weight():
 
 def test_no_reviews_sits_at_the_prior():
     result = compute_score([], {}, NOW)
-    assert result.score == MU0 == 3.0
+    assert result.mean == MU0 == 3.0
+    # v4: no evidence is P(>3) = 1/2, published as 2.5.
+    assert result.score == 2.5
+    assert result.p_above_3 == 0.5
     assert result.n_eff == 0.0
     assert is_unproven(result.n_eff)
 
@@ -99,8 +102,10 @@ def test_single_weighted_seed_review():
     # "one trusted owner vote".
     result = compute_score([review("seed", 5)], {"seed": SEED}, NOW)
     assert result.n_eff == 1.0
-    assert result.score == (1.0 * 5 + KAPPA * MU0) / (1.0 + KAPPA)
-    assert math.isclose(result.score, 11.0 / 3.0)
+    assert result.mean == (1.0 * 5 + KAPPA * MU0) / (1.0 + KAPPA)
+    assert math.isclose(result.mean, 11.0 / 3.0)
+    # v4: Beta(2, 1), P(theta > 1/2) = 3/4.
+    assert math.isclose(result.score, 3.75)
     assert not is_unproven(result.n_eff)
 
 
@@ -141,7 +146,7 @@ def test_community_reviews_never_reach_a_score():
     reviews = [review(f"owner{i}", 5, exclusion="community") for i in range(1000)]
     trust = {r.owner_ref: SEED for r in reviews}
     result = compute_score(reviews, trust, NOW)
-    assert result.score == MU0
+    assert result.mean == MU0
     assert result.n_eff == 0.0
     assert aggregate_owner_reviews(reviews, NOW) == []
 
@@ -169,7 +174,7 @@ def test_many_zero_trust_owners_cannot_move_the_score():
     reviews = [review(f"owner{i:032x}", 5) for i in range(50)]
     trust = {r.owner_ref: TrustRow(raw_trust=0.0) for r in reviews}
     result = compute_score(reviews, trust, NOW)
-    assert result.score == MU0
+    assert result.mean == MU0
     assert result.n_eff == 0.0
 
 
@@ -189,7 +194,7 @@ def test_legacy_reviews_keep_the_weight_v2_gave_them():
     assert result.n_eff_legacy == 2.0
     assert result.n_eff_hosted == 0.0
     assert result.n_eff == 2.0
-    assert result.score == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA) == 4.0
+    assert result.mean == (2.0 * 5 + KAPPA * MU0) / (2.0 + KAPPA) == 4.0
 
 
 def test_legacy_keeps_v2s_proof_pricing_and_daily_cap():
@@ -236,7 +241,7 @@ def test_the_two_eras_sum_into_one_score():
     assert result.n_eff_legacy == 2.0
     assert result.n_eff_hosted == 1.0
     assert result.n_eff == 3.0
-    assert result.score == (2.0 * 5 + 1.0 * 1 + KAPPA * MU0) / (3.0 + KAPPA)
+    assert math.isclose(result.mean, (2.0 * 5 + 1.0 * 1 + KAPPA * MU0) / (3.0 + KAPPA))
 
 
 def test_a_legacy_wallet_with_no_frozen_trust_weighs_nothing():
@@ -289,12 +294,12 @@ def test_no_trust_moves_while_consensus_sits_at_the_trust_prior():
 def test_optimistic_public_prior_cannot_bootstrap_untrusted_owners():
     reviews = [review(f"owner{i}", 5) for i in range(50)]
     trust = {r.owner_ref: TrustRow(raw_trust=0.0) for r in reviews}
-    assert compute_score(reviews, trust, NOW, prior_mean=4.0).score == 4.0
+    assert compute_score(reviews, trust, NOW).score == 2.5
     for owner in trust:
         loo = compute_trust_consensus(reviews, trust, NOW, exclude_owner=owner)
-        assert loo.score == 3.0
+        assert loo.mean == 3.0
         assert loo.n_eff == 0.0
-        assert updated_raw_trust(0.0, loo.score, 5) == 0.0
+        assert updated_raw_trust(0.0, loo.mean, 5) == 0.0
 
 
 def test_trust_consensus_keeps_its_neutral_prior_with_real_seed_evidence():
@@ -302,9 +307,9 @@ def test_trust_consensus_keeps_its_neutral_prior_with_real_seed_evidence():
     trust = {"seed": SEED, "other": TrustRow(raw_trust=0.5)}
     public = compute_score(reviews, trust, NOW, exclude_owner="other")
     loo = compute_trust_consensus(reviews, trust, NOW, exclude_owner="other")
-    assert math.isclose(public.score, 11.0 / 3.0)
-    assert math.isclose(loo.score, 11.0 / 3.0)
-    assert math.isclose(trust_delta(loo.score, 5), ETA * math.log2(implied_p(loo.score) / 0.5))
+    assert math.isclose(public.mean, 11.0 / 3.0)
+    assert math.isclose(loo.mean, 11.0 / 3.0)
+    assert math.isclose(trust_delta(loo.mean, 5), ETA * math.log2(implied_p(loo.mean) / 0.5))
 
 
 def test_an_accurate_reviewer_gains_and_a_coin_flipper_loses():
@@ -330,3 +335,171 @@ def test_raw_trust_is_clamped_to_the_cap_and_the_floor():
     assert updated_raw_trust(TRUST_FLOOR, 4.9, 1) == TRUST_FLOOR
     # No reflecting wall at zero: a wrong call from zero goes negative.
     assert updated_raw_trust(0.0, 4.9, 1) < 0.0
+
+
+# --- v4: 5 x P(quality > 3), and on-chain votes (SRI-118) -------------------
+
+from crowdcode import scoring as scoring_mod  # noqa: E402
+from crowdcode.scoring import (  # noqa: E402
+    aggregate_onchain_reviews,
+    is_early,
+    onchain_trust,
+    p_above_three,
+    regularized_incomplete_beta,
+    score_from_votes,
+)
+
+import pytest  # noqa: E402
+
+# The owner's reference values (w = 1), Nov 17: score = min(average, 5 x P(>3)).
+REFERENCE = [
+    ([], 2.5, 2.5),            # unrated: 2.5 is only a sort key
+    ([5], 3.75, 3.75),
+    ([4], 3.15, 3.15),
+    ([3], 2.5, 2.5),
+    ([1], 1.0, 1.25),
+    ([5, 5], 4.37, 4.37),
+    ([5] * 5, 4.92, 4.92),
+    ([4] * 10, 4.00, 4.68),
+    ([5, 1], 2.5, 2.5),
+    ([4, 4, 5, 5, 4, 3, 5, 4], 4.25, 4.77),  # Financial Datasets' 8
+    ([3] * 20, 2.5, 2.5),
+    ([2] * 10, 0.32, 0.32),
+]
+
+
+@pytest.mark.parametrize("ratings,expected,probability_score", REFERENCE)
+def test_score_is_the_lower_of_the_average_and_five_times_p_above_three(ratings, expected, probability_score):
+    score, p, alpha, beta = score_from_votes([(1.0, r) for r in ratings])
+    assert score == pytest.approx(expected, abs=0.006)
+    assert 5 * p == pytest.approx(probability_score, abs=0.006)
+    assert alpha + beta == pytest.approx(2 + len(ratings))
+
+
+def test_unrated_has_no_average():
+    result = compute_score([], {}, NOW)
+    assert result.rated is False and result.avg_rating_weighted is None
+    assert result.score == 2.5
+
+
+def test_a_signed_failure_is_a_one_star_observation():
+    result = compute_score([onchain("0xA", 5)], {}, NOW, failures=[NOW])
+    assert result.n_eff_failures == 1.0
+    assert result.avg_rating_weighted == pytest.approx(3.0)
+    assert result.alpha == pytest.approx(2.0) and result.beta == pytest.approx(2.0)
+    assert result.score == pytest.approx(2.5)
+    # The review mean, which the payment floors and owner trust read, ignores it.
+    assert result.mean == pytest.approx(11 / 3)
+    only = compute_score([], {}, NOW, failures=[NOW, NOW])
+    # min(average 1.0, 5 x P(>3) of Beta(1, 3) = 0.625)
+    assert only.rated and only.score == pytest.approx(0.625)
+
+
+def test_incomplete_beta_matches_closed_forms():
+    # I_x(1, 1) = x; I_x(a, 1) = x^a; I_x(1, b) = 1 - (1 - x)^b; symmetry.
+    assert regularized_incomplete_beta(0.3, 1, 1) == pytest.approx(0.3, abs=1e-12)
+    assert regularized_incomplete_beta(0.5, 4, 1) == pytest.approx(0.5 ** 4, abs=1e-12)
+    assert regularized_incomplete_beta(0.5, 1, 7) == pytest.approx(1 - 0.5 ** 7, abs=1e-12)
+    assert regularized_incomplete_beta(0.5, 3.4, 3.4) == pytest.approx(0.5, abs=1e-12)
+    # scipy.special.betainc(7.5, 2.5, 0.5) = 0.0450313306 (Financial Datasets' alpha, beta);
+    # agrees with scipy to < 1e-12 over 20,000 random (a, b) in [1, 400].
+    assert p_above_three(7.5, 2.5) == pytest.approx(1 - 0.0450313306, abs=1e-9)
+
+
+def test_a_score_is_early_below_one_vote():
+    assert is_early(0.0) and is_early(0.99)
+    assert not is_early(1.0)
+
+
+def onchain(wallet, rating, *, age_days=0.0, owner=None, exclusion=None):
+    return ReviewRow(
+        wallet=wallet,
+        rating=rating,
+        payment_verified=True,
+        signature_verified=True,
+        created_at=NOW - timedelta(days=age_days),
+        payment_verification_level="onchain_verified",
+        owner_ref=None,
+        weight_exclusion=exclusion,
+        weight_basis="onchain" if exclusion is None else "none",
+        payer_owner_ref=owner,
+    )
+
+
+def test_providers_pool_their_endpoints_exactly():
+    from crowdcode.scoring import score_from_sums
+    a = compute_score([onchain("0xA", 5)], {}, NOW)
+    b = compute_score([onchain("0xA", 3), onchain("0xB", 4)], {}, NOW)
+    pooled = compute_score([onchain("0xA", 5), onchain("0xB", 3), onchain("0xC", 4)], {}, NOW)
+    alpha = 1 + (a.alpha - 1) + (b.alpha - 1)
+    beta = 1 + (a.beta - 1) + (b.beta - 1)
+    total = (a.alpha + a.beta - 2) + (b.alpha + b.beta - 2)
+    average = (a.avg_rating_weighted * (a.alpha + a.beta - 2) + b.avg_rating_weighted * (b.alpha + b.beta - 2)) / total
+    assert score_from_sums(alpha, beta, average)[0] == pytest.approx(pooled.score)
+
+
+def test_a_paid_onchain_review_is_a_full_vote():
+    result = compute_score([onchain("0xA", 5)], {}, NOW)
+    assert result.n_eff_onchain == 1.0 and result.n_eff == 1.0
+    assert result.score == pytest.approx(3.75)
+
+
+def test_one_vote_per_paying_wallet_however_many_purchases():
+    reviews = [onchain("0xA", 5, age_days=d) for d in range(20)] + [onchain("0xa", 5)]
+    result = compute_score(reviews, {}, NOW)
+    assert result.n_eff == 1.0
+    assert len(aggregate_onchain_reviews(reviews, NOW)) == 1
+    two = compute_score([onchain("0xA", 5), onchain("0xB", 5)], {}, NOW)
+    assert two.n_eff == 2.0
+
+
+def test_excluded_and_unverified_reviews_weigh_nothing():
+    reviews = [
+        onchain("0xA", 5, exclusion="self_dealing"),
+        onchain("0xB", 5, exclusion="dust_payment"),
+        review("x", 5, exclusion="community", basis="none", level="signature_only"),
+    ]
+    assert compute_score(reviews, {}, NOW).n_eff == 0.0
+
+
+def test_trust_only_removes_onchain_weight():
+    assert onchain_trust(None) == 1.0
+    assert onchain_trust(TrustRow(raw_trust=0.0)) == 1.0
+    assert onchain_trust(TrustRow(raw_trust=0.0, slashed=True)) == 0.0
+    assert onchain_trust(TrustRow(raw_trust=-0.2)) == 0.0
+    # The wallet's owner is slashed or penalized: no vote either.
+    assert onchain_trust(None, TrustRow(raw_trust=-1.0)) == 0.0
+    assert onchain_trust(None, TrustRow(raw_trust=0.0, slashed=True)) == 0.0
+    slashed = compute_score(
+        [onchain("0xA", 5)], {}, NOW, wallet_trust={"0xa": TrustRow(raw_trust=0.0, slashed=True)}
+    )
+    assert slashed.n_eff == 0.0
+
+
+def test_an_owner_never_votes_twice_on_one_service():
+    # The owner's hosted judged vote counts; its agent's wallet paying the
+    # same service outside the gateway adds nothing.
+    reviews = [review("seed", 5), onchain("0xagent", 1, owner="seed")]
+    result = compute_score(reviews, {"seed": SEED}, NOW)
+    assert result.n_eff == 1.0 and result.n_eff_onchain == 0.0
+    # Two wallets of one owner, no hosted vote: one on-chain vote.
+    pair = compute_score([onchain("0xA", 5, owner="o"), onchain("0xB", 5, owner="o")], {}, NOW)
+    assert pair.n_eff == 1.0
+
+
+def test_leave_one_out_drops_the_owners_onchain_votes_too():
+    reviews = [onchain("0xA", 5, owner="o"), onchain("0xB", 1)]
+    loo = compute_trust_consensus(reviews, {}, NOW, exclude_owner="o")
+    assert loo.n_eff == 1.0 and loo.mean == pytest.approx((1 + 2 * 3) / 3)
+
+
+def test_onchain_votes_decay_like_every_other_vote():
+    old = compute_score([onchain("0xA", 5, age_days=180)], {}, NOW)
+    assert old.n_eff == pytest.approx(0.5)
+
+
+def test_the_weights_are_configuration(monkeypatch):
+    monkeypatch.setattr(scoring_mod, "ONCHAIN_WEIGHT", 0.5)
+    assert compute_score([onchain("0xA", 5)], {}, NOW).n_eff == 0.5
+    monkeypatch.setattr(scoring_mod, "ONCHAIN_WEIGHT", 0.0)
+    assert compute_score([onchain("0xA", 5)], {}, NOW).n_eff == 0.0
