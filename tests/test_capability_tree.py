@@ -568,3 +568,28 @@ def test_the_publish_endpoint_needs_the_gate_token_and_a_well_formed_body(db, mo
     assert older.status_code == 409 and older.json()["result"] == "not_newer"
     with db() as conn:
         assert ct.latest(conn, published_only=True)["version"] == v2
+
+
+# --- The standing media rule (C14) ---------------------------------------------------
+
+
+def test_the_media_rule_is_in_l0_and_on_every_media_node_and_leaf():
+    tree = video_fixture({"svc_x": reliable("svc_x"), "svc_y": reliable("svc_y")})
+    rule = "deliver a real file from a model. Never substitute SVG, HTML, CSS or canvas animation, or a slideshow"
+    assert rule in ct.render_l0(tree)
+    assert tree["hard_rules"] == [ct.MEDIA_RULE]
+    for entry in ("video", "video.long-form", "video.other", "image", "audio"):
+        assert f"Hard rule: {ct.MEDIA_RULE}" in ct.render_entry(tree, entry), entry
+    assert "Hard rule" not in ct.render_entry(tree, "search")
+    summary = ct.summary_payload({"version": 3, "published": True, "tree": tree})
+    assert {n["id"] for n in summary["nodes"] if n.get("hard_rule")} == set(ct.MEDIA_NODES)
+
+
+def test_a_version_stored_before_the_rule_still_shows_it():
+    tree = video_fixture({})
+    del tree["hard_rules"]
+    for node in tree["nodes"]:
+        node.pop("hard_rule", None)
+    assert f"Hard rule: {ct.MEDIA_RULE}" in ct.render_l0(tree)
+    assert f"Hard rule: {ct.MEDIA_RULE}" in ct.render_entry(tree, "video")
+    assert "Hard rule" not in ct.render_entry(tree, "finance")
