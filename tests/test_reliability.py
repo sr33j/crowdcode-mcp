@@ -71,6 +71,13 @@ def judged(delivered: int, not_delivered: int, **extra) -> dict:
             "unlabelled": 0, "owner_buyers": 1, "last_at": iso(NOW - timedelta(days=1)), **extra}
 
 
+@pytest.fixture(autouse=True)
+def _fresh_leaf_cache():
+    reliability._LEAF_CACHE.clear()
+    yield
+    reliability._LEAF_CACHE.clear()
+
+
 def tier(inputs: dict) -> str:
     return evaluate(inputs)["tier"]
 
@@ -547,3 +554,124 @@ def test_a_listed_untracked_video_offering_is_evaluated_from_its_payers_and_mode
                                "does not probe it yet; proven needs 5 judged purchases with a mean of 0.85 (0 so far)")
     assert any("shrunk to 4.6 from veo-3.1 on Artificial Analysis video arena (2026-11-17)" in x for x in r["reasons"])
     assert r["inputs"]["listed"]["models"][0]["model"] == "veo-3.1"
+
+
+# --- C12: the allowance reference --------------------------------------------------------
+
+
+def test_one_standard_call_of_a_model_from_the_sellers_own_pricing():
+    from decimal import Decimal
+    from crowdcode.reliability import model_call_usd
+    # BlockRun's per-second video pricing: a 5-second clip plus fees.
+    assert model_call_usd({"per_second": 0.31557485925, "transaction_fee": 0.001, "per_call_surcharge": 0}) \
+        == pytest.approx(Decimal("1.57887429625"))
+    assert model_call_usd({"clip_usd": 0.89, "clip_seconds": 5}) == Decimal("0.89")
+    assert model_call_usd({"per_image": 0.063, "transaction_fee": 0.001}) == Decimal("0.064")
+    assert model_call_usd({"duration_seconds_480p": "0.068", "duration_seconds_720p": "0.14"}) == Decimal("0.70")
+    assert model_call_usd({"cents_per_video_output_second_720p": "7"}) == Decimal("0.35")
+    # Priced by input size: no per-call price.
+    assert model_call_usd({"per": "character", "usd": 0.000048}) is None
+    assert model_call_usd({"input": 1, "output": 2}) is None
+    assert model_call_usd(None) is None
+
+
+def _tree(conn) -> None:
+    conn.execute((ROOT / "supabase/capability-tree.sql").read_text())
+
+
+def _offering(conn, rid, sid, url, *, tier, score, quote=None, models=(), pricing=None, leaf_facet=None,
+              node="search", alpha=None, beta=None):
+    if sid:
+        conn.execute("insert into services (id, name, canonical_endpoint) values (%s, %s, %s) on conflict do nothing",
+                     (sid, sid, url))
+    conn.execute(
+        """
+        insert into index_resources (id, resource_key, method, origin, route_template, probe_url, tracked, service_id,
+          quoted_price_atomic, quoted_asset)
+        values (%s, %s, 'POST', %s, %s, %s, true, %s, %s, %s)
+        """,
+        (rid, f"POST {url}", url.rsplit("/", 1)[0], url, url, sid, quote, USDC if quote else None),
+    )
+    for model in models:
+        conn.execute("insert into index_offering_models (resource_id, model, modality, source, pricing) "
+                     "values (%s, %s, 'video', 'route', %s)", (rid, model, json.dumps(pricing) if pricing else None))
+    if sid and tier:
+        conn.execute("insert into service_reliability (service_id, state, tier, score, alpha, beta, rule_version, "
+                     "computed_at) values (%s, %s, %s, %s, %s, %s, 'reliability-v2', now())",
+                     (sid, reliability.TIER_STATE[tier], tier, score, alpha, beta))
+    if leaf_facet:
+        conn.execute("insert into capability_classifications (item_key, fingerprint, assignments) values (%s, 'f', %s)",
+                     (f"r:{rid}", json.dumps([{"node": node, "facet": leaf_facet}])))
+
+
+def test_the_allowance_reference_is_the_best_proven_or_popular_seller_of_the_same_model_else_the_same_leaf(db):
+    with db() as conn:
+        _w1_w2_columns(conn)
+        _tree(conn)
+        conn.execute("insert into capability_leaves (id, node, slug, label, facets) values "
+                     "('search.web', 'search', 'web', 'Web search', '{web-search,serp-api}')")
+        per_second = {"per_second": 0.31557485925, "transaction_fee": 0.001}
+        # The queried new video seller (seedance-2.5), and the alternatives.
+        _offering(conn, 10, "svc_newvideo", "https://new.example.com/seedance", tier="new", score=2.2, quote=300000,
+                  models=["seedance-2.5"])
+        # A popular multi-model seller: priced per model from its own pricing, not from its probe quote.
+        _offering(conn, 11, "svc_blockrun", "https://blockrun.example/videos", tier="popular", score=4.1, quote=402000,
+                  models=["seedance-2.5", "grok-imagine-video"], pricing=per_second)
+        # A popular single-model seller of the same model: its quote is the price. Lower score, so not best.
+        _offering(conn, 12, "svc_fal", "https://fal.example/seedance-2.5", tier="popular", score=3.6, quote=1250000,
+                  models=["seedance-2.5"])
+        # A bad seller and a new seller never count.
+        _offering(conn, 13, "svc_badvideo", "https://bad.example/seedance", tier="bad", score=4.9, quote=10,
+                  models=["seedance-2.5"])
+        _offering(conn, 14, "svc_other_new", "https://other.example/seedance", tier="new", score=4.8, quote=20,
+                  models=["seedance-2.5"])
+        # Search: no model; the same leaf decides.
+        _offering(conn, 20, "svc_newsearch", "https://newsearch.example/q", tier="new", score=2.0, quote=20000,
+                  leaf_facet="web-search")
+        _offering(conn, 21, "svc_exa2", "https://exa.example/search", tier="proven", score=4.2, quote=7000,
+                  leaf_facet="web-search")
+        _offering(conn, 22, "svc_serp", "https://serp.example/q", tier="popular", score=3.0, quote=1000,
+                  leaf_facet="serp-api")
+        _offering(conn, 30, "svc_lonely", "https://lonely.example/x", tier="new", score=1.5, quote=5000)
+        conn.commit()
+    with db() as conn:
+        video = reliability.for_url(conn, "https://new.example.com/seedance", "POST")["allowance_reference"]
+        assert video == {"basis": "model", "model": "seedance-2.5", "price_atomic": 1578874,
+                         "service_id": "svc_blockrun", "resource_id": 11, "tier": "popular", "score": 4.1}
+        search = reliability.for_url(conn, "https://newsearch.example/q", "POST")["allowance_reference"]
+        assert search == {"basis": "leaf", "leaf": "search.web", "price_atomic": 7000, "service_id": "svc_exa2",
+                          "resource_id": 21, "tier": "proven", "score": 4.2}
+        assert reliability.for_url(conn, "https://lonely.example/x", "POST")["allowance_reference"] is None
+        assert reliability.for_url(conn, "https://nobody.example.org/thing", "POST")["allowance_reference"] is None
+        # A popular offering's own reference never points at itself.
+        own = reliability.for_url(conn, "https://blockrun.example/videos", "POST")["allowance_reference"]
+        assert own["service_id"] == "svc_fal" and own["price_atomic"] == 1250000 and "by_model" not in own
+
+
+
+def test_a_media_leaf_reference_is_the_best_model_not_the_cheapest_clip(db):
+    with db() as conn:
+        _w1_w2_columns(conn)
+        _tree(conn)
+        conn.execute("insert into capability_leaves (id, node, slug, label, facets) values "
+                     "('video.generate', 'video', 'generate', 'Generate video', '{text-to-video,image-to-video}')")
+        conn.execute("insert into model_quality_priors (model, modality, source, as_of, prior_rating) values "
+                     "('seedance-2.5', 'video', 'artificialanalysis:text-to-video', '2026-11-17', 4.88), "
+                     "('grok-imagine-video', 'video', 'artificialanalysis:text-to-video', '2026-11-17', 3.4), "
+                     "('veo-3.1', 'video', 'artificialanalysis:text-to-video', '2026-11-17', 3.59)")
+        # The queried new veo-3.1 seller: no proven or popular seller of veo-3.1 exists.
+        _offering(conn, 40, "svc_newveo", "https://newveo.example/veo", tier="new", score=1.8, quote=500000,
+                  models=["veo-3.1"], leaf_facet="text-to-video", node="video")
+        # A popular, cheap 480p clip with no named model: the value-first winner, never the quality-first one.
+        _offering(conn, 41, "svc_cheapclip", "https://cheap.example/clip", tier="popular", score=2.67, quote=10000,
+                  leaf_facet="text-to-video", node="video", alpha=8, beta=1)
+        # A popular multi-model seller: seedance-2.5 (the best model) priced from its own pricing.
+        _offering(conn, 42, "svc_blockrun2", "https://blockrun2.example/videos", tier="popular", score=4.1,
+                  quote=402000, models=["seedance-2.5", "grok-imagine-video"],
+                  pricing={"per_second": 0.31557485925, "transaction_fee": 0.001},
+                  leaf_facet="image-to-video", node="video", alpha=8, beta=1)
+        conn.commit()
+    with db() as conn:
+        ref = reliability.for_url(conn, "https://newveo.example/veo", "POST")["allowance_reference"]
+    assert ref == {"basis": "leaf", "leaf": "video.generate", "price_atomic": 1578874, "service_id": "svc_blockrun2",
+                   "resource_id": 42, "tier": "popular", "score": 4.1, "model": "seedance-2.5"}
