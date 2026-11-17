@@ -152,6 +152,13 @@ def test_probe_bodies_are_never_empty():
         assert request_body(method, None, None)
 
 
+def test_media_generators_without_a_documented_body_are_asked_for_a_quote():
+    assert json.loads(request_body("POST", None, None, "video")) == {"prompt": "A calm ocean at sunset, a short test clip"}
+    assert json.loads(request_body("POST", None, None, "video", "kwaivgi/kling-v3.0-pro"))["model"] == "kwaivgi/kling-v3.0-pro"
+    assert request_body("POST", None, None, "llm") == b"{}"
+    assert json.loads(request_body("POST", {"q": 1}, None, "video")) == {"q": 1}  # the seller's own example wins
+
+
 def test_synthesized_bodies_use_the_sellers_own_hints():
     # BlockRun's Bazaar listing: no example body, descriptions in info.bodyFields.
     blockrun = {
@@ -240,6 +247,8 @@ class Fixture:
 
     def __init__(self) -> None:
         self.mode = {"price": "10000", "payee": PAYEE_A, "down": False}
+        # Extra GET routes served verbatim: other feeds, model catalogs.
+        self.pages: dict[str, object] = {}
         self.requests: list[dict] = []
         fixture = self
 
@@ -263,6 +272,8 @@ class Fixture:
                 path = self.path.split("?")[0]
                 if path == "/feeds/bazaar":
                     return self._send(200, {"items": fixture.bazaar(), "pagination": {"total": 4}})
+                if path in fixture.pages:
+                    return self._send(200, fixture.pages[path])
                 if path == "/feeds/mpp":
                     return self._send(200, {"services": []})
                 fixture.requests.append({"method": self.command, "path": path, "body": body,
@@ -299,6 +310,10 @@ class NoModel:
         return None
 
 
+# No network in tests beyond the local fixture server.
+OFFLINE = {"embedder": NoModel(), "static_catalogs": (), "priors_fetcher": lambda client: ([], {})}
+
+
 @pytest.fixture
 def db():
     url = os.environ.get("TEST_DATABASE_URL")
@@ -312,6 +327,8 @@ def db():
         # Idempotent: applying it twice changes nothing.
         admin.execute((ROOT / "supabase/services-index.sql").read_text())
         admin.execute((ROOT / "supabase/services-index.sql").read_text())
+        admin.execute((ROOT / "supabase/offerings-models.sql").read_text())
+        admin.execute((ROOT / "supabase/offerings-models.sql").read_text())
 
     @contextmanager
     def connect():
@@ -343,6 +360,7 @@ def test_migration_accepts_w3s_observations_table_first():
                 alter table index_observations add column if not exists observer_wallet text;
             """)
             conn.execute((ROOT / "supabase/services-index.sql").read_text())
+            conn.execute((ROOT / "supabase/offerings-models.sql").read_text())
             conn.execute("insert into index_observations (endpoint, kind, ok, observer_wallet) values ('https://x.example/a', 'observation', true, '0xabc')")
         finally:
             conn.execute(f"drop schema {schema} cascade")
@@ -352,7 +370,7 @@ def test_a_seller_changing_price_then_payee_then_going_down_is_flagged_and_reviv
     fixture = Fixture()
     t0 = datetime(2026, 11, 10, 6, 0, tzinfo=UTC)
     try:
-        index.run_sweep(db, t0, feeds=fixture.feeds(), embedder=NoModel())
+        index.run_sweep(db, t0, feeds=fixture.feeds(), **OFFLINE)
         with db() as conn:
             rows = {r["route_template"]: r for r in conn.execute("select * from index_resources").fetchall()}
             paid = rows[f"{fixture.origin}/paid"]
@@ -360,7 +378,7 @@ def test_a_seller_changing_price_then_payee_then_going_down_is_flagged_and_reviv
             assert paid["networks"] == [BASE] and paid["payable"] and paid["sources"] == ["bazaar"]
             assert rows[f"{fixture.origin}/articles/:slug"]["tracked"]
             assert not rows[f"{fixture.origin}/junk"]["tracked"]  # listed, not tracked
-            assert f"{fixture.origin}/self-test" not in rows  # one payer: not even listed
+            assert not rows[f"{fixture.origin}/self-test"]["tracked"]  # every listing is listed (C9)
             service = conn.execute("select * from services where id = %s", (paid["service_id"],)).fetchone()
             assert service["created_from_review"] is False
             assert service["metadata"]["listing_source"] == "index"
@@ -430,9 +448,9 @@ def test_a_failing_feed_does_not_stop_the_others_and_the_job_raises(db):
     fixture = Fixture()
     t0 = datetime(2026, 11, 10, 6, 0, tzinfo=UTC)
     try:
-        index.run_sweep(db, t0, feeds=fixture.feeds(), embedder=NoModel())
+        index.run_sweep(db, t0, feeds=fixture.feeds(), **OFFLINE)
         with pytest.raises(index.IndexJobError, match="bazaar"):
-            index.run_sweep(db, t0 + timedelta(days=1), feeds=fixture.feeds(fail_bazaar=True), embedder=NoModel())
+            index.run_sweep(db, t0 + timedelta(days=1), feeds=fixture.feeds(fail_bazaar=True), **OFFLINE)
         with db() as conn:
             sweeps = {(r["source"], r["ok"]) for r in conn.execute(
                 "select source, ok from index_sweeps where started_at >= %s", (t0 + timedelta(days=1),)).fetchall()}
@@ -441,7 +459,7 @@ def test_a_failing_feed_does_not_stop_the_others_and_the_job_raises(db):
             paid = conn.execute("select * from index_resources where route_template = %s", (f"{fixture.origin}/paid",)).fetchone()
             assert paid["tracked"] and paid["bazaar_payers_30d"] == 12 and "bazaar" in paid["sources"]
             # A feed swept less than a day ago is not read again.
-        assert index.run_sweep(db, t0 + timedelta(days=1, hours=2), feeds=fixture.feeds(), embedder=NoModel())["due"] == ["bazaar"]
+        assert index.run_sweep(db, t0 + timedelta(days=1, hours=2), feeds=fixture.feeds(), **OFFLINE)["due"] == ["bazaar"]
     finally:
         fixture.server.shutdown()
 
@@ -473,7 +491,7 @@ def test_hosted_services_and_gateway_purchases_are_tracked_and_observed(db):
                 (sid, json.dumps(receipt(url, sid))),
             )
         conn.commit()
-    index.run_sweep(db, t0, feeds={}, embedder=NoModel())
+    index.run_sweep(db, t0, feeds={}, **OFFLINE)
     with db() as conn:
         rows = {r["resource_key"]: r for r in conn.execute("select * from index_resources").fetchall()}
         hosted = rows["POST https://crowdcode.app/s/fixture"]
@@ -505,3 +523,112 @@ def test_hosted_manifests_give_each_route_a_probe_body_from_its_schema():
     }, "https://crowdcode.app")
     assert listing["route_bodies"] == {"https://crowdcode.app/s/venice-proxy/chat/completions": {
         "model": "venice-uncensored-1-2", "messages": [{"role": "user", "content": "Hello"}]}}
+
+
+
+def test_model_names_normalize_across_sellers_and_leaderboards():
+    from crowdcode.index_models import normalize_model, offering_model
+    same = {
+        "veo-3.1": ["google/veo-3.1", "fal-ai/veo3.1", "Veo 3.1", "/api/generate/veo-3.1/generate"],
+        "kling-v3-pro": ["kwaivgi/kling-v3.0-pro", "/fal-ai/kling-video/v3/pro/text-to-video", "Kling 3.0 1080p (Pro)"],
+        "seedance-2.5": ["bytedance/seedance-2.5", "/bytedance/seedance-2.5/text-to-video", "Dreamina Seedance 2.5"],
+        "hailuo-3-max": ["minimax/hailuo-3-max", "/minimax/h3-max/text-to-video"],
+        "flux-1.1-pro": ["/fal-ai/flux-pro/v1.1", "FLUX1.1 [pro] image generation"],
+        "wan-3": ["alibaba/wan-3.0", "Wan 3.0"],
+        "sora-2-pro": ["/api/generate/sora-2-pro/generate"],
+        "gpt-6.2-astra": ["GPT-6.2 Astra Max", "openai/gpt-6.2-astra"],
+    }
+    for model, names in same.items():
+        assert {normalize_model(n).model for n in names} == {model}, names
+    assert normalize_model("google/veo-3.1").modality == "video"
+    assert normalize_model("/fal-ai/flux-pro/v1.1").modality == "image"
+    assert normalize_model("/stock/quote") is None
+    # A route naming one model sells it; a description naming several is a router.
+    assert offering_model("/api/generate/wan-2.6/t2v", None, None)[0].model == "wan-2.6"
+    assert offering_model("/v1/videos", "Veo 3.1, Sora 2 and Kling in one API", None) is None
+
+
+def test_leaderboards_become_priors_on_the_judge_scale():
+    from crowdcode.index_models import parse_leaderboard, priors_rows
+    page = """<table><tr><th></th><th>Range</th><th>Model</th><th>Elo</th></tr>
+      <tr><td>1</td><td>1-2</td><td>Wan 3.0</td><td>1174±13 95% interval</td></tr>
+      <tr><td>2</td><td>1-4</td><td>Utopai X</td><td>1168±13</td></tr>
+      <tr><td>3</td><td>3-8</td><td>Dreamina Seedance 2.5</td><td>1156±13</td></tr>
+      <tr><td>4</td><td>4-9</td><td>Kling 3.0 1080p (Pro)</td><td>1093±13</td></tr>
+      <tr><td>5</td><td>4-9</td><td>Kling 3.0 720p (Pro)</td><td>1080±13</td></tr></table>"""
+    priors = parse_leaderboard("text-to-video", "https://aa/video", "elo", page)
+    assert [(p.model.model, p.score, p.rank) for p in priors] == [
+        ("wan-3", 1174, 1), ("seedance-2.5", 1156, 2), ("kling-v3-pro", 1093, 3)]  # best row per model; unknown names skipped
+    assert [p.prior_rating for p in priors] == [5.0, 3.0, 1.0]
+    row = priors_rows(priors, datetime(2026, 11, 18).date())[0]
+    assert row[:7] == ("wan-3", "wan", "video", "artificialanalysis:text-to-video", "https://aa/video",
+                       datetime(2026, 11, 18).date(), 1174)
+
+
+def test_every_feed_is_listed_once_mpp_is_tracked_and_models_are_known(db):
+    fixture = Fixture()
+    o = fixture.origin
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=UTC)
+    tempo_usdc = "0x20c000000000000000000000b9537d11c60e8b50"
+    fixture.pages = {
+        "/feeds/payai": {"items": [bazaar_item(f"{o}/paid", payers=None), bazaar_item(f"{o}/payai-only")],
+                         "pagination": {"total": 2}},
+        # thirdweb names no method: it joins the Bazaar's POST resource, not a new GET one.
+        "/feeds/thirdweb": {"items": [{"resource": f"{o}/paid", "type": "http", "accepts": bazaar_item(f"{o}/paid")["accepts"],
+                                        "metadata": {"source": "coinbase"}}], "pagination": {"total": 1}},
+        "/feeds/dexter": {"items": [], "pagination": {"total": 0}},
+        "/feeds/mpp2": {"services": [{
+            "id": "studio", "name": "Studio", "serviceUrl": f"{o}/studio",
+            "endpoints": [
+                {"method": "POST", "path": "/api/generate/veo-3.1/generate", "description": "Veo 3.1 video generation",
+                 "payment": {"intent": "charge", "method": "tempo", "currency": tempo_usdc}},
+                {"method": "POST", "path": "/v1/videos", "description": "Submit video generation",
+                 "payment": {"intent": "charge", "method": "tempo", "currency": tempo_usdc}},
+                {"method": "GET", "path": "/v1/videos/models", "description": "Video models", "payment": None},
+                {"method": "GET", "path": "/v1/videos/:id", "description": "Poll", "payment": None},
+            ]}]},
+        "/studio/v1/videos/models": {"data": [
+            {"id": "google/veo-3.1", "pricing_skus": {"duration_seconds_with_audio": "0.40", "duration_seconds_without_audio": "0.20"}},
+            {"id": "kwaivgi/kling-v3.0-pro", "pricing_skus": {"duration_seconds": "0.112"}}]},
+    }
+    from crowdcode.index_feeds import fetch_dexter, fetch_payai, fetch_thirdweb
+    feeds = {
+        **fixture.feeds(),
+        "payai": lambda c: fetch_payai(c, f"{o}/feeds/payai"),
+        "dexter": lambda c: fetch_dexter(c, f"{o}/feeds/dexter"),
+        "thirdweb": lambda c: fetch_thirdweb(c, f"{o}/feeds/thirdweb"),
+        "mpp": lambda c: fetch_mpp(c, f"{o}/feeds/mpp2"),
+    }
+    try:
+        index.run_sweep(db, t0, feeds=feeds, **OFFLINE)
+        with db() as conn:
+            paid = conn.execute("select * from index_resources where route_template = %s", (f"{o}/paid",)).fetchall()
+            assert len(paid) == 1 and paid[0]["method"] == "POST"
+            assert paid[0]["sources"] == ["bazaar", "payai", "thirdweb"]
+            assert conn.execute("select sources from index_resources where route_template = %s",
+                                (f"{o}/payai-only",)).fetchone()["sources"] == ["payai"]
+            studio = {r["route_template"].removeprefix(o): r for r in conn.execute(
+                "select * from index_resources where 'mpp' = any(sources)").fetchall()}
+            assert set(studio) == {"/studio/api/generate/veo-3.1/generate", "/studio/v1/videos"}  # free routes are not offerings
+            assert all(r["tracked"] and r["tracked_reason"] == "curated" for r in studio.values())
+            veo = studio["/studio/api/generate/veo-3.1/generate"]
+            assert (veo["model"], veo["model_family"], veo["modality"]) == ("veo-3.1", "veo", "video")
+            videos = studio["/studio/v1/videos"]
+            assert (videos["model"], videos["modality"]) == (None, "video")  # several models, one modality
+            offered = conn.execute(
+                """
+                select r.route_template, m.model, m.seller_model_id, m.source, m.usd_per_second
+                from index_offering_models m join index_resources r on r.id = m.resource_id
+                where m.modality = 'video' order by m.model, r.route_template
+                """).fetchall()
+            assert [(r["route_template"].removeprefix(o), r["model"], r["seller_model_id"], r["source"],
+                     r["usd_per_second"] and float(r["usd_per_second"])) for r in offered] == [
+                ("/studio/v1/videos", "kling-v3-pro", "kwaivgi/kling-v3.0-pro", "models_endpoint", 0.112),
+                ("/studio/api/generate/veo-3.1/generate", "veo-3.1", None, "route", None),
+                ("/studio/v1/videos", "veo-3.1", "google/veo-3.1", "models_endpoint", 0.2),
+            ]
+            health = index.health(conn, t0)
+            assert health["listed_by_source"]["payai"] == 2 and health["tracked_by_reason"]["curated"] == 2
+            assert health["models"]["by_modality"]["video"] == {"offerings": 2, "models": 2}
+    finally:
+        fixture.server.shutdown()

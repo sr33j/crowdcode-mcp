@@ -57,7 +57,7 @@ create table if not exists index_resources (
   tracked boolean not null default false,
   tracked_reason text
     check (tracked_reason is null or tracked_reason in
-      ('hosted', 'gateway_purchase', 'bazaar_payers', 'proposal')),
+      ('hosted', 'gateway_purchase', 'bazaar_payers', 'curated', 'proposal')),
   tracked_since timestamptz,
   proposal_ids text[] not null default '{}',
   service_id text references services(id) on delete set null,

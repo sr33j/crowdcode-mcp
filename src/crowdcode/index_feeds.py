@@ -301,28 +301,49 @@ def _apply_offers(listing: Listing, offers: list[dict[str, Any]]) -> None:
         listing.price_scheme = best["scheme"]
 
 
-def parse_bazaar_item(item: Any) -> Listing | None:
+_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def parse_x402_item(item: Any, source: str = "bazaar") -> Listing | None:
+    """One x402 discovery item, from any of the feeds that share the shape.
+
+    The Bazaar, PayAI, Dexter and thirdweb all list ``resource`` + ``accepts``;
+    they differ in where the method, description and input schema live. Only
+    the Bazaar's usage counts are kept (the others copy them, or have none).
+    A feed that names no method leaves it empty, and the sweep attaches the
+    listing to the resource another feed listed at the same URL.
+    """
     if not isinstance(item, dict) or not isinstance(item.get("resource"), str):
         return None
-    bazaar = ((item.get("extensions") or {}).get("bazaar") or {}) if isinstance(item.get("extensions"), dict) else {}
-    info_input = ((bazaar.get("info") or {}).get("input") or {}) if isinstance(bazaar, dict) else {}
-    if not isinstance(info_input, dict):
-        info_input = {}
+    metadata = _dict(item.get("metadata"))
+    accepts = item.get("accepts") if isinstance(item.get("accepts"), list) else []
+    first = _dict(accepts[0]) if accepts else {}
+    bazaar = _dict(_dict(item.get("extensions")).get("bazaar"))
+    info_input = _dict(_dict(bazaar.get("info")).get("input")) or _dict(_dict(first.get("outputSchema")).get("input")) \
+        or _dict(metadata.get("input"))
     listing_type = "mcp" if item.get("type") == "mcp" else "http"
-    method = str(info_input.get("method") or ("POST" if listing_type == "mcp" else "GET")).upper()
-    if method not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+    method = str(item.get("method") or metadata.get("method") or info_input.get("method") or "").upper()
+    if not method:
+        method = "POST" if listing_type == "mcp" else ("GET" if source == "bazaar" else "")
+    if method and method not in _METHODS:
         method = "POST"
-    quality = item.get("quality") if isinstance(item.get("quality"), dict) else {}
+    quality = _dict(item.get("quality")) if source == "bazaar" else {}
     listing = Listing(
-        source="bazaar", method=method, url=item["resource"].strip(), protocol="x402",
+        source=source, method=method, url=item["resource"].strip(), protocol="x402",
         listing_type=listing_type,
-        description=_text(item.get("description"), DESCRIPTION_MAX),
-        service_name=_text(item.get("serviceName"), NAME_MAX),
+        description=_text(item.get("description") or metadata.get("description") or first.get("description"),
+                          DESCRIPTION_MAX),
+        service_name=_text(item.get("serviceName") or metadata.get("serviceName") or metadata.get("displayName"),
+                           NAME_MAX),
         payers_30d=_int(quality.get("l30DaysUniquePayers")),
         calls_30d=_int(quality.get("l30DaysTotalCalls")),
         last_called_at=_time(quality.get("lastCalledAt")),
     )
-    _apply_offers(listing, x402_offers(item.get("accepts")))
+    _apply_offers(listing, x402_offers(accepts))
     if (listing.payers_30d or 0) >= SCHEMA_MIN_PAYERS:
         schema = bazaar.get("schema") if isinstance(bazaar, dict) else None
         input_schema = ((schema or {}).get("properties") or {}).get("input") if isinstance(schema, dict) else None
@@ -331,6 +352,10 @@ def parse_bazaar_item(item: Any) -> Listing | None:
     if method in ("POST", "PUT", "PATCH") and (listing.payers_30d or 0) >= 1:
         listing.probe_body = _capped(info_input.get("body"), BODY_MAX)
     return listing
+
+
+def parse_bazaar_item(item: Any) -> Listing | None:
+    return parse_x402_item(item, "bazaar")
 
 
 def parse_mpp_catalog(payload: Any) -> list[Listing]:
@@ -397,35 +422,76 @@ def feed_client() -> httpx.Client:
                         headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
 
 
-def bazaar_pages(client: httpx.Client, url: str = BAZAAR_URL) -> Iterator[list[Any]]:
-    """Every page of the Bazaar, in order. Raises FeedError when a page cannot be read."""
-    offset = 0
-    for _ in range(BAZAAR_MAX_PAGES):
-        payload = _get_json(client, url, {"limit": BAZAAR_PAGE, "offset": offset})
-        items = payload.get("items") if isinstance(payload, dict) else None
-        if not isinstance(items, list):
-            raise FeedError(f"{url}: no items at offset {offset}")
-        if not items:
-            return
-        yield items
-        total = _int(((payload.get("pagination") or {}).get("total")))
-        offset += len(items)
-        if len(items) < BAZAAR_PAGE or (total is not None and offset >= total):
-            return
+PAYAI_URL = "https://facilitator.payai.network/discovery/resources"
+DEXTER_URL = "https://x402.dexter.cash/discovery/resources"
+THIRDWEB_URL = "https://api.thirdweb.com/v1/payments/x402/discovery/resources"
+THIRDWEB_PAGE = 100  # its maximum
+THIRDWEB_WORKERS = 4
+MAX_PAGES = 1000
 
 
-def fetch_bazaar(client: httpx.Client, url: str = BAZAAR_URL) -> tuple[list[Listing], int]:
-    listings: list[Listing] = []
-    items = 0
-    for page in bazaar_pages(client, url):
-        items += len(page)
-        for item in page:
-            listing = parse_bazaar_item(item)
-            if listing is not None:
-                listings.append(listing)
-    return listings, items
+def x402_pages(client: httpx.Client, url: str, source: str, *, page: int = BAZAAR_PAGE,
+               workers: int = 1) -> Iterator[list[Listing]]:
+    """Every page of an x402 discovery feed, parsed. Raises FeedError on a page it cannot read.
+
+    The first page gives the total; with ``workers`` > 1 the rest are read a
+    few at a time (thirdweb serves 100 per page, so it has ~470 pages).
+    """
+    payload = _get_json(client, url, {"limit": page, "offset": 0})
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise FeedError(f"{url}: no items")
+    total = _int(_dict(payload.get("pagination")).get("total"))
+    yield [listing for listing in (parse_x402_item(i, source) for i in items) if listing]
+    if not items:
+        return
+    if total is None:
+        # No total: walk until a short or empty page.
+        offset = len(items)
+        while len(items) >= page and offset < page * MAX_PAGES:
+            items = _get_json(client, url, {"limit": page, "offset": offset}).get("items") or []
+            if items:
+                yield [listing for listing in (parse_x402_item(i, source) for i in items) if listing]
+            offset += len(items)
+        return
+    if len(items) >= total:
+        return
+    offsets = list(range(len(items), min(total, page * MAX_PAGES), page))
+
+    def read(offset: int) -> list[Listing]:
+        body = _get_json(client, url, {"limit": page, "offset": offset})
+        return [listing for listing in (parse_x402_item(i, source) for i in (body.get("items") or [])) if listing]
+
+    if workers <= 1:
+        for offset in offsets:
+            yield read(offset)
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for start in range(0, len(offsets), workers * 4):
+            yield from pool.map(read, offsets[start:start + workers * 4])
 
 
-def fetch_mpp(client: httpx.Client, url: str = MPP_URL) -> tuple[list[Listing], int]:
-    listings = parse_mpp_catalog(_get_json(client, url))
-    return listings, len(listings)
+def fetch_bazaar(client: httpx.Client, url: str = BAZAAR_URL) -> Iterator[list[Listing]]:
+    return x402_pages(client, url, "bazaar")
+
+
+def fetch_payai(client: httpx.Client, url: str = PAYAI_URL) -> Iterator[list[Listing]]:
+    return x402_pages(client, url, "payai")
+
+
+def fetch_dexter(client: httpx.Client, url: str = DEXTER_URL) -> Iterator[list[Listing]]:
+    return x402_pages(client, url, "dexter")
+
+
+def fetch_thirdweb(client: httpx.Client, url: str = THIRDWEB_URL) -> Iterator[list[Any]]:
+    return x402_pages(client, url, "thirdweb", page=THIRDWEB_PAGE, workers=THIRDWEB_WORKERS)
+
+
+def fetch_mpp(client: httpx.Client, url: str = MPP_URL) -> Iterator[list[Any]]:
+    """mpp.dev's listings, then the free model catalogs its services publish."""
+    from crowdcode.index_models import mpp_catalogs
+    payload = _get_json(client, url)
+    yield parse_mpp_catalog(payload)
+    services = payload.get("services") if isinstance(payload, dict) else payload
+    yield mpp_catalogs(services if isinstance(services, list) else [])

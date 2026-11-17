@@ -50,13 +50,31 @@ from crowdcode.index_feeds import (
     caip2,
     feed_client,
     fetch_bazaar,
+    fetch_dexter,
     fetch_mpp,
+    fetch_payai,
+    fetch_thirdweb,
     matches_template,
     route,
 )
+from crowdcode.index_models import (
+    STATIC_CATALOGS,
+    Catalog,
+    CatalogEntry,
+    as_json,
+    fetch_catalogs,
+    fetch_priors,
+    modality_hint,
+    offering_model,
+    priors_rows,
+)
 from crowdcode.index_probe import ProbeResult, ProbeTarget, probe_all
 
-FEEDS: dict[str, Callable[..., tuple[list[Listing], int]]] = {"bazaar": fetch_bazaar, "mpp": fetch_mpp}
+# In priority order: an earlier feed's listing speaks for a resource several list.
+FEEDS: dict[str, Callable[..., Any]] = {
+    "bazaar": fetch_bazaar, "payai": fetch_payai, "dexter": fetch_dexter, "thirdweb": fetch_thirdweb,
+    "mpp": fetch_mpp,
+}
 FEED_SOURCES = tuple(FEEDS)
 INTERNAL_SOURCES = ("hosted", "gateway", "reviewed")
 SOURCE_ORDER = (*FEED_SOURCES, *INTERNAL_SOURCES)
@@ -67,10 +85,9 @@ PROBE_EVERY = timedelta(hours=23)
 DEAD_FAILURES = 3
 DEAD_SPAN = timedelta(hours=48)
 TRACK_MIN_PAYERS = 3
-# The listed tier: Bazaar resources with fewer payers are not stored at all.
-# Two thirds of Bazaar has one payer or none, usually the seller testing itself,
-# and the database this lives in is shared with the hosted app.
-LISTED_MIN_PAYERS = 2
+# The listed tier holds every listing (C9; Supabase now has room). Only the
+# Bazaar has payer counts, so only it could be filtered.
+LISTED_MIN_PAYERS = 0
 # Unpaid probe rows; C3 reads the last three and seven days of prices.
 # Purchases, C5 observations and index_changes are kept.
 PROBE_RETENTION = timedelta(days=14)
@@ -175,6 +192,7 @@ class Resource:
 
 
 _SERVICE_RANK = {"hosted": 3, "gateway": 2, "reviewed": 1}
+_FEED_RANK = {source: len(FEED_SOURCES) - index for index, source in enumerate(FEED_SOURCES)}
 
 
 class Merger:
@@ -190,9 +208,20 @@ class Merger:
         # Hosted route rows by service id: an old URL of a renamed hosted
         # service (its reviews keep the URL they were bought at) is the route.
         self._hosted: dict[str, tuple[str, str]] = {}
+        # Method-less feed listings no feed listed today; flush_pending() places them.
+        self._pending: list[Listing] = []
 
     def set_known(self, known: Callable[[str, str | None], tuple[str, str] | None]) -> None:
         self._known = known
+
+    def flush_pending(self) -> None:
+        """Place method-less listings: on a resource an earlier sweep stored at
+        the same URL, else as GET."""
+        pending, self._pending = self._pending, []
+        for listing in pending:
+            located = self._known(listing.url, None) if self._known else None
+            listing.method = located[1] if located else "GET"
+            self.add(listing)
 
     def _resource(self, key: str, method: str, r: Route, url: str) -> Resource:
         resource = self.resources.get(key)
@@ -229,7 +258,21 @@ class Merger:
         if r is None:
             return
         url = _norm(listing.url) or listing.url
-        located = self._locate(listing, r) if listing.own_record else None
+        if listing.own_record:
+            located = self._locate(listing, r)
+        elif not listing.method:
+            # A feed that names no method (thirdweb, mostly): the resource
+            # another feed listed at this URL, whatever its method.
+            methods = self._by_url.get(url, {})
+            located = (methods["POST"], "POST") if "POST" in methods else \
+                next(((key, method) for method, key in sorted(methods.items())), None)
+            if located is None:
+                if self._known is None:
+                    self._pending.append(listing)  # resolved against the database later
+                    return
+                located = self._known(listing.url, None)
+        else:
+            located = None
         if located is not None:
             key, method = located
             resource = self.resources.get(key)
@@ -239,7 +282,7 @@ class Merger:
                 known_route = route(parts[1]) or r
                 resource = self._resource(key, method, known_route, listing.url)
         else:
-            method = (listing.method or "POST").upper()
+            method = (listing.method or ("POST" if listing.own_record else "GET")).upper()
             key = r.key(method)
             resource = self._resource(key, method, r, listing.url)
             self._by_url[url].setdefault(method, key)
@@ -253,7 +296,7 @@ class Merger:
 
         if listing.source in FEED_SOURCES:
             # The busiest listed instance speaks for the resource.
-            weight = (1 if listing.source == "bazaar" else 0, listing.calls_30d or 0, listing.payers_30d or 0)
+            weight = (_FEED_RANK.get(listing.source, 0), listing.calls_30d or 0, listing.payers_30d or 0)
             if resource.feed is None or weight > resource.feed_weight:
                 resource.feed, resource.feed_weight = listing, weight
                 if not r.has_params or "{" not in listing.url and ":" not in listing.url.split("//", 1)[-1]:
@@ -410,11 +453,11 @@ def _upsert(conn: psycopg.Connection, params: dict[str, Any]) -> None:
           sources = array(
             select s from unnest(array_cat(
               array(select unnest(r.sources) except select unnest(%(swept)s::text[])), t.sources)) s
-            group by s order by min(array_position(array['bazaar','mpp','hosted','gateway','reviewed'], s))),
+            group by s order by min(array_position(array['bazaar','payai','dexter','thirdweb','mpp','hosted','gateway','reviewed'], s))),
           source_seen = r.source_seen || coalesce((select jsonb_object_agg(s, %(now)s) from unnest(t.sources) s), '{}'::jsonb),
           last_listed_at = %(now)s,
           service_id = coalesce(t.service_id, r.service_id),
-          probe_url = case when t.has_feed or not (r.sources && array['bazaar','mpp']) then t.probe_url else r.probe_url end,
+          probe_url = case when t.has_feed or not (r.sources && array['bazaar','payai','dexter','thirdweb','mpp']) then t.probe_url else r.probe_url end,
           probe_body = case when t.has_feed or t.probe_body is not null then t.probe_body::jsonb else r.probe_body end,
           listing_type = case when t.has_feed then t.listing_type else r.listing_type end,
           protocol = coalesce(case when t.has_feed then t.protocol end, r.protocol, t.protocol),
@@ -465,10 +508,12 @@ def _upsert(conn: psycopg.Connection, params: dict[str, Any]) -> None:
 
 
 def update_tracking(conn: psycopg.Connection, now: datetime) -> int:
-    """C1: tracked when hosted, bought through our gateway, used by >= 3 Bazaar
-    payers in 30 days, or matching a published proposal. Feed listings must be
-    on Base, Solana or Tempo; MCP listings are not tracked (the gateway calls
-    HTTP endpoints). A seller that opted out (index_opt_outs) is never tracked."""
+    """C1/C9: tracked when hosted, bought through our gateway, used by >= 3
+    Bazaar payers in 30 days, listed by mpp.dev (a curated catalog with no
+    payer data: every paid endpoint), or matching a published proposal. Bazaar
+    listings must be on Base, Solana or Tempo; MCP listings are not tracked
+    (the gateway calls HTTP endpoints). A seller that opted out
+    (index_opt_outs) is never tracked."""
     return conn.execute(
         """
         with t as (
@@ -479,6 +524,7 @@ def update_tracking(conn: psycopg.Connection, now: datetime) -> int:
               when 'gateway' = any(sources) then 'gateway_purchase'
               when listing_type = 'http' and cardinality(networks) > 0
                    and coalesce(bazaar_payers_30d, 0) >= %(payers)s then 'bazaar_payers'
+              when listing_type = 'http' and 'mpp' = any(sources) then 'curated'
               when listing_type = 'http' and payable and cardinality(proposal_ids) > 0 then 'proposal'
             end as reason
           from index_resources
@@ -663,7 +709,8 @@ def _known_resolver(conn: psycopg.Connection) -> Callable[[str, str | None], tup
 
 def run_sweep(connect: Callable[[], Any], now: datetime, *, feeds: dict[str, Callable[..., Any]] | None = None,
               client_factory: Callable[[], Any] = feed_client, force: bool = False,
-              embedder: Any = None) -> dict[str, Any]:
+              embedder: Any = None, static_catalogs: Iterable[Catalog] = STATIC_CATALOGS,
+              priors_fetcher: Callable[[Any], tuple[list[Any], dict[str, str]]] = fetch_priors) -> dict[str, Any]:
     feeds = FEEDS if feeds is None else feeds
     began = time.monotonic()
 
@@ -681,25 +728,34 @@ def run_sweep(connect: Callable[[], Any], now: datetime, *, feeds: dict[str, Cal
     # Feeds are folded in as soon as each is read, so only one feed's listings
     # are held at a time; our own records come after, and may name templates.
     merger = Merger()
+    catalogs: list[Catalog] = []
     if due:
         with client_factory() as client:
             for source in [s for s in FEED_SOURCES if s in due] + [s for s in due if s not in FEED_SOURCES]:
                 started[source] = clock()
+                counts[source] = 0
                 try:
-                    listings, counts[source] = feeds[source](client)
+                    pages = feeds[source](client)
+                    if isinstance(pages, tuple):  # (listings, count)
+                        pages = [pages[0]]
+                    for page in pages:
+                        for item in page:
+                            if isinstance(item, Catalog):
+                                catalogs.append(item)
+                                continue
+                            counts[source] += 1
+                            if item.source != "bazaar" or (item.payers_30d or 0) >= LISTED_MIN_PAYERS:
+                                merger.add(item)
                 except Exception as error:  # one feed failing never stops the others
                     failures[source] = f"{type(error).__name__}: {error}"[:500]
                     continue
-                for listing in listings:
-                    if listing.source != "bazaar" or (listing.payers_30d or 0) >= LISTED_MIN_PAYERS:
-                        merger.add(listing)
-                del listings
                 fetched.append(source)
 
     stats: dict[str, Any] = {"due": due, "failed": failures}
     with connect() as conn:
         internal = internal_listings(conn)
         merger.set_known(_known_resolver(conn))
+        merger.flush_pending()
         for source in INTERNAL_SOURCES:
             for listing in internal[source]:
                 merger.add(listing)
@@ -742,6 +798,26 @@ def run_sweep(connect: Callable[[], Any], now: datetime, *, feeds: dict[str, Cal
         stats.update(link_services(conn))
         stats["tracked"] = conn.execute("select count(*)::int as n from index_resources where tracked").fetchone()["n"]
         conn.commit()
+    if fetched:
+        # C9: which model each offering sells, from sellers' catalogs, routes and descriptions.
+        with client_factory() as client:
+            entries, catalog_failures = fetch_catalogs(client, [*static_catalogs, *catalogs])
+        with connect() as conn:
+            stats["models"] = update_models(conn, entries, complete=not catalog_failures and "mpp" in fetched)
+            conn.commit()
+        if catalog_failures:
+            stats["catalog_failures"] = catalog_failures
+        del entries
+    if force or _priors_due(connect, now):
+        with client_factory() as client:
+            priors, prior_failures = priors_fetcher(client)
+        with connect() as conn:
+            stats["priors"] = store_priors(conn, priors, now)
+            conn.commit()
+        if prior_failures:
+            stats["prior_failures"] = prior_failures
+            if not priors:
+                failures["quality priors"] = ", ".join(f"{b}: {e}" for b, e in prior_failures.items())
     print(f"index sweep: {json.dumps(stats, default=str)}")
     if failures:
         raise IndexJobError("index sweep failed for " + ", ".join(f"{s} ({e})" for s, e in failures.items()))
@@ -875,7 +951,11 @@ def probe_budget(tracked: int) -> int:
 def due_targets(conn: psycopg.Connection, now: datetime, limit: int) -> list[ProbeTarget]:
     rows = conn.execute(
         """
-        select id, method, probe_url, probe_body, input_schema from index_resources r
+        select id, method, probe_url, probe_body, input_schema, modality,
+               (select m.seller_model_id from index_offering_models m
+                where m.resource_id = r.id and m.seller_model_id is not null
+                order by m.usd_per_second nulls last, m.model limit 1) as model_hint
+        from index_resources r
         where tracked and (last_probed_at is null or last_probed_at <= %s)
           and not exists (select 1 from index_opt_outs x where starts_with(r.probe_url, x.prefix))
         order by last_probed_at is not null desc, last_probed_at asc,
@@ -885,7 +965,8 @@ def due_targets(conn: psycopg.Connection, now: datetime, limit: int) -> list[Pro
         """,
         (now - PROBE_EVERY, limit),
     ).fetchall()
-    return [ProbeTarget(r["id"], r["method"], r["probe_url"], r["probe_body"], r["input_schema"]) for r in rows]
+    return [ProbeTarget(r["id"], r["method"], r["probe_url"], r["probe_body"], r["input_schema"],
+                        r.get("modality"), r.get("model_hint")) for r in rows]
 
 
 def run_probes(connect: Callable[[], Any], now: datetime, *, allow: Callable[[str], bool] = public_endpoint,
@@ -1100,6 +1181,31 @@ def health(conn: psycopg.Connection, now: datetime) -> dict[str, Any]:
             "select kind, count(*)::int as n from index_changes where at > %s group by 1", (now - timedelta(hours=24),)
         ).fetchall()
     }
+    by_source = {
+        row["source"]: row["n"]
+        for row in conn.execute(
+            "select s as source, count(*)::int as n from index_resources, unnest(sources) s group by 1 order by 2 desc"
+        ).fetchall()
+    }
+    models = conn.execute(
+        """
+        select count(distinct resource_id)::int as offerings, count(distinct model)::int as models,
+               count(*)::int as rows
+        from index_offering_models
+        """
+    ).fetchone()
+    by_modality = {
+        row["modality"]: {"offerings": row["offerings"], "models": row["models"]}
+        for row in conn.execute(
+            """
+            select modality, count(distinct resource_id)::int as offerings, count(distinct model)::int as models
+            from index_offering_models group by 1 order by 1
+            """
+        ).fetchall()
+    }
+    priors = conn.execute(
+        "select count(*)::int as n, max(as_of) as as_of, array_agg(distinct source) as sources from model_quality_priors"
+    ).fetchone()
     tracked = counts["tracked"]
     share = round(counts["probed_24h"] / tracked, 4) if tracked else None
     stale = [s["source"] for s in sources if s["source"] in FEED_SOURCES and (s["age_hours"] is None or s["age_hours"] > 26)]
@@ -1119,6 +1225,10 @@ def health(conn: psycopg.Connection, now: datetime) -> dict[str, Any]:
             "urls": coverage["resources"], "tracked": coverage["tracked"],
             "share": round(coverage["tracked"] / coverage["resources"], 4) if coverage["resources"] else None,
         },
+        "listed_by_source": by_source,
+        "models": {**models, "by_modality": by_modality},
+        "quality_priors": {"models": priors["n"], "as_of": priors["as_of"].isoformat() if priors["as_of"] else None,
+                           "sources": sorted(priors["sources"] or [])},
         "changes_24h": changes,
         "sources": sources,
         "stale_sources": stale,
@@ -1174,3 +1284,127 @@ def resource_detail(conn: psycopg.Connection, url: str, method: str | None = Non
         "observations": observations,
         "changes": changes,
     })
+
+
+# --- Model identity and quality priors (C9) ----------------------------------------
+
+PRIORS_EVERY = timedelta(days=6)
+
+
+def update_models(conn: psycopg.Connection, entries: list[CatalogEntry], *, complete: bool) -> dict[str, int]:
+    """Write which model(s) each offering sells (index_offering_models) and,
+    when it sells one, put it on the resource (model, model_family, modality).
+
+    A seller's catalog wins over the route, the route over the description.
+    ``complete``: every catalog was read, so catalog rows not seen today go.
+    Otherwise only the offerings a catalog answered for are rewritten.
+    """
+    resources = conn.execute(
+        "select id, method, route_template, probe_url, description, service_name, model, model_family, modality "
+        "from index_resources"
+    ).fetchall()
+    by_url: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in resources:
+        for url in {_norm(row["probe_url"]), _norm(row["route_template"])}:
+            if url:
+                by_url[url].append(row)
+
+    rows: dict[tuple[int, str], tuple[Any, ...]] = {}
+    from_catalog: set[int] = set()
+    for entry in entries:
+        candidates = by_url.get(_norm(entry.endpoint) or "", [])
+        sellers = [r for r in candidates if r["method"] in ("POST", "PUT")] or candidates
+        for row in sellers:
+            from_catalog.add(row["id"])
+            rows.setdefault((row["id"], entry.model.model), (
+                row["id"], entry.model.model, entry.model.family, entry.model.modality, entry.seller_model_id,
+                "models_endpoint", as_json(entry.pricing), entry.usd_per_second))
+    for row in resources:
+        if row["id"] in from_catalog:
+            continue
+        path = row["route_template"].split("//", 1)[-1].split("/", 1)[-1] if row["route_template"] else ""
+        found = offering_model("/" + path, row["description"], row["service_name"])
+        if found:
+            model, source = found
+            rows[(row["id"], model.model)] = (row["id"], model.model, model.family, model.modality, None,
+                                              source, None, None)
+
+    per_resource: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
+    for row in rows.values():
+        per_resource[row[0]].append(row)
+    updates = []
+    for row in resources:
+        models = per_resource.get(row["id"], [])
+        if len(models) == 1:
+            new = (models[0][1], models[0][2], models[0][3])
+        elif models:
+            modalities = {m[3] for m in models}
+            new = (None, None, modalities.pop() if len(modalities) == 1 else None)
+        else:
+            new = (None, None, modality_hint(row["route_template"], row["description"], row["service_name"]))
+        if new != (row["model"], row["model_family"], row["modality"]):
+            updates.append((*new, row["id"]))
+    del resources, by_url
+
+    conn.execute(
+        "create temp table tmp_offering_models (resource_id bigint, model text, model_family text, modality text, "
+        "seller_model_id text, source text, pricing text, usd_per_second numeric) on commit drop"
+    )
+    with conn.cursor().copy(
+        "copy tmp_offering_models (resource_id, model, model_family, modality, seller_model_id, source, pricing, "
+        "usd_per_second) from stdin"
+    ) as copy:
+        copy.set_types(["int8", "text", "text", "text", "text", "text", "text", "float8"])
+        for row in rows.values():
+            copy.write_row(row)
+    if complete:
+        conn.execute("delete from index_offering_models")
+    else:
+        conn.execute(
+            "delete from index_offering_models where source <> 'models_endpoint' "
+            "or resource_id in (select resource_id from tmp_offering_models where source = 'models_endpoint')"
+        )
+    conn.execute(
+        """
+        insert into index_offering_models (resource_id, model, model_family, modality, seller_model_id, source,
+                                           pricing, usd_per_second, updated_at)
+        select resource_id, model, model_family, modality, seller_model_id, source, pricing::jsonb, usd_per_second, now()
+        from tmp_offering_models
+        on conflict (resource_id, model) do update set
+          model_family = excluded.model_family, modality = excluded.modality,
+          seller_model_id = excluded.seller_model_id, source = excluded.source,
+          pricing = excluded.pricing, usd_per_second = excluded.usd_per_second, updated_at = excluded.updated_at
+        """
+    )
+    if updates:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "update index_resources set model = %s, model_family = %s, modality = %s where id = %s", updates)
+    return {"offering_models": len(rows), "from_catalogs": len(from_catalog), "resources_changed": len(updates)}
+
+
+def _priors_due(connect: Callable[[], Any], now: datetime) -> bool:
+    with connect() as conn:
+        row = conn.execute("select max(fetched_at) as at from model_quality_priors").fetchone()
+    return row["at"] is None or now - row["at"] >= PRIORS_EVERY
+
+
+def store_priors(conn: psycopg.Connection, priors: list[Any], now: datetime) -> int:
+    """Upsert this week's leaderboard snapshot; a model that left the boards keeps its last row."""
+    rows = priors_rows(priors, now.date())
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            insert into model_quality_priors (model, model_family, modality, source, source_url, as_of, elo, metric,
+                                              score, rank, prior_rating, leaderboard_name, fetched_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            on conflict (model) do update set
+              model_family = excluded.model_family, modality = excluded.modality, source = excluded.source,
+              source_url = excluded.source_url, as_of = excluded.as_of, elo = excluded.elo,
+              metric = excluded.metric, score = excluded.score, rank = excluded.rank,
+              prior_rating = excluded.prior_rating, leaderboard_name = excluded.leaderboard_name,
+              fetched_at = excluded.fetched_at
+            """,
+            [(*row, now) for row in rows],
+        )
+    return len(rows)

@@ -124,11 +124,21 @@ def body_from_schema(body: Any, depth: int = 0) -> dict[str, Any]:
     return {key: _placeholder(properties.get(key), key, depth) for key in required[:20]}
 
 
-def request_body(method: str, probe_body: Any, input_schema: Any) -> bytes | None:
+# What a media generator is asked when its listing documents no body: a prompt,
+# and for a multi-model endpoint one of the models its own catalog lists. Enough
+# for the 402 to quote a price; nothing is generated without payment.
+MEDIA_PROMPT = "A calm ocean at sunset, a short test clip"
+MEDIA_MODALITIES = frozenset({"video", "image", "music"})
+
+
+def request_body(method: str, probe_body: Any, input_schema: Any, modality: str | None = None,
+                 model_hint: str | None = None) -> bytes | None:
     """What a probe sends: never an empty body with a body method."""
     if method.upper() not in BODY_METHODS:
         return None
     body = probe_body if isinstance(probe_body, (dict, list)) and probe_body else minimal_body(input_schema)
+    if not body and modality in MEDIA_MODALITIES:
+        body = {"prompt": MEDIA_PROMPT, **({"model": model_hint} if model_hint else {})}
     encoded = json.dumps(body, separators=(",", ":")).encode()
     return encoded or b"{}"
 
@@ -217,6 +227,8 @@ class ProbeTarget:
     url: str
     probe_body: Any = None
     input_schema: Any = None
+    modality: str | None = None
+    model_hint: str | None = None
 
 
 def probe(client: httpx.Client, target: ProbeTarget,
@@ -224,7 +236,7 @@ def probe(client: httpx.Client, target: ProbeTarget,
     if not allow(target.url):
         return ProbeResult(False, None, "not_public")
     method = target.method.upper()
-    body = request_body(method, target.probe_body, target.input_schema)
+    body = request_body(method, target.probe_body, target.input_schema, target.modality, target.model_hint)
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
