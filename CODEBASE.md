@@ -107,6 +107,65 @@ its probes and changes. Schema: `supabase/services-index.sql`.
 
 ## `src/crowdcode/reliability.py`
 
+`reliability-v1` (SRI-115 ticket 6; contract C3): one state per tracked
+service, `reliable`, `unverified` or `unreliable`, with plain-sentence reasons.
+The thresholds are constants at the top of the module and nowhere else.
+`evaluate(inputs)` is pure and reads only the published `inputs` document, so
+a state can be recomputed from what the API returns. `gather` reads the
+evidence (`index_resource_signals`, `index_changes`, `index_observations`,
+attested reviews, `service_identifiers` payees, `service_blocks`);
+`recompute` stores the answers in `service_reliability`, writing a row only
+when it changed. The cron job `reliability` runs it hourly after the probes;
+an attested review recomputes its service in the background. Routes:
+`GET /api/services/{id}/reliability`, `GET /api/reliability?url=&method=`
+(index identity first, then the registry's endpoint aliases) and
+`GET /api/reliability?state=`. Operators block and unblock with
+`scripts/block_service.py` (audited in `service_block_audit`). Schema:
+`supabase/reliability.sql`.
+
+## `src/crowdcode/capability_tree.py`, `value_ranking.py`, `media_models.py`
+
+The capability tree (SRI-115; contracts C7, C10, C13 and C14 in the parent
+repository's `design-docs/RELIABLE_SERVICES_BUILD.md`): when an agent should
+look for a paid service, and which offering to use for which situation.
+
+- **15 top nodes, written by hand** (`NODES`), each with `when_to_look` and
+  `when_not_to_buy`; `free-first` is the policy node. The media nodes carry
+  the standing hard rule (a requested video, image or audio is a real file
+  from a model), which is also in every L0 rendering.
+- **Offerings:** every payable listing in the index (C9), tracked or not.
+- **Classification:** every offering and every published proposal gets one
+  or two `(node, facet)` pairs from one batched model call per 50 items
+  (`OPENAI_MODEL`, minimal reasoning; `CROWDCODE_TREE_MODEL` overrides). Only
+  new or changed items are sent, costed against a daily cap
+  (`CROWDCODE_TREE_DAILY_BUDGET_USD`, default $1; ledger: the
+  `capability_tree_spend` row in `app_cache`).
+- **Leaves:** the media nodes have the owner's fixed split (`FIXED_LEAVES`:
+  video generate / edit / transcribe, image generate / edit / analyse, audio
+  tts / transcribe / music), and their leaves list **models**
+  (`media_models.py`: C9's `model` columns when the index has them, else the
+  seller's route, description and `model` enum) with each model's sellers.
+  Other nodes' leaves are proposed by a model call per node and split only
+  where a different best-known offering wins (`<node>.all`, `<node>.other`,
+  `covers`).
+- **Tiers and ranking** (`value_ranking.py`): C10's Beta estimate (prior from
+  Bazaar payers and calls or the mpp.dev catalog, plus judged purchases; or
+  reliability-v2's own `alpha`/`beta`/`tier` when stored) gives `proven`,
+  `popular`, `new` or `bad`. Picks are proven or popular offerings by expected
+  delivery × quality / price; up to 3 exploration candidates come from a
+  seeded Thompson sample of the same value (C13). Quality is neutral until
+  C9's leaderboard priors exist.
+- **Versions:** one row per build in `capability_tree_versions` (newest 14
+  kept). W8's gate publishes through `publish_gated()`; versions stored in
+  the Phase 1 format (`capability-tree-v1`) still render as they did.
+- **Cron:** `run_capability_tree`, last in the hourly run.
+
+`GET /api/tree[?version=current|candidate|<n>]` returns the version, the top
+level and the L0 rendering (≤ 800 tokens, bounded as UTF-8 bytes / 3);
+`GET /api/tree/{node_or_leaf}` returns one node or leaf as text (the whole
+body ≤ 600 tokens). `&format=full` returns the structured tree, as
+crowdcode.app/tree shows it. Schema: `supabase/capability-tree.sql`.
+
 `reliability-v2` (SRI-115 contract C10; v1 was C3): per offering, a delivery
 estimate `Beta(alpha, beta)` (prior from Bazaar payers and repeat ratio or the
 mpp.dev catalog, plus judged purchases and seller failures before settlement),

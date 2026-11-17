@@ -43,6 +43,7 @@ classification moved something.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -53,10 +54,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable
 
+from crowdcode import media_models
+from crowdcode import value_ranking as vr
 from crowdcode.settings import Settings, get_settings
 from crowdcode.summaries import _chat_json
 
-TREE_FORMAT = "capability-tree-v1"
+TREE_FORMAT = "capability-tree-v2"
 # Bumped when the classification prompt changes in a way that should re-run
 # every item; the fingerprint includes it.
 CLASSIFIER_VERSION = 1
@@ -74,7 +77,8 @@ ENTRY_TOKENS = 600
 MAX_LEAVES_PER_NODE = 8
 FACETS_PER_LEAF_CALL = 200
 PICKS_PER_LEAF = 3
-CANDIDATES_PER_LEAF = 5
+EXPLORE_PER_LEAF = 3  # C13: up to 3 exploration candidates per leaf
+MODEL_PICKS = 2
 DEMAND_PER_LEAF = 5
 DESCRIPTION_CHARS = 280
 SPEND_CACHE_KEY = "capability_tree_spend"
@@ -223,11 +227,33 @@ NODES: tuple[Node, ...] = (
 NODE_BY_ID = {node.id: node for node in NODES}
 CLASSIFIABLE = tuple(node.id for node in NODES if node.hint)
 FREE_FIRST_POLICY = (
-    "Free first: use local files, shell, Python and free public APIs; once they answer, stop. "
+    "Free first: local files, shell, Python and free public APIs; once they answer, stop. "
     "Buy only when current data, rendering, hosting or anti-bot access saves real work. "
-    "Pay automatically only for a reliable pick; anything unverified needs the owner's approval; "
-    "when nothing reliable fits, record the need with request_service instead of guessing."
+    "Proven and popular offerings pay automatically; a new one is tried within the exploration "
+    "allowance; a bad one is refused. When nothing fits, file request_service instead of guessing."
 )
+RANKING_RULE = (
+    "C13: picks are proven or popular offerings ranked by expected delivery x quality / price; "
+    "exploration candidates are the others a Thompson sample of the same value chooses most often."
+)
+# The owner's split of the media nodes (Phase 2): fixed leaves, each with its models.
+FIXED_LEAVES: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "video": (
+        ("generate", "Generate video", "When the task needs a new clip from a prompt or an image."),
+        ("edit", "Edit and render video", "When an existing video must be cut, captioned, edited or rendered from a template."),
+        ("transcribe", "Transcribe or access video", "When the task needs a video's transcript, metadata or file, not a new video."),
+    ),
+    "image": (
+        ("generate", "Generate image", "When the task needs a new image from a prompt."),
+        ("edit", "Edit image", "When an existing image must be edited, upscaled, restyled or cut out."),
+        ("analyse", "Analyse image", "When the task needs what an image shows: captions, detection, reading or moderation."),
+    ),
+    "audio": (
+        ("tts", "Text to speech", "When the task needs spoken audio from text."),
+        ("transcribe", "Transcribe speech", "When the task needs the words in an audio or video recording."),
+        ("music", "Music and sound", "When the task needs music, a song or sound effects."),
+    ),
+}
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -445,18 +471,21 @@ LEAVES_SYSTEM = (
 
 def propose_leaves(chat: ChatFn, spend: Spend, node: Node, existing: list[dict[str, Any]],
                    facets: list[tuple[str, int]]) -> tuple[list[dict[str, Any]], dict[str, str]] | None:
-    """Group unmapped facets into leaves of `node`, keeping existing leaves.
+    """Group unmapped facets into leaves of `node`, keeping existing leaves. A
+    node with fixed leaves (the media split) only maps facets onto them.
 
     Returns (new leaves [{slug, label, when_to_look}], {facet: leaf slug}) or None.
     """
-    room = max(0, MAX_LEAVES_PER_NODE - len(existing))
+    fixed = node.id in FIXED_LEAVES
+    room = 0 if fixed else max(0, MAX_LEAVES_PER_NODE - len(existing))
     payload = {
         "node": {"id": node.id, "label": node.label, "covers": node.hint},
         "existing_leaves": [{"slug": leaf["slug"], "label": leaf["label"], "when_to_look": leaf.get("when_to_look")}
                             for leaf in existing],
         "facets": [{"f": f, "n": n} for f, n in facets],
         "rules": [
-            "Map every facet to exactly one leaf slug: an existing leaf, or a new leaf you define.",
+            ("Map every facet to exactly one existing leaf slug, the closest one; define no new leaves."
+             if fixed else "Map every facet to exactly one leaf slug: an existing leaf, or a new leaf you define."),
             f"Define at most {room} new leaves; existing plus new must stay at or under {MAX_LEAVES_PER_NODE}.",
             "Prefer few, broad leaves an agent can tell apart from its task (for video: generation, "
             "editing, transcription), not one per vendor or per request. A node with many facets "
@@ -515,31 +544,62 @@ class ReliabilityView:
         return str((self.states.get(service_id) or {}).get("state") or "unverified")
 
     def fingerprint(self) -> str:
-        pairs = sorted((sid, str(row.get("state"))) for sid, row in self.states.items()
-                       if row.get("state") in {"reliable", "unreliable"})
-        return hashlib.sha1(json.dumps([self.available, pairs]).encode()).hexdigest()[:16]
+        """What changes a tier: a state other than unverified, judged purchases,
+        and v2's tier and estimate."""
+        pairs = []
+        for sid, row in self.states.items():
+            inputs = row.get("inputs") or {}
+            judged = inputs.get("judged_30d") or {}
+            v2 = {k: row[k] if row.get(k) is not None else inputs.get(k) for k in ("tier", "alpha", "beta", "quality")}
+            key = [str(row.get("state")), v2["tier"],
+                   judged.get("total") if isinstance(judged, dict) else None,
+                   judged.get("delivered") if isinstance(judged, dict) else None,
+                   v2["alpha"], v2["beta"], v2["quality"]]
+            if key[0] != "unverified" or any(v for v in key[1:]):
+                pairs.append((sid, key))
+        pairs.sort(key=lambda p: p[0])
+        return hashlib.sha1(json.dumps([self.available, pairs], default=str).encode()).hexdigest()[:16]
+
+
+def _columns(conn: Any, table: str) -> set[str]:
+    return {r["column_name"] for r in conn.execute(
+        "select column_name from information_schema.columns where table_name = %s and table_schema = current_schema()",
+        (table,)).fetchall()}
+
+
+V2_FIELDS = ("alpha", "beta", "tier", "quality", "prior_source")
 
 
 def load_reliability(connect: Callable[[], Any]) -> ReliabilityView:
-    """C3's reliable and unreliable services, from `service_reliability` (W4's
-    table, written by `crowdcode.reliability` earlier in the same cron run).
+    """Every service's C3 row from `service_reliability` (W4's table, written by
+    `crowdcode.reliability` earlier in the same cron run): its state and
+    reasons, the judged purchases (v1's `inputs.judged_30d`), and C10's
+    `alpha`, `beta`, `tier` and `quality` once reliability-v2 stores them, as
+    columns or inside `inputs`.
 
     Any failure (the table missing, the database unreachable) yields an
-    unavailable view: everything unverified, never everything reliable.
+    unavailable view: tiers then come from outside evidence alone, and nothing
+    is `proven`.
     """
     try:
         with connect() as conn:
+            columns = _columns(conn, "service_reliability")
+            extra = "".join(f", r.{c}" for c in V2_FIELDS if c in columns)
+            light = ", ".join(f"'{k}', r.inputs->'{k}'" for k in ("judged_30d", *V2_FIELDS))
             rows = conn.execute(
-                """
-                select service_id, state, rule_version, computed_at, reasons, inputs
-                from service_reliability where state in ('reliable', 'unreliable')
+                f"""
+                select r.service_id, r.state, r.rule_version, r.computed_at, r.reasons,
+                       jsonb_build_object({light}) as inputs{extra}
+                from service_reliability r
                 """
             ).fetchall()
     except Exception as error:  # the tree must still build
         return ReliabilityView(error=type(error).__name__)
     view = ReliabilityView(available=True)
     for row in rows:
-        view.states[row["service_id"]] = dict(row)
+        row = dict(row)
+        row["inputs"] = {k: v for k, v in (row.get("inputs") or {}).items() if v is not None}
+        view.states[row["service_id"]] = row
         view.rule_version = view.rule_version or row["rule_version"]
     return view
 
@@ -554,28 +614,6 @@ def _num(mapping: Any, *names: str) -> float | None:
     return None
 
 
-def delivered_rate(row: dict[str, Any]) -> tuple[float | None, int | None]:
-    """(delivered share, judged purchases) over C3's 30 days: inputs.judged_30d
-    is {total, delivered, partial, ...}; partial counts as not delivered."""
-    inputs = row.get("inputs") if isinstance(row.get("inputs"), dict) else {}
-    judged = _num(inputs.get("judged_30d"), "total")
-    delivered = _num(inputs.get("judged_30d"), "delivered")
-    if not judged:
-        return None, int(judged) if judged is not None else None
-    return (delivered or 0.0) / judged, int(judged)
-
-
-def pick_reason(row: dict[str, Any]) -> str:
-    """One line from C3's reasons: delivery first, then liveness."""
-    reasons = [str(r).strip() for r in (row.get("reasons") or []) if str(r).strip()]
-    def rank(text: str) -> int:
-        low = text.lower()
-        return 0 if "deliver" in low else 1 if "402" in low or "probe" in low else 2
-    chosen = sorted(reasons, key=rank)[:2]
-    line = " · ".join(chosen) or "meets CrowdCode's reliability rule"
-    return line if len(line) <= 160 else line[:157].rstrip() + "…"
-
-
 # --- Assembling a tree (pure) ------------------------------------------------------
 
 
@@ -588,13 +626,20 @@ def usd(amount: Any, asset: Any) -> float | None:
         return None
 
 
-def _service_entry(service_id: str, resources: list[dict[str, Any]]) -> dict[str, Any]:
-    best = max(resources, key=lambda r: (r.get("bazaar_payers_30d") or 0, -(r.get("id") or 0)))
+def offering_id(row: dict[str, Any]) -> str:
+    """One offering per paid endpoint (C9). Listings the index has not linked
+    to a service yet are keyed by their index row."""
+    return str(row.get("service_id") or f"res_{row['id']}")
+
+
+def _offering(oid: str, rows: list[dict[str, Any]], estimate: vr.Estimate) -> dict[str, Any]:
+    best = max(rows, key=lambda r: (r.get("bazaar_payers_30d") or 0, -(r.get("id") or 0)))
     price = usd(best.get("quoted_price_atomic"), best.get("quoted_asset"))
     if price is None:
         price = usd(best.get("price_atomic"), best.get("price_asset"))
     return {
-        "service_id": service_id,
+        "offering_id": oid,
+        "service_id": best.get("service_id"),
         "name": (best.get("service_label") or best.get("service_name")
                  or _short_url(best.get("origin") or best["route_template"]))[:80],
         "endpoint": best.get("probe_url") or best["route_template"],
@@ -602,13 +647,14 @@ def _service_entry(service_id: str, resources: list[dict[str, Any]]) -> dict[str
         "price_usd": round(price, 6) if price is not None else None,
         "payers": int(best.get("bazaar_payers_30d") or 0),
         "networks": best.get("networks") or [],
-        "routes": len(resources),
+        "curated": "mpp" in (best.get("sources") or []),
+        "estimate": estimate,
     }
 
 
-def _pick_order(pick: dict[str, Any]) -> tuple:
-    return (-(pick.get("delivered_rate") or 0), -(pick.get("judged") or 0), -pick["payers"],
-            pick["price_usd"] if pick["price_usd"] is not None else 1e9, pick["service_id"])
+def _tier_counts(entries: Iterable[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(e["estimate"].tier for e in entries)
+    return {tier: counts.get(tier, 0) for tier in vr.TIERS}
 
 
 def assemble(
@@ -620,10 +666,15 @@ def assemble(
     reliability: ReliabilityView,
     built_at: datetime,
     version: int | None = None,
+    offering_models: dict[int, list[dict[str, Any]]] | None = None,
+    model_priors: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build one tree version from the stored classification and C3 states.
+    """Build one tree version from the stored classification (C7) and the
+    tiers and ranking of C10 and C13. `offering_models` and `model_priors`
+    are C9's tables (`media_models.load`); without them models are read from
+    each offering's own words and no model has a quality prior.
 
-    `resources`: tracked index rows. `assignments`: item key -> [{node, facet}].
+    `resources`: payable index rows. `assignments`: item key -> [{node, facet}].
     `leaves`: capability_leaves rows (id, node, slug, label, when_to_look, facets).
     """
     leaf_by_facet: dict[tuple[str, str], dict[str, Any]] = {}
@@ -632,29 +683,52 @@ def assemble(
         leaves_by_node[leaf["node"]].append(leaf)
         for facet in leaf.get("facets") or []:
             leaf_by_facet[(leaf["node"], facet)] = leaf
+    day = built_at.date().isoformat()
 
-    # candidate leaf id -> {service_id -> [resource rows]}
+    # Offerings, each estimated once.
+    rows_by_offering: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in resources:
+        rows_by_offering[offering_id(row)].append(row)
+    priors = model_priors or {}
+    sold: dict[str, list[dict[str, str]]] = {}  # offering id -> the models it sells (C9)
+    for oid, rows in rows_by_offering.items():
+        seen: dict[str, dict[str, str]] = {}
+        for row in rows:
+            for model in media_models.models_for(row, offering_models):
+                seen.setdefault(model["model"], model)
+        sold[oid] = list(seen.values())
+
+    def model_quality(model_id: str) -> float | None:
+        rating = (priors.get(model_id) or {}).get("prior_rating")
+        return float(rating) / 5 if rating is not None else None
+
+    offerings: dict[str, dict[str, Any]] = {}
+    for oid, rows in rows_by_offering.items():
+        head = max(rows, key=lambda r: r.get("bazaar_payers_30d") or 0)
+        state = reliability.states.get(head.get("service_id")) if head.get("service_id") else None
+        estimate = vr.estimate(head, state)
+        # C10: quality is the judge mean shrunk to the prior (v2's own figure);
+        # without one, a media offering takes its best model's leaderboard prior.
+        known = [q for q in (model_quality(m["model"]) for m in sold[oid]) if q is not None]
+        if estimate.source != "reliability-v2" and known:
+            estimate = dataclasses.replace(estimate, quality=max(known))
+        offerings[oid] = _offering(oid, rows, estimate)
+
+    # candidate leaf id -> {offering id -> rows}; node -> {offering id -> rows} when unplaced.
     members: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     unsorted: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
-    placed_services: set[str] = set()
-    by_service: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    placed: set[str] = set()
     for row in resources:
-        if row.get("service_id"):
-            by_service[row["service_id"]].append(row)
+        oid = offering_id(row)
         for a in assignments.get(f"r:{row['id']}") or []:
-            sid = row.get("service_id")
-            if not sid:
-                continue
             leaf = leaf_by_facet.get((a["node"], a["facet"]))
-            target = members[leaf["id"]] if leaf else unsorted[a["node"]]
-            target[sid].append(row)
-            placed_services.add(sid)
-
-    # Every reliable service sits on a leaf: one the classifier has not reached
-    # yet goes to the developer node's remainder until it is classified.
-    for sid, row in reliability.states.items():
-        if row.get("state") == "reliable" and sid not in placed_services and by_service.get(sid):
-            unsorted["developer"][sid].extend(by_service[sid])
+            (members[leaf["id"]] if leaf else unsorted[a["node"]])[oid].append(row)
+            placed.add(oid)
+    # Every proven or popular offering sits on a leaf: one the classifier has
+    # not reached yet goes to the developer node until it is classified.
+    for oid, offering in offerings.items():
+        if oid not in placed and offering["estimate"].tier in ("proven", "popular"):
+            unsorted["developer"][oid].extend(rows_by_offering[oid])
 
     demand_by_leaf: dict[str, list[dict[str, Any]]] = defaultdict(list)
     demand_unsorted: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -678,37 +752,15 @@ def assemble(
             leaf = leaf_by_facet.get((a["node"], a["facet"]))
             (demand_by_leaf[leaf["id"]] if leaf else demand_unsorted[a["node"]]).append(entry)
 
-    def picks_for(services: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-        picks = []
-        for sid, rows in services.items():
-            row = reliability.states.get(sid) or {}
-            if row.get("state") != "reliable":
-                continue
-            rate, judged = delivered_rate(row)
-            picks.append({**_service_entry(sid, rows), "delivered_rate": round(rate, 3) if rate is not None else None,
-                          "judged": judged, "reason": pick_reason(row)})
-        return sorted(picks, key=_pick_order)
-
-    def candidates_for(services: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-        out = []
-        for sid, rows in services.items():
-            if reliability.state(sid) != "unverified":
-                continue
-            payable = [r for r in rows if r.get("payable") and r.get("liveness") != "dead"]
-            if not payable:
-                continue
-            entry = _service_entry(sid, payable)
-            entry["liveness"] = max((r.get("liveness") or "unknown" for r in payable),
-                                    key=lambda s: {"alive": 2, "unknown": 1, "failing": 0}.get(s, 0))
-            out.append(entry)
-        out.sort(key=lambda c: (-c["payers"], c["price_usd"] if c["price_usd"] is not None else 1e9, c["service_id"]))
-        return out
+    def ranked(ids: Iterable[str], key: str, picks: int = PICKS_PER_LEAF) -> vr.Ranked:
+        return vr.rank((offerings[i] for i in ids), seed=vr.seed_for(day, key), picks=picks,
+                       explore=EXPLORE_PER_LEAF)
 
     def merged(parts: list[dict[str, list[dict[str, Any]]]]) -> dict[str, list[dict[str, Any]]]:
         out: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for part in parts:
-            for sid, rows in part.items():
-                out[sid].extend(r for r in rows if r not in out[sid])
+            for oid, rows in part.items():
+                out[oid].extend(r for r in rows if r not in out[oid])
         return out
 
     def dedupe(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -719,29 +771,69 @@ def assemble(
                 out.append(e)
         return out
 
+    def models_in(leaf_id: str, kind: str, members_: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        modalities = media_models.NODE_MODALITIES.get(kind, (kind,))
+        by_model: dict[str, dict[str, Any]] = {}
+        for oid in members_:
+            for model in sold[oid]:
+                if model["modality"] in modalities:
+                    group = by_model.setdefault(model["model"], {**model, "offerings": set()})
+                    group["offerings"].add(oid)
+        out = []
+        for model_id, group in by_model.items():
+            ids = sorted(group["offerings"])
+            quality = model_quality(model_id)
+            # Sellers of one model compete on delivery and price: each is valued
+            # at this model's quality unless its own judged quality (v2) exists.
+            sellers = [offerings[i] if offerings[i]["estimate"].source == "reliability-v2" or quality is None
+                       else {**offerings[i], "estimate": dataclasses.replace(offerings[i]["estimate"], quality=quality)}
+                       for i in ids]
+            r = vr.rank(sellers, seed=vr.seed_for(day, f"{leaf_id}.{model_id}"), picks=MODEL_PICKS,
+                        explore=EXPLORE_PER_LEAF)
+            prices = sorted(offerings[i]["price_usd"] for i in ids if offerings[i]["price_usd"] is not None)
+            prior = priors.get(model_id)
+            out.append({
+                "id": f"{leaf_id}.{model_id}", "model": model_id, "label": media_models.label(model_id),
+                "family": group["family"], "modality": group["modality"],
+                "sellers": len(ids), "tiers": _tier_counts(offerings[i] for i in ids),
+                "price_range_usd": [prices[0], prices[-1]] if prices else None,
+                "payers": sum(offerings[i]["payers"] for i in ids),
+                "picks": r.picks, "explore": r.explore,
+                # C9: the leaderboard prior, with its source and date, or None.
+                "quality_prior": ({"rating": round(float(prior["prior_rating"]), 2), "rank": prior.get("rank"),
+                                   "source": prior.get("source"), "source_url": prior.get("source_url"),
+                                   "as_of": str(prior.get("as_of"))} if prior else None),
+            })
+        # Different models compete on quality (C9): rated models first, best first.
+        out.sort(key=lambda m: (m["quality_prior"] is None, -(m["quality_prior"] or {}).get("rating", 0),
+                                -(m["tiers"]["proven"] + m["tiers"]["popular"]), -m["payers"], -m["sellers"], m["id"]))
+        return out
+
     def leaf_entry(leaf_id: str, label: str, when: str | None, node: Node, covers: list[dict[str, Any]],
-                   services: dict[str, list[dict[str, Any]]], demand: list[dict[str, Any]],
-                   remainder: bool = False) -> dict[str, Any]:
-        picks = picks_for(services)
-        candidates = candidates_for(services)
+                   members_: dict[str, list[dict[str, Any]]], demand: list[dict[str, Any]],
+                   remainder: bool = False, models_kind: str | None = None) -> dict[str, Any]:
+        r = ranked(members_, leaf_id)
         demand = dedupe(demand)
-        return {
+        entry = {
             "id": leaf_id,
             "label": label,
             "when_to_look": when or node.when_to_look,
             "when_not_to_buy": node.when_not_to_buy,
             "covers": covers,
             "remainder": remainder,
-            # Every reliable service in the leaf; renderings show the first few.
-            "picks": picks,
-            "candidates": candidates[:CANDIDATES_PER_LEAF],
-            "candidate_count": len(candidates),
+            "picks": r.picks,
+            "explore": r.explore,
+            "tiers": _tier_counts(offerings[i] for i in members_),
+            "offerings": len(members_),
             "demand": demand[:DEMAND_PER_LEAF],
             "demand_count": len(demand),
             "demand_requests": sum(d["requests"] for d in demand),
-            "services": len(services),
-            "empty": not picks,
+            # Nothing proven or popular: the agent explores within the allowance (C12).
+            "empty": not r.picks,
         }
+        if models_kind:
+            entry["models"] = models_in(leaf_id, models_kind, members_)
+        return entry
 
     nodes_out = []
     stats = Counter()
@@ -753,98 +845,116 @@ def assemble(
             continue
         candidates_leaves = []
         for leaf in sorted(leaves_by_node.get(node.id, []), key=lambda leaf: leaf["id"]):
-            services = members.get(leaf["id"], {})
-            if not services and not demand_by_leaf.get(leaf["id"]):
+            members_ = members.get(leaf["id"], {})
+            if node.id not in FIXED_LEAVES and not members_ and not demand_by_leaf.get(leaf["id"]):
                 continue
-            picks = picks_for(services)
+            r = ranked(members_, leaf["id"], picks=1)
             candidates_leaves.append({
-                "leaf": leaf, "services": services, "winner": picks[0]["service_id"] if picks else None,
-                "weight": sum(max((r.get("bazaar_payers_30d") or 0) for r in rows) for rows in services.values()),
+                "leaf": leaf, "members": members_, "winner": r.picks[0]["offering_id"] if r.picks else None,
+                "weight": sum(offerings[i]["payers"] for i in members_),
                 "demand": demand_by_leaf.get(leaf["id"], []),
             })
-        extra_services = unsorted.get(node.id, {})
+        extra = unsorted.get(node.id, {})
         extra_demand = demand_unsorted.get(node.id, [])
-        winners = {c["winner"] for c in candidates_leaves if c["winner"]}
-        extra_picks = picks_for(extra_services)
-        if extra_picks:
-            winners.add(extra_picks[0]["service_id"])
 
         def cover(c: dict[str, Any]) -> dict[str, Any]:
-            return {"id": c["leaf"]["id"], "label": c["leaf"]["label"], "services": len(c["services"]),
+            return {"id": c["leaf"]["id"], "label": c["leaf"]["label"], "offerings": len(c["members"]),
                     "demand": len(c["demand"])}
 
         served = []
-        if len(winners) <= 1:
-            # Nothing to split on: one leaf for the whole node.
-            served.append(leaf_entry(
-                f"{node.id}.all", f"All {node.label.lower()}", None, node,
-                [cover(c) for c in sorted(candidates_leaves, key=lambda c: -c["weight"])],
-                merged([c["services"] for c in candidates_leaves] + [extra_services]),
-                [d for c in candidates_leaves for d in c["demand"]] + extra_demand,
-            ))
+        if node.id in FIXED_LEAVES:
+            # Media: the owner's fixed split, every leaf served, with its models.
+            order = {f"{node.id}.{slug_}": i for i, (slug_, _, _) in enumerate(FIXED_LEAVES[node.id])}
+            # An offering whose facet is not placed yet waits for the next run's
+            # placement rather than land in the wrong sub-capability.
+            # Demand the classifier put on the node goes with the first leaf.
+            for i, c in enumerate(sorted(candidates_leaves, key=lambda c: order.get(c["leaf"]["id"], 99))):
+                served.append(leaf_entry(
+                    c["leaf"]["id"], c["leaf"]["label"], c["leaf"].get("when_to_look"), node, [cover(c)],
+                    c["members"], c["demand"] + (extra_demand if i == 0 else []), models_kind=node.id,
+                ))
         else:
-            groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-            for c in candidates_leaves:
-                groups[c["winner"] or ""].append(c)
-            for winner, group in groups.items():
-                if not winner:
-                    continue
-                group.sort(key=lambda c: (-c["weight"], c["leaf"]["id"]))
-                head = group[0]["leaf"]
+            winners = {c["winner"] for c in candidates_leaves if c["winner"]}
+            extra_ranked = ranked(extra, f"{node.id}.unsorted", picks=1)
+            if extra_ranked.picks:
+                winners.add(extra_ranked.picks[0]["offering_id"])
+            if len(winners) <= 1:
+                # Nothing to split on: one leaf for the whole node.
                 served.append(leaf_entry(
-                    head["id"], head["label"], head.get("when_to_look"), node, [cover(c) for c in group],
-                    merged([c["services"] for c in group]), [d for c in group for d in c["demand"]],
+                    f"{node.id}.all", f"All {node.label.lower()}", None, node,
+                    [cover(c) for c in sorted(candidates_leaves, key=lambda c: -c["weight"])],
+                    merged([c["members"] for c in candidates_leaves] + [extra]),
+                    [d for c in candidates_leaves for d in c["demand"]] + extra_demand,
                 ))
-            rest = groups.get("", [])
-            if rest or extra_services or extra_demand:
-                served.append(leaf_entry(
-                    f"{node.id}.other", f"Other {node.label.lower()}",
-                    "When the task fits none of the leaves above.", node,
-                    [cover(c) for c in sorted(rest, key=lambda c: -c["weight"])],
-                    merged([c["services"] for c in rest] + [extra_services]),
-                    [d for c in rest for d in c["demand"]] + extra_demand, remainder=True,
-                ))
-            served.sort(key=lambda leaf: (leaf["remainder"], leaf["empty"], -len(leaf["covers"]), leaf["id"]))
-        all_picks = sorted((p for leaf in served for p in leaf["picks"]), key=_pick_order)
-        best = all_picks[0] if all_picks else None
+            else:
+                groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                for c in candidates_leaves:
+                    groups[c["winner"] or ""].append(c)
+                for winner, group in groups.items():
+                    if not winner:
+                        continue
+                    group.sort(key=lambda c: (-c["weight"], c["leaf"]["id"]))
+                    head = group[0]["leaf"]
+                    served.append(leaf_entry(
+                        head["id"], head["label"], head.get("when_to_look"), node, [cover(c) for c in group],
+                        merged([c["members"] for c in group]), [d for c in group for d in c["demand"]],
+                    ))
+                rest = groups.get("", [])
+                if rest or extra or extra_demand:
+                    served.append(leaf_entry(
+                        f"{node.id}.other", f"Other {node.label.lower()}",
+                        "When the task fits none of the leaves above.", node,
+                        [cover(c) for c in sorted(rest, key=lambda c: -c["weight"])],
+                        merged([c["members"] for c in rest] + [extra]),
+                        [d for c in rest for d in c["demand"]] + extra_demand, remainder=True,
+                    ))
+                served.sort(key=lambda leaf: (leaf["remainder"], leaf["empty"], -len(leaf["covers"]), leaf["id"]))
+        everything = merged([c["members"] for c in candidates_leaves] + [extra])
+        best = ranked(everything, f"{node.id}.best", picks=1)
         stats["leaves"] += len(served)
         stats["empty_leaves"] += sum(1 for leaf in served if leaf["empty"])
+        stats["models"] += sum(len(leaf.get("models") or []) for leaf in served)
         nodes_out.append({
             "id": node.id, "label": node.label, "kind": node.kind,
             "when_to_look": node.when_to_look, "when_not_to_buy": node.when_not_to_buy,
-            "leaves": served, "best_pick": best, "empty": best is None,
             **({"hard_rule": node.hard_rule} if node.hard_rule else {}),
-            "services": len(merged([c["services"] for c in candidates_leaves] + [extra_services])),
+            "leaves": served,
+            "best_pick": best.picks[0] if best.picks else None,
+            "first_to_try": best.explore[0] if best.explore and not best.picks else None,
+            "empty": not best.picks,
+            "offerings": len(everything),
+            "tiers": _tier_counts(offerings[i] for i in everything),
             "candidate_leaves": len(candidates_leaves),
         })
 
-    reliable_ids = {sid for sid, row in reliability.states.items() if row.get("state") == "reliable"}
-    on_tree = {p["service_id"] for n in nodes_out for leaf in n["leaves"] for p in leaf["picks"]}
-    # A reliable service ranked out of a leaf's top picks still sits on it:
-    # count membership, not display.
-    placed_reliable = reliable_ids & (placed_services | set(unsorted.get("developer", {})))
+    placed_known = {oid for oid in placed | set(unsorted.get("developer", {}))
+                    if offerings.get(oid) and offerings[oid]["estimate"].tier in ("proven", "popular")}
+    all_tiers = _tier_counts(offerings.values())
     tree = {
         "format": TREE_FORMAT,
         "version": version,
         "built_at": built_at.isoformat(),
+        "ranking": RANKING_RULE,
         "reliability": {
             "available": reliability.available,
             "rule_version": reliability.rule_version,
-            "reliable_services": len(reliable_ids),
-            "unreliable_services": sum(1 for r in reliability.states.values() if r.get("state") == "unreliable"),
+            "tiers": all_tiers,
             "error": reliability.error,
         },
         "policy": FREE_FIRST_POLICY,
         "hard_rules": [MEDIA_RULE],
         "nodes": nodes_out,
         "stats": {
+            "offerings": len(offerings),
             "resources": len(resources),
             "classified_resources": sum(1 for r in resources if assignments.get(f"r:{r['id']}")),
             "proposals": len(proposals),
             "leaves": stats["leaves"],
             "empty_leaves": stats["empty_leaves"],
-            "reliable_on_tree": len(placed_reliable),
-            "reliable_shown_as_pick": len(on_tree & reliable_ids),
+            "models": stats["models"],
+            "tiers": all_tiers,
+            "known_on_tree": len(placed_known),
+            "known_offerings": all_tiers["proven"] + all_tiers["popular"],
         },
     }
     return tree
@@ -863,41 +973,54 @@ def _money(value: float | None) -> str:
     return f"${value:.2f}"
 
 
-def _pick_line(pick: dict[str, Any], *, with_endpoint: bool) -> str:
-    rate = pick.get("delivered_rate")
-    delivered = f"{round(rate * 100)}% delivered" + (f" of {pick['judged']}" if pick.get("judged") else "") if rate is not None else "delivery n/a"
-    parts = [pick["name"], _money(pick.get("price_usd")), delivered, f"{pick['payers']} payers"]
+def _pick_line(pick: dict[str, Any], *, with_endpoint: bool, with_reason: bool = False) -> str:
+    parts = [pick["name"], _money(pick.get("price_usd")), pick["tier"]]
+    if pick.get("judged"):
+        parts.append(f"{pick['delivered']}/{pick['judged']} delivered")
     line = ", ".join(parts)
     if with_endpoint:
         line += f" — {pick['method']} {pick['endpoint']}"
+    if with_reason:
+        line += f". Why: {pick['reason']}"
     return line
 
 
+def is_legacy(tree: dict[str, Any]) -> bool:
+    return tree.get("format", "capability-tree-v1") == "capability-tree-v1"
+
+
 def render_l0(tree: dict[str, Any], budget: int = L0_TOKENS) -> str:
-    """The free-first policy, then one line per node: when to look and the best pick."""
+    """The free-first policy and the hard rules, then one line per node: when to
+    look and the best-known pick (or the first offering to try)."""
+    if is_legacy(tree):
+        return _legacy_render_l0(tree, budget)
     header = [f"CrowdCode capability tree v{tree.get('version') or '?'} ({str(tree.get('built_at'))[:10]}).",
               tree.get("policy") or FREE_FIRST_POLICY,
               *(f"Hard rule: {rule}" for rule in hard_rules(tree))]
     if not (tree.get("reliability") or {}).get("available"):
-        header.append("Reliability data is unavailable: treat every service as unverified.")
+        header.append("Reliability data is unavailable: tiers come from outside evidence only.")
     lines = []
     for node in tree["nodes"]:
         if node["kind"] == "policy":
             continue
         best = node.get("best_pick")
-        pick = f"best: {_pick_line(best, with_endpoint=False)}" if best else "nothing reliable yet"
-        lines.append(f"- {node['id']}: {node['when_to_look']} → {pick}")
-    footer = "Browse a node (e.g. video) for its leaves, picks, candidates and demand."
-    for name_limit in (None, 40, 24):
-        if name_limit:
-            lines = [re.sub(r"best: ([^,]{%d})[^,]*," % name_limit, r"best: \1…,", line) for line in lines]
-        text = "\n".join([*header, *lines, footer])
+        lines.append((node, best or node.get("first_to_try"), "best" if best else "try"))
+    footer = "Browse a node or leaf (e.g. video.generate) for its models, picks and what to explore."
+
+    def line(node: dict[str, Any], item: dict[str, Any] | None, word: str, limit: int | None, when: bool) -> str:
+        if item:
+            name = item["name"] if limit is None or len(item["name"]) <= limit else item["name"][:limit - 1] + "…"
+            pick = f"{word}: {name} {_money(item.get('price_usd'))} {item['tier']}"
+        else:
+            pick = "nothing listed yet"
+        return f"- {node['id']}: {node['when_to_look'] + ' → ' if when else ''}{pick}"
+
+    # Shorten seller names before anything else; the when-to-look text goes last.
+    for limit, when in ((None, True), (40, True), (28, True), (20, True), (20, False)):
+        text = "\n".join([*header, *(line(n, i, w, limit, when) for n, i, w in lines), footer])
         if token_bound(text) <= budget:
             return text
-    # Last resort: drop the when_to_look text.
-    lines = [re.sub(r": [^→]*→", ": →", line) for line in lines]
-    text = "\n".join([*header, *lines, footer])
-    return text if token_bound(text) <= budget else _truncate(text, budget)
+    return _truncate(text, budget)
 
 
 def hard_rules(tree: dict[str, Any]) -> list[str]:
@@ -914,8 +1037,9 @@ def node_hard_rule(tree: dict[str, Any], node: dict[str, Any]) -> str | None:
 
 
 def find_entry(tree: dict[str, Any], entry_id: str) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
-    """(node, leaf) for a node id, a served leaf id, or a candidate leaf id that
-    a served leaf covers. (node, None) for a node."""
+    """(node, leaf) for a node id, a served leaf id, a candidate leaf id that a
+    served leaf covers, or a model id (`video.generate.veo-3.1`), for which the
+    leaf comes back narrowed to that model. (node, None) for a node."""
     entry_id = entry_id.strip().lower()
     for node in tree["nodes"]:
         if node["id"] == entry_id:
@@ -924,10 +1048,148 @@ def find_entry(tree: dict[str, Any], entry_id: str) -> tuple[dict[str, Any], dic
         for leaf in node["leaves"]:
             if leaf["id"] == entry_id or any(c["id"] == entry_id for c in leaf["covers"]):
                 return node, leaf
+            for model in leaf.get("models") or []:
+                if model["id"] == entry_id:
+                    return node, {**leaf, "model_view": model}
     return None
 
 
-def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: int, endpoints: bool) -> list[str]:
+def _explore_line(item: dict[str, Any], *, endpoints: bool) -> str:
+    share = item["chosen_share"] * 100
+    return f"{_pick_line(item, with_endpoint=endpoints)} (chosen in {'<1' if share < 1 else round(share)}% of samples)"
+
+
+def _prior_text(prior: dict[str, Any] | None) -> str:
+    if not prior:
+        return "no quality prior yet"
+    board = str(prior.get("source") or "").split(":")[-1] or "leaderboard"
+    return f"rated {prior['rating']:.1f}/5, #{prior.get('rank')} on {board} ({prior.get('as_of')})"
+
+
+def _model_line(model: dict[str, Any]) -> str:
+    price = model.get("price_range_usd")
+    spread = (f"{_money(price[0])}" if price and price[0] == price[1] else
+              f"{_money(price[0])}–{_money(price[1])}" if price else "price ?")
+    head = model["picks"][0] if model["picks"] else (model["explore"][0] if model["explore"] else None)
+    who = f"{'best' if model['picks'] else 'try'}: {head['name']} {_money(head.get('price_usd'))} {head['tier']}" if head else ""
+    rated = f", {model['quality_prior']['rating']:.1f}/5" if model.get("quality_prior") else ""
+    return f"- {model['label']} ({model['sellers']} seller{'s' if model['sellers'] != 1 else ''}, {spread}{rated}) {who}"
+
+
+def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: int, endpoints: bool,
+                models: int = 12) -> list[str]:
+    covers = [c["label"] for c in leaf["covers"]][:6]
+    head = f"## {leaf['id']} — {leaf['label']}"
+    if covers and not (len(covers) == 1 and covers[0] == leaf["label"]):
+        head += f" (covers: {', '.join(covers)})"
+    lines = [head, f"When: {leaf['when_to_look']}"]
+    model_view = leaf.get("model_view")
+    if model_view:
+        lines[0] = f"## {model_view['id']} — {model_view['label']}, {model_view['sellers']} seller(s)"
+        lines.append(f"Model: {model_view['label']} ({_prior_text(model_view.get('quality_prior'))}); "
+                     "its sellers compete on delivery and price.")
+        for p in model_view["picks"][:picks]:
+            lines.append(f"Pick: {_pick_line(p, with_endpoint=endpoints, with_reason=True)}")
+        for e in model_view["explore"][:max(candidates, 1)]:
+            lines.append(f"Explore: {_explore_line(e, endpoints=endpoints)}. Why: {e['reason']}")
+        return lines
+    if leaf.get("models") and models:
+        rated = any(m.get("quality_prior") for m in leaf["models"])
+        lines.append(f"Models ({len(leaf['models'])}; {'best-rated first' if rated else 'no quality priors yet'}; "
+                     f"browse {leaf['id']}.<model> for its sellers):")
+        lines.extend(_model_line(m) for m in leaf["models"][:models])
+    if leaf["picks"]:
+        for p in leaf["picks"][:picks]:
+            lines.append(f"Pick: {_pick_line(p, with_endpoint=endpoints, with_reason=True)}")
+    else:
+        lines.append("No proven or popular offering yet: explore within the allowance (C12) or file request_service.")
+    for e in leaf["explore"][:candidates]:
+        lines.append(f"Explore: {_explore_line(e, endpoints=endpoints)}")
+    if demand and leaf["demand"]:
+        names = [f"{d['title']} ({d['requests']} requests)" for d in leaf["demand"][:demand]]
+        lines.append(f"Demand ({leaf['demand_count']}): " + "; ".join(names))
+    return lines
+
+
+def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS) -> str | None:
+    """One node (all its leaves), one leaf, or one model, trimmed to `budget`."""
+    if is_legacy(tree):
+        return _legacy_render_entry(tree, entry_id, budget)
+    found = find_entry(tree, entry_id)
+    if not found:
+        return None
+    node, leaf = found
+    head = [f"# {node['id']} — {node['label']} (tree v{tree.get('version') or '?'})",
+            f"When to look: {node['when_to_look']}", f"When not to buy: {node['when_not_to_buy']}"]
+    rule = node_hard_rule(tree, node)
+    if rule:
+        head.append(f"Hard rule: {rule}")
+    if node["kind"] == "policy":
+        return "\n".join([*head, node.get("policy") or FREE_FIRST_POLICY])
+    leaves = [leaf] if leaf else node["leaves"]
+    # Trim in steps until it fits: fewer exploration lines, demand, picks, endpoints, models.
+    steps = ((3, 3, 3, True, 12), (3, 3, 2, False, 12), (2, 2, 1, False, 10), (1, 2, 1, False, 8),
+             (1, 1, 1, False, 6), (1, 1, 0, False, 4), (1, 0, 0, False, 2))
+    for picks, explore, demand, endpoints, models in steps:
+        body = [line for item in leaves
+                for line in _leaf_block(item, picks=picks, candidates=explore, demand=demand,
+                                        endpoints=endpoints, models=models)]
+        text = "\n".join([*head, *body])
+        if token_bound(text) <= budget:
+            return text
+    # A node with many leaves: one line each; browsing a leaf gives the detail.
+    lines = [*head]
+    for item in leaves:
+        best = item["picks"][0] if item.get("picks") else None
+        pick = (_pick_line(best, with_endpoint=False) if best and "tier" in best
+                else "no proven or popular offering yet")
+        lines.append(f"- {item['id']}: {pick}" + (f"; demand {item['demand_count']}" if item.get("demand_count") else ""))
+    lines.append("Browse a leaf id for its models, picks, exploration candidates and demand.")
+    text = "\n".join(lines)
+    return text if token_bound(text) <= budget else _truncate(text, budget)
+
+
+# --- Phase 1 renderings, for versions stored before tiers (capability-tree-v1) ---
+
+
+def _legacy_pick_line(pick: dict[str, Any], *, with_endpoint: bool) -> str:
+    rate = pick.get("delivered_rate")
+    delivered = f"{round(rate * 100)}% delivered" + (f" of {pick['judged']}" if pick.get("judged") else "") if rate is not None else "delivery n/a"
+    parts = [pick["name"], _money(pick.get("price_usd")), delivered, f"{pick['payers']} payers"]
+    line = ", ".join(parts)
+    if with_endpoint:
+        line += f" — {pick['method']} {pick['endpoint']}"
+    return line
+
+
+def _legacy_render_l0(tree: dict[str, Any], budget: int = L0_TOKENS) -> str:
+    """The free-first policy, then one line per node: when to look and the best pick."""
+    header = [f"CrowdCode capability tree v{tree.get('version') or '?'} ({str(tree.get('built_at'))[:10]}).",
+              tree.get("policy") or FREE_FIRST_POLICY,
+              *(f"Hard rule: {rule}" for rule in hard_rules(tree))]
+    if not (tree.get("reliability") or {}).get("available"):
+        header.append("Reliability data is unavailable: treat every service as unverified.")
+    lines = []
+    for node in tree["nodes"]:
+        if node["kind"] == "policy":
+            continue
+        best = node.get("best_pick")
+        pick = f"best: {_legacy_pick_line(best, with_endpoint=False)}" if best else "nothing reliable yet"
+        lines.append(f"- {node['id']}: {node['when_to_look']} → {pick}")
+    footer = "Browse a node (e.g. video) for its leaves, picks, candidates and demand."
+    for name_limit in (None, 40, 24):
+        if name_limit:
+            lines = [re.sub(r"best: ([^,]{%d})[^,]*," % name_limit, r"best: \1…,", line) for line in lines]
+        text = "\n".join([*header, *lines, footer])
+        if token_bound(text) <= budget:
+            return text
+    # Last resort: drop the when_to_look text.
+    lines = [re.sub(r": [^→]*→", ": →", line) for line in lines]
+    text = "\n".join([*header, *lines, footer])
+    return text if token_bound(text) <= budget else _truncate(text, budget)
+
+
+def _legacy_leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: int, endpoints: bool) -> list[str]:
     covers = [c["label"] for c in leaf["covers"]][:6]
     head = f"## {leaf['id']} — {leaf['label']}"
     if covers and not (len(covers) == 1 and covers[0] == leaf["label"]):
@@ -935,7 +1197,7 @@ def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: in
     lines = [head, f"When: {leaf['when_to_look']}"]
     if leaf["picks"]:
         for p in leaf["picks"][:picks]:
-            lines.append(f"Pick: {_pick_line(p, with_endpoint=endpoints)}. Why: {p['reason']}")
+            lines.append(f"Pick: {_legacy_pick_line(p, with_endpoint=endpoints)}. Why: {p['reason']}")
     else:
         lines.append("Nothing reliable yet: an unverified service needs the owner's approval; "
                      "if none fits, file request_service.")
@@ -948,7 +1210,7 @@ def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: in
     return lines
 
 
-def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS) -> str | None:
+def _legacy_render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS) -> str | None:
     """One node (all its leaves) or one leaf, trimmed to `budget`."""
     found = find_entry(tree, entry_id)
     if not found:
@@ -966,7 +1228,7 @@ def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS
     for picks, candidates, demand, endpoints in ((3, 5, 5, True), (3, 3, 3, True), (2, 2, 2, True),
                                                  (1, 2, 1, True), (1, 1, 1, False), (1, 0, 0, False)):
         body = [line for item in leaves
-                for line in _leaf_block(item, picks=picks, candidates=candidates, demand=demand, endpoints=endpoints)]
+                for line in _legacy_leaf_block(item, picks=picks, candidates=candidates, demand=demand, endpoints=endpoints)]
         text = "\n".join([*head, *body])
         if token_bound(text) <= budget:
             return text
@@ -974,7 +1236,7 @@ def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS
     lines = [*head]
     for item in leaves:
         best = item["picks"][0] if item["picks"] else None
-        pick = _pick_line(best, with_endpoint=False) if best else "nothing reliable yet"
+        pick = _legacy_pick_line(best, with_endpoint=False) if best else "nothing reliable yet"
         lines.append(f"- {item['id']}: {pick}" + (f"; demand {item['demand_count']}" if item["demand_count"] else ""))
     lines.append("Browse a leaf id for its picks, reasons, candidates and demand.")
     text = "\n".join(lines)
@@ -1004,13 +1266,17 @@ def _known_facets(conn: Any) -> dict[str, list[str]]:
 
 
 def load_resources(conn: Any) -> list[dict[str, Any]]:
+    """Every offering an agent can pay (C9: all listings, not only the tracked
+    ones), with C9's `model` and `model_family` once the index has them."""
+    c9 = "".join(f", r.{c}" for c in ("model", "model_family") if c in _columns(conn, "index_resources"))
     return conn.execute(
-        """
+        f"""
         select r.id, r.method, r.origin, r.route_template, r.probe_url, r.service_id, r.service_name,
                s.name as service_label, r.description, r.input_schema, r.payable, r.networks, r.liveness,
-               r.bazaar_payers_30d, r.price_atomic, r.price_asset, r.quoted_price_atomic, r.quoted_asset
+               r.sources, r.bazaar_payers_30d, r.bazaar_calls_30d, r.price_atomic, r.price_asset,
+               r.quoted_price_atomic, r.quoted_asset, r.tracked{c9}
         from index_resources r left join services s on s.id = r.service_id
-        where r.tracked
+        where r.payable
         """
     ).fetchall()
 
@@ -1211,7 +1477,8 @@ def _pending_items(conn: Any, resources: list[dict[str, Any]], proposals: list[d
     items = []
     for row in resources:
         item = resource_item(row)
-        if reliability.state(row.get("service_id")) == "reliable":
+        state = reliability.states.get(row.get("service_id")) or {}
+        if (state.get("tier") or (state.get("inputs") or {}).get("tier")) in ("proven", "popular"):
             item.weight += 1e6
         if stored.get(item.key) != item.fingerprint:
             items.append(item)
@@ -1314,10 +1581,33 @@ def _unmapped_facets(conn: Any) -> dict[str, list[tuple[str, int]]]:
     return unmapped
 
 
+def ensure_fixed_leaves(conn: Any, now: datetime) -> int:
+    """The media nodes' fixed leaves exist, and nothing else does under those
+    nodes: a model-proposed leaf there is removed, so its facets are placed
+    again, onto the fixed ones. Returns how many leaves were removed."""
+    removed = 0
+    for node_id, fixed in FIXED_LEAVES.items():
+        ids = [f"{node_id}.{slug_}" for slug_, _, _ in fixed]
+        removed += len(conn.execute("delete from capability_leaves where node = %s and not (id = any(%s)) returning id",
+                                    (node_id, ids)).fetchall())
+        for slug_, label, when in fixed:
+            conn.execute(
+                """
+                insert into capability_leaves (id, node, slug, label, when_to_look, facets, proposed_at, updated_at)
+                values (%s, %s, %s, %s, %s, '{}', %s, %s)
+                on conflict (id) do update set label = excluded.label, when_to_look = excluded.when_to_look
+                """,
+                (f"{node_id}.{slug_}", node_id, slug_, label, when, now, now),
+            )
+    return removed
+
+
 def place_facets(connect: Callable[[], Any], chat: ChatFn, spend: Spend, now: datetime) -> dict[str, int]:
     """Give every classified facet a leaf: one call per node with unmapped facets
     (per FACETS_PER_LEAF_CALL of them). No connection is open during a model call."""
     with connect() as conn:
+        ensure_fixed_leaves(conn, now)
+        conn.commit()
         unmapped = _unmapped_facets(conn)
     stats: Counter = Counter()
     for node_id, facets in sorted(unmapped.items()):
@@ -1439,8 +1729,10 @@ def run(connect: Callable[[], Any], now: datetime, *, chat: ChatFn | None = None
             return report
         trigger = ("first" if last is None else "forced" if force
                    else "nightly" if now - last["built_at"] >= REBUILD_EVERY else "changed")
+        offering_models, model_priors = media_models.load(conn)
         tree = assemble(resources=resources, assignments=load_assignments(conn), leaves=load_leaves(conn),
-                        proposals=proposals, reliability=reliability, built_at=now)
+                        proposals=proposals, reliability=reliability, built_at=now,
+                        offering_models=offering_models, model_priors=model_priors)
         stats = {**tree["stats"], "spend": spend.summary(), "pending_after": max(
             0, len(items) - int((report.get("classify") or {}).get("classified") or 0))}
         version = store_version(conn, tree, fingerprint=fingerprint, trigger=trigger, now=now, stats=stats)
@@ -1460,6 +1752,10 @@ def _raise_if_model_down(spend: Spend) -> None:
 # --- What the API serves -----------------------------------------------------------
 
 
+PICK_SUMMARY_FIELDS = ("offering_id", "service_id", "name", "endpoint", "method", "price_usd", "tier", "reason",
+                       "delivery_estimate", "payers")
+
+
 def summary_payload(row: dict[str, Any]) -> dict[str, Any]:
     """`GET /api/tree`: the version, the top level and the L0 rendering."""
     tree = row["tree"]
@@ -1472,14 +1768,17 @@ def summary_payload(row: dict[str, Any]) -> dict[str, Any]:
         # `fixture:<variant>:v<base>` marks a deliberately worse test build (W8).
         "trigger": row.get("trigger"),
         "reliability": tree.get("reliability"),
+        **({"ranking": tree["ranking"]} if tree.get("ranking") else {}),
         "nodes": [{
             "id": node["id"], "label": node["label"], "kind": node["kind"],
             "when_to_look": node["when_to_look"], "when_not_to_buy": node["when_not_to_buy"],
             **({"hard_rule": rule} if (rule := node_hard_rule(tree, node)) else {}),
             "leaves": [leaf["id"] for leaf in node["leaves"]],
-            "best_pick": ({k: node["best_pick"][k] for k in ("service_id", "name", "endpoint", "method", "price_usd",
-                                                             "delivered_rate", "payers")}
+            "best_pick": ({k: node["best_pick"].get(k) for k in PICK_SUMMARY_FIELDS}
                           if node.get("best_pick") else None),
+            "first_to_try": ({k: node["first_to_try"].get(k) for k in PICK_SUMMARY_FIELDS}
+                             if node.get("first_to_try") else None),
+            **({"tiers": node["tiers"]} if node.get("tiers") else {}),
             "empty": node["empty"],
         } for node in tree["nodes"]],
         "hard_rules": hard_rules(tree),
