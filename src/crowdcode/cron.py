@@ -15,6 +15,10 @@ rest; the process exits nonzero if any job failed:
    Summaries written under an older SUMMARY_VERSION are regenerated.
 4. Service proposals (LLM): service requests mapped and grouped into the
    proposals the website publishes (crowdcode.proposals), in app_cache.
+
+The services index (crowdcode.index) adds three hourly jobs: the feed sweep
+(each feed once a day, our own records every hour), gateway purchases as
+observations, and the day's unpaid probes spread across the hours.
 """
 
 from __future__ import annotations
@@ -59,6 +63,7 @@ from crowdcode.scoring import (
 )
 from crowdcode.review_sql import public_reviews
 from crowdcode.settings import get_settings
+from crowdcode import index as services_index
 from crowdcode import proposals
 from crowdcode.summaries import SUMMARY_VERSION, summarize_service_reviews
 
@@ -308,6 +313,12 @@ def replay_scores(conn: Any, now: datetime) -> None:
         result = compute_score(
             per_service.get(service["id"], []), trust, now, legacy_trust=legacy_trust
         )
+        if (service["id"] not in per_service and result.n_eff == 0
+                and float(service["n_eff"]) == 0 and float(service["score"]) == result.score):
+            # Never reviewed and already at the prior: thousands of these are
+            # rows the services index created (crowdcode.index), and an hourly
+            # rewrite of each would only bloat the table.
+            continue
         if abs(result.score - float(service["score"])) > DRIFT_TOLERANCE:
             logging.getLogger(__name__).info(
                 f"sweep: score drift service={service['id']} "
@@ -563,9 +574,25 @@ def error_label(error: BaseException) -> str:
     return label[:80]
 
 
+def run_index_sweep(now: datetime) -> None:
+    services_index.run_sweep(connect, now)
+
+
+def run_index_purchases(now: datetime) -> None:
+    services_index.run_purchases(connect, now)
+
+
+def run_index_probes(now: datetime) -> None:
+    services_index.run_probes(connect, now)
+
+
 def jobs() -> tuple:
     return (
         run_agent_listings,
+        # Before the model-backed jobs, so a slow model call never delays the probes.
+        run_index_sweep,
+        run_index_purchases,
+        run_index_probes,
         run_listing_descriptions,
         run_payment_reverification,
         run_consistency_sweep,

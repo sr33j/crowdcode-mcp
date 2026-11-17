@@ -35,6 +35,7 @@ Run `supabase/schema.sql` in the Supabase SQL editor or with `psql`:
 
 ```bash
 psql "$DATABASE_URL" -f supabase/schema.sql
+psql "$DATABASE_URL" -f supabase/services-index.sql   # the services index (idempotent)
 ```
 
 Seed demo services:

@@ -146,6 +146,17 @@ class Embedder:
                 rows.append(vector)
         return np.vstack(rows) if rows else np.zeros((0, 1), dtype=np.float32)
 
+    def encode_uncached(self, texts: Sequence[str]) -> np.ndarray | None:
+        """Unit vectors for a batch too large for the cache (the services index); None without the model."""
+        if self._model is None:
+            self.warm()
+            return None
+        if not texts:
+            return np.zeros((0, 1), dtype=np.float32)
+        vectors = np.asarray(self._model.encode(list(texts), use_multiprocessing=False), dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        return vectors / np.where(norms == 0, 1.0, norms)
+
     def similarities(self, query: str, documents: Sequence[str]) -> list[float] | None:
         """Cosine similarity of the query to each document, or None without the model."""
         if not documents:

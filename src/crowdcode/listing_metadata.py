@@ -446,6 +446,8 @@ def _due(row: dict[str, Any], now: datetime) -> bool:
     metadata = row.get("metadata") or {}
     if metadata.get("listing_source") == AGENT_LISTING_SOURCE or agent_service_slug(row.get("canonical_endpoint")):
         return False  # declared by the agent that sells it, in its manifest (agent_listings)
+    if metadata.get("listing_source") == "index":
+        return False  # described by the feed that listed it; the index never fetches its pages
     if metadata.get("description") and not metadata.get("description_source"):
         return False  # curated or declared some other way: never replaced
     checked = metadata.get("listing_checked_at")

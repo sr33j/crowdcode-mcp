@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **The services index** (SRI-115 tickets 1 and 2, contract C1). The backend
+  now keeps its own index of the x402 and MPP services that matter, and
+  checks each of them once a day.
+  - **Sources:** every hour the cron reads the CDP x402 Bazaar and mpp.dev
+    (each feed once a day), plus hosted services, gateway purchases and
+    reviewed endpoints.
+  - **Storage:** `index_resources` holds one row per `(method, route
+    template)`, with CAIP-2 networks and a `payable` flag. dripstack's
+    per-article URLs become one template.
+  - **Tracking:** a resource is tracked if it has ≥ 3 Bazaar payers in 30
+    days, a gateway purchase, is a hosted service, or matches a proposal.
+    That covers 99.7% of the Bazaar URLs with ≥ 10 payers (3.8% before).
+    Each tracked resource is linked to one `services` row. Rows the index
+    creates stay out of the directory and search until someone reviews them.
+  - **Probes:** each tracked resource gets one unpaid request a day, spread
+    across the hours. It identifies itself as `CrowdCodeIndex/1
+    (+https://crowdcode.app/bot)` and always sends a JSON body: the seller's
+    own example, or for hosted services one built from the route schema.
+  - **History:** price, payee and liveness changes (down, dead, revived) go
+    to `index_changes`. `index_resource_signals` holds what the reliability
+    rule reads.
+  - **API:** `GET /api/index/health` and `GET /api/index/resource?url=&method=`.
+  - **Schema:** `supabase/services-index.sql`. Sellers can opt out through
+    `index_opt_outs`.
+  - **Schedule:** `render.yaml` now says hourly, which is what production
+    already runs.
+
 - **Paid-call observations (SRI-115 C5).** `POST /api/observations` takes one
   signed record of a paid call from crowdcode-mcp:
   `{observation: {endpoint, method, network, payment_reference, amount_atomic,
