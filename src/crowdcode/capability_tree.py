@@ -155,21 +155,21 @@ NODES: tuple[Node, ...] = (
     Node(
         "image", "Images",
         "Generating, editing or upscaling an image the task asks for.",
-        "Reuse existing assets; SVG, Pillow or ImageMagick for diagrams, crops and simple edits.",
+        "Diagrams, charts, crops and simple edits: SVG, Pillow or ImageMagick. A requested photo or illustration needs a model.",
         "image generation, image editing, upscaling, background removal, image understanding",
         hard_rule=MEDIA_RULE,
     ),
     Node(
         "video", "Video",
         "Generating, editing, rendering or transcribing a video the task asks for.",
-        "Metadata only: oEmbed or page metadata. Local ffmpeg for cuts and conversions.",
+        "Cuts and conversions of an existing video: local ffmpeg. A requested new video needs a video model.",
         "text or image to video, avatars, video editing and rendering, video download or transcription",
         hard_rule=MEDIA_RULE,
     ),
     Node(
         "audio", "Audio and speech",
         "Text to speech, transcription, music or sound generation.",
-        "Local TTS or ffmpeg when studio quality is not required.",
+        "Converting or trimming existing audio: local ffmpeg. Requested speech, music or sound needs a model.",
         "text to speech, speech to text, voice cloning, music and sound effects generation, audio processing",
         hard_rule=MEDIA_RULE,
     ),
@@ -1296,14 +1296,14 @@ def load_assignments(conn: Any) -> dict[str, list[dict[str, str]]]:
             conn.execute("select item_key, assignments from capability_classifications").fetchall()}
 
 
-def spent_today(conn: Any, now: datetime) -> float:
-    row = conn.execute("select payload from app_cache where key = %s", (SPEND_CACHE_KEY,)).fetchone()
+def spent_today(conn: Any, now: datetime, *, key: str = SPEND_CACHE_KEY) -> float:
+    row = conn.execute("select payload from app_cache where key = %s", (key,)).fetchone()
     days = ((row or {}).get("payload") or {}).get("days") or {}
     return float(days.get(now.date().isoformat()) or 0.0)
 
 
-def record_spend(conn: Any, now: datetime, usd_spent: float) -> None:
-    row = conn.execute("select payload from app_cache where key = %s", (SPEND_CACHE_KEY,)).fetchone()
+def record_spend(conn: Any, now: datetime, usd_spent: float, *, key: str = SPEND_CACHE_KEY) -> None:
+    row = conn.execute("select payload from app_cache where key = %s", (key,)).fetchone()
     payload = (row or {}).get("payload") or {}
     days = dict(payload.get("days") or {})
     day = now.date().isoformat()
@@ -1315,7 +1315,7 @@ def record_spend(conn: Any, now: datetime, usd_spent: float) -> None:
         insert into app_cache (key, payload, generated_at) values (%s, %s::jsonb, %s)
         on conflict (key) do update set payload = excluded.payload, generated_at = excluded.generated_at
         """,
-        (SPEND_CACHE_KEY, json.dumps({"days": days, "total_usd": total}), now),
+        (key, json.dumps({"days": days, "total_usd": total}), now),
     )
 
 
@@ -1733,6 +1733,11 @@ def run(connect: Callable[[], Any], now: datetime, *, chat: ChatFn | None = None
         tree = assemble(resources=resources, assignments=load_assignments(conn), leaves=load_leaves(conn),
                         proposals=proposals, reliability=reliability, built_at=now,
                         offering_models=offering_models, model_priors=model_priors)
+        # The policy text agents are served now carries over (C14): a policy the
+        # gate published is not undone by the next rebuild.
+        from crowdcode import tree_policy
+        current = latest(conn, published_only=True)
+        tree = tree_policy.inherit(tree, current["tree"] if current else None)
         stats = {**tree["stats"], "spend": spend.summary(), "pending_after": max(
             0, len(items) - int((report.get("classify") or {}).get("classified") or 0))}
         version = store_version(conn, tree, fingerprint=fingerprint, trigger=trigger, now=now, stats=stats)
@@ -1767,6 +1772,8 @@ def summary_payload(row: dict[str, Any]) -> dict[str, Any]:
         "published": row["published"],
         # `fixture:<variant>:v<base>` marks a deliberately worse test build (W8).
         "trigger": row.get("trigger"),
+        # C14: which policy text this version carries (`default`, or an evolution label).
+        "policy_id": tree.get("policy_id") or "default",
         "reliability": tree.get("reliability"),
         **({"ranking": tree["ranking"]} if tree.get("ranking") else {}),
         "nodes": [{

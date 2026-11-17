@@ -1933,6 +1933,148 @@ async def tree_publish(request: Request) -> JSONResponse:
     return JSONResponse({"ok": status_code == 200, "result": result, "version": version}, status_code=status_code)
 
 
+def _gate_authorized(request: Request) -> JSONResponse | None:
+    """The tree gate's and the evolution loop's shared bearer token (W8, C14)."""
+    token = get_settings().tree_gate_token
+    if not token:
+        return JSONResponse({"ok": False, "error": "tree evolution is not enabled"}, status_code=404)
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    return None
+
+
+async def _json_body(request: Request) -> dict[str, Any] | None:
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _evolve_chat(model: str | None):
+    from crowdcode import capability_tree
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("no model configured")
+    chosen = (model or os.environ.get("CROWDCODE_TREE_PROPOSER_MODEL", "") or settings.openai_model).strip()
+    return chosen, capability_tree.openai_chat(settings, chosen)
+
+
+def _record_evolve_spend(spend: Any) -> None:
+    from crowdcode import capability_tree, tree_policy
+    if spend.usd > 0:
+        with connect() as conn:
+            capability_tree.record_spend(conn, datetime.now(UTC), spend.usd, key=tree_policy.EVOLVE_SPEND_KEY)
+            conn.commit()
+
+
+async def tree_candidate(request: Request) -> JSONResponse:
+    """C14. `POST /api/internal/tree/candidate {base_version, label, policy, meta?}` stores a
+    given policy on a base version as an unpublished candidate (no model call)."""
+    if (denied := _gate_authorized(request)) is not None:
+        return denied
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("base_version"), int) or not isinstance(body.get("label"), str):
+        return _json_error("base_version, label and policy are required", status_code=400, error_code="invalid_request")
+
+    def apply() -> int:
+        from crowdcode import tree_policy
+        with connect() as conn:
+            with conn.transaction():
+                return tree_policy.store_candidate(conn, body["base_version"], body.get("policy"), label=body["label"],
+                                                   now=datetime.now(UTC), meta=body.get("meta") if isinstance(body.get("meta"), dict) else None)
+
+    try:
+        version = await run_in_threadpool(apply)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return _json_error(str(exc)[:600], status_code=422, error_code="invalid_policy")
+    except Exception:
+        return _unexpected_json_error("tree_candidate")
+    return JSONResponse({"ok": True, "version": version})
+
+
+async def tree_propose(request: Request) -> JSONResponse:
+    """C14. `POST /api/internal/tree/propose {base_version, parent_version?, label, cases, directive?, model?}`:
+    the evolution proposer edits the parent's policy from held-in results and the edit is stored as a
+    candidate on the base version. Costed against CROWDCODE_TREE_EVOLVE_DAILY_BUDGET_USD."""
+    if (denied := _gate_authorized(request)) is not None:
+        return denied
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("base_version"), int) or not isinstance(body.get("label"), str) \
+            or not isinstance(body.get("cases", []), list):
+        return _json_error("base_version, label and cases are required", status_code=400, error_code="invalid_request")
+
+    def run() -> dict[str, Any]:
+        from crowdcode import capability_tree, tree_policy
+        now = datetime.now(UTC)
+        model, chat = _evolve_chat(body.get("model") if isinstance(body.get("model"), str) else None)
+        with connect() as conn:
+            base = capability_tree.get_version(conn, body["base_version"])
+            parent = capability_tree.get_version(conn, body["parent_version"]) if isinstance(body.get("parent_version"), int) else base
+            spend = tree_policy.evolve_spend(model, conn, now)
+        if base is None or parent is None:
+            raise LookupError("no such base or parent version")
+        try:
+            policy, rationale = tree_policy.propose_policy(
+                chat, spend, parent=tree_policy.policy_of(parent["tree"]), tree=base["tree"],
+                cases=[c for c in body.get("cases", []) if isinstance(c, dict)],
+                directive=body.get("directive") if isinstance(body.get("directive"), str) else None)
+        finally:
+            _record_evolve_spend(spend)
+        with connect() as conn:
+            with conn.transaction():
+                version = tree_policy.store_candidate(conn, body["base_version"], policy, label=body["label"], now=now,
+                                                      meta={"parent": parent["version"], "proposer": model, "rationale": rationale})
+        return {"ok": True, "version": version, "policy": policy, "rationale": rationale, "spend": spend.summary()}
+
+    try:
+        payload = await run_in_threadpool(run)
+    except LookupError as exc:
+        return _json_error(str(exc), status_code=404, error_code="not_found")
+    except ValueError as exc:
+        return _json_error(str(exc)[:600], status_code=422, error_code="invalid_policy")
+    except Exception as exc:
+        from crowdcode.capability_tree import BudgetExhausted
+        if isinstance(exc, BudgetExhausted):
+            return _json_error("the day's evolution budget is spent", status_code=429, error_code="budget_exhausted")
+        return _unexpected_json_error("tree_propose")
+    return JSONResponse(payload)
+
+
+async def eval_judge(request: Request) -> JSONResponse:
+    """C14. `POST /api/internal/eval/judge {task, rubric, answer, files?}` grades an open-ended
+    evaluation task. Costed against the same daily evolution budget."""
+    if (denied := _gate_authorized(request)) is not None:
+        return denied
+    body = await _json_body(request)
+    if body is None or not all(isinstance(body.get(k), str) for k in ("task", "rubric", "answer")):
+        return _json_error("task, rubric and answer are required", status_code=400, error_code="invalid_request")
+
+    def run() -> dict[str, Any]:
+        from crowdcode import tree_policy
+        model, chat = _evolve_chat(os.environ.get("CROWDCODE_EVAL_JUDGE_MODEL") or None)
+        with connect() as conn:
+            spend = tree_policy.evolve_spend(model, conn, datetime.now(UTC))
+        try:
+            verdict = tree_policy.judge_answer(chat, spend, task=body["task"], rubric=body["rubric"], answer=body["answer"],
+                                               files=[f for f in body.get("files") or [] if isinstance(f, dict)])
+        finally:
+            _record_evolve_spend(spend)
+        return {"ok": True, **verdict, "model": model, "usd": round(spend.usd, 6)}
+
+    try:
+        payload = await run_in_threadpool(run)
+    except ValueError as exc:
+        return _json_error(str(exc), status_code=502, error_code="judge_failed", retryable=True)
+    except Exception as exc:
+        from crowdcode.capability_tree import BudgetExhausted
+        if isinstance(exc, BudgetExhausted):
+            return _json_error("the day's evolution budget is spent", status_code=429, error_code="budget_exhausted")
+        return _unexpected_json_error("eval_judge")
+    return JSONResponse(payload)
+
+
 async def service_proposals(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_service_proposals_payload)
@@ -2051,6 +2193,9 @@ def create_app() -> Starlette:
             Route("/api/internal/demand-miner/batch", demand_miner_batch, methods=["POST"]),
             Route("/api/internal/feed/redact", feed_redact, methods=["POST"]),
             Route("/api/internal/tree/publish", tree_publish, methods=["POST"]),
+            Route("/api/internal/tree/candidate", tree_candidate, methods=["POST"]),
+            Route("/api/internal/tree/propose", tree_propose, methods=["POST"]),
+            Route("/api/internal/eval/judge", eval_judge, methods=["POST"]),
             *mcp_app.routes,
         ],
         lifespan=mcp_app.router.lifespan_context,
