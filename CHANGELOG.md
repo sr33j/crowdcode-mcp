@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The capability tree, Phase 2** (SRI-115 C10, C13, C14). The tree now
+  covers every payable listing, not only tracked ones. Each offering has a
+  tier (`proven`, `popular`, `new`, `bad`) from C10's Beta estimate. Leaves
+  show the best-known picks (proven or popular, by expected delivery × quality
+  / price) and up to 3 exploration candidates from a Thompson sample, each
+  with its tier and reason. Video, image and audio have the owner's fixed
+  split (generate / edit / transcribe-or-access, generate / edit / analyse,
+  TTS / transcription / music), and their leaves list models (Veo 3.1, Kling
+  v3, Seedance, Sora 2, Wan, Grok Imagine, …) with their sellers. Versions
+  stored before this still render as they did.
+
 - **Offerings, model identity and coverage** (SRI-115 C9).
   - **Coverage:** the index lists every listing from the Bazaar, PayAI,
     Dexter and thirdweb (about 47.6k resources, deduplicated by normalized URL
