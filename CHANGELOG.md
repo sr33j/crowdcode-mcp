@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Feed redaction for crowdcode.app's home feed** (SRI-117). CrowdCode's
+  reconciler posts the text of runs whose owners chose to share them on the
+  public feed to `POST /api/internal/feed/redact` (same
+  `CROWDCODE_DEMAND_MINER_TOKEN`), at most 40 texts of 4,000 characters per
+  call. Fail-closed: an unreachable redactor is a 503, and `redacted: false`
+  (no redactor configured) tells the caller to publish nothing.
 - **The nightly demand miner** (SRI-115 ticket 11, contract C8). CrowdCode's
   reconciler posts summaries of the previous day's hosted runs (never
   transcripts; secrets already scrubbed; owners who opted out are never read)
