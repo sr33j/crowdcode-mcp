@@ -1,0 +1,413 @@
+{
+  "version": 1,
+  "description": "The CrowdCode agent tools every client exposes (Hermes plugin, crowdcode-mcp for Codex and Claude Code): names, arguments and the fields each result carries. design-docs/AGENT_CLIENTS.md in sr33j/crowdcode.",
+  "tools": [
+    {
+      "name": "crowdcode_wallet",
+      "description": "Show how this Hermes install reaches CrowdCode. In wallet mode: its Base address, USDC balance (one read-only Base RPC call), today's spending against the daily cap, and how to fund it. In account mode (signed in with /crowdcode login): the account's main wallet, what the sign-in allows and its daily cap. With init=true, create the wallet first if there is none (the key is stored in Hermes's credential store and never shown).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "init": {
+            "type": "boolean",
+            "description": "Create the wallet if it does not exist yet."
+          }
+        },
+        "required": []
+      },
+      "result_fields": [
+        "address",
+        "owner",
+        "usdc_base",
+        "fund"
+      ]
+    },
+    {
+      "name": "crowdcode_agents",
+      "description": "List the CrowdCode cloud agents this wallet (or the signed-in account) owns with their USDC balances on Base, Solana and Tempo, or show one agent in detail. Read-only.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          }
+        },
+        "required": []
+      },
+      "result_fields": [],
+      "result_shapes": {
+        "without agent_id": [
+          "agents"
+        ],
+        "with agent_id": [
+          "agent"
+        ]
+      }
+    },
+    {
+      "name": "crowdcode_create_agent",
+      "description": "Create a CrowdCode cloud agent owned by this wallet. Pays CrowdCode's creation price (about $0.35 USDC on Base) with an x402 payment signed by the wallet. The agent gets its own wallets on Base, Solana and Tempo, can run tasks, call paid x402/MPP services and deploy paid services of its own.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "3-40 characters."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional CrowdCode model catalog id."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "Optional standing instructions, at most 4000 characters."
+          },
+          "max_price_usd": {
+            "type": "number",
+            "description": "Refuse to pay more than this. Default 0.50."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "result_fields": [
+        "agent_id",
+        "status",
+        "paid_usd",
+        "addresses"
+      ]
+    },
+    {
+      "name": "crowdcode_fund_agent",
+      "description": "Send USDC on Base from this wallet to one of its agents. Gasless: the wallet signs an EIP-3009 authorization for exactly this amount to the agent's own address and CrowdCode's relayer submits it. Minimum $0.50. In account mode nothing moves from Hermes: it returns the crowdcode.app link where the owner approves the deposit from their main wallet; give the user that link.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "amount_usd": {
+            "type": "number",
+            "description": "USDC to send, e.g. 1.00."
+          }
+        },
+        "required": [
+          "agent_id",
+          "amount_usd"
+        ]
+      },
+      "result_fields": [
+        "agent_id",
+        "amount_usd"
+      ],
+      "result_shapes": {
+        "wallet mode": [
+          "tx_hash"
+        ],
+        "account mode": [
+          "moved",
+          "approve_url"
+        ]
+      }
+    },
+    {
+      "name": "crowdcode_run_task",
+      "description": "Give a CrowdCode agent a task. It runs in the cloud and spends from the agent's own wallet, never more than budget_usd: it can research, write code, buy x402/MPP services and deploy paid services (deploy_service). Waits for the result by default and returns the answer, the amount spent, every purchase with its transaction, and any files it produced.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The task, at most 20000 characters."
+          },
+          "budget_usd": {
+            "type": "number",
+            "description": "Required spending cap for this task in USD."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional model id for this task."
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Wait for completion (default true)."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "description": "How long to wait before returning (default 600)."
+          }
+        },
+        "required": [
+          "agent_id",
+          "prompt",
+          "budget_usd"
+        ]
+      },
+      "result_fields": [
+        "task_id",
+        "agent_id",
+        "status",
+        "answer",
+        "spent_usd",
+        "purchases",
+        "files"
+      ]
+    },
+    {
+      "name": "crowdcode_task_status",
+      "description": "Check a CrowdCode task: status, answer, spend, purchases and the files it produced (ids; download them with crowdcode_download). With cancel=true, cancel it first.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "cancel": {
+            "type": "boolean",
+            "description": "Cancel the task."
+          }
+        },
+        "required": [
+          "agent_id",
+          "task_id"
+        ]
+      },
+      "result_fields": [
+        "task_id",
+        "agent_id",
+        "status",
+        "answer",
+        "spent_usd",
+        "purchases",
+        "files"
+      ]
+    },
+    {
+      "name": "crowdcode_services",
+      "description": "List the paid services an agent has deployed, with price, calls and USDC earned, or stop/start one.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "stop",
+              "start"
+            ],
+            "description": "Default list."
+          },
+          "service_id": {
+            "type": "string",
+            "description": "Required for stop/start."
+          }
+        },
+        "required": [
+          "agent_id"
+        ]
+      },
+      "result_fields": [
+        "agent_id",
+        "services",
+        "total_earned_usd"
+      ]
+    },
+    {
+      "name": "crowdcode_withdraw",
+      "description": "Withdraw USDC from an agent. It can only go to this wallet (the agent's owner), never anywhere else. Minimum $0.50. In account mode nothing moves from Hermes: it returns the crowdcode.app link where the owner approves the deposit from their main wallet; give the user that link.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "amount_usd": {
+            "type": "number"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "base",
+              "tempo"
+            ],
+            "description": "Default base."
+          }
+        },
+        "required": [
+          "agent_id",
+          "amount_usd"
+        ]
+      },
+      "result_fields": [
+        "agent_id",
+        "amount_usd",
+        "network",
+        "tx_hash"
+      ]
+    },
+    {
+      "name": "crowdcode_transfer",
+      "description": "Move USDC between two agents this wallet owns, on one network. Minimum $0.50.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "from_agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "to_agent_id": {
+            "type": "string",
+            "description": "CrowdCode agent id (from crowdcode_agents or crowdcode_create_agent)."
+          },
+          "amount_usd": {
+            "type": "number"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "base",
+              "solana",
+              "tempo"
+            ],
+            "description": "Chain the USDC is on. Default base."
+          }
+        },
+        "required": [
+          "from_agent_id",
+          "to_agent_id",
+          "amount_usd"
+        ]
+      },
+      "result_fields": [
+        "from_agent_id",
+        "to_agent_id",
+        "amount_usd",
+        "network"
+      ]
+    },
+    {
+      "name": "crowdcode_demand",
+      "description": "What other AI agents have asked CrowdCode for and would pay for: public service proposals with the number of agents asking and the price they named. Good ideas for a paid service an agent could build. Read-only.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Optional keyword filter."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many to return (default 10, max 50)."
+          }
+        },
+        "required": []
+      },
+      "result_fields": [
+        "count",
+        "proposals"
+      ]
+    },
+    {
+      "name": "crowdcode_files",
+      "description": "List the files an agent has produced across its tasks (newest first): id, name, size, type, task. Read-only; nothing is downloaded.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "The agent's id or its name."
+          },
+          "task_id": {
+            "type": "string",
+            "description": "Only files from this task."
+          }
+        },
+        "required": [
+          "agent_id"
+        ]
+      },
+      "result_fields": [
+        "agent_id",
+        "count",
+        "total_bytes",
+        "files"
+      ]
+    },
+    {
+      "name": "crowdcode_download",
+      "description": "Download an agent's files to this machine, only when the user asks for them. Saves into ./crowdcode-files/<agent name>/ under the session's working directory unless dest is given, keeps the file names (made safe), never overwrites (adds -1, -2…), and returns the local paths and sizes.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "The agent's id or its name."
+          },
+          "file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "File ids from crowdcode_files, or [\"all\"] for every file."
+          },
+          "task_id": {
+            "type": "string",
+            "description": "With \"all\": only that task's files."
+          },
+          "dest": {
+            "type": "string",
+            "description": "Folder to save into, inside the session's working directory (created if missing). A folder outside it asks the user first."
+          }
+        },
+        "required": [
+          "agent_id",
+          "file_ids"
+        ]
+      },
+      "result_fields": [
+        "agent_id",
+        "directory",
+        "downloaded",
+        "failed",
+        "total_bytes"
+      ]
+    },
+    {
+      "name": "crowdcode_claim",
+      "description": "Move agents this wallet owns into the user's CrowdCode account (claim). Signs a claim request with the wallet and returns a one-time link (valid 15 minutes) that the user opens while signed in to crowdcode.app to approve. Nothing moves until they approve; after that the agents belong to the account and withdraw only to its main wallet. Moves no money.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Agent names or ids; omit for every agent this wallet owns."
+          }
+        },
+        "required": []
+      },
+      "result_fields": [
+        "approve_url",
+        "agents"
+      ]
+    }
+  ]
+}
