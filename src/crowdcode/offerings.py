@@ -123,7 +123,6 @@ NAME_MAX = 48
 DESCRIPTION_MAX = 60
 
 # C13 amendment (2026-11-17): where outputs differ in quality more than in price, quality decides.
-QUALITY_FIRST_NODES = frozenset({"video", "image", "audio", "llm"})
 QUALITY_FIRST_MODALITIES = frozenset({"video", "image", "audio", "music", "llm"})
 # Leaves whose offerings must return the artifact itself (a file, or a job that yields one).
 ARTIFACT_LEAVES = frozenset({"video.generate", "video.edit", "image.generate", "image.edit", "audio.tts", "audio.music",
@@ -972,13 +971,15 @@ def _quality_first(usable: list[tuple[Match, dict[str, Any]]], group: list[tuple
     bands of QUALITY_BAND; within a band, sellers by expected delivery, then effective price. No draw:
     `explore` marks a seller with no delivery evidence yet (tier `new`), which is how a top model's
     untried sellers get tried. A cheaper, worse model never outranks a better one for its price."""
+    # Below the media minimums (a 480p or 2-second clip), an offering is not offered as an answer.
+    group = [(m, b) for m, b in group if meets_minimums(m.offering, leaf)] or group
     members = {id(m.offering) for m, _ in group}
     ranked: list[Ranked] = []
     for m, best in usable:
         o = m.offering
         price = best["effective_price_usd"]
         value_price = (price if price is not None else typical) + CALL_OVERHEAD_USD
-        r = Ranked(o, m.strength, best, o.price_usd, value_price, _model_quality(o, model), o.mean, id(o) in members)
+        r = Ranked(o, m.strength, best, o.price_usd, value_price, model_rating(o, model), o.mean, id(o) in members)
         r.contender, r.model = r.in_group, model
         r.explore = r.contender and o.tier == "new"
         ranked.append(r)
@@ -989,7 +990,14 @@ def _quality_first(usable: list[tuple[Match, dict[str, Any]]], group: list[tuple
     inside = sorted((r for r in ranked if r.contender), key=lambda r: (
         not r.best["fundable"], -band(r.quality), -round(r.offering.mean, 2), r.value_price, -r.match, r.offering.id))
     kinds = {mod for r in inside for mod in r.offering.modalities}
-    rest = sorted((r for r in ranked if not r.contender and (not model or set(r.offering.modalities) & kinds)),
+
+    def may_follow(o: Offering) -> bool:
+        # A prompt writer or metadata endpoint never ranks for a generator's request, not even last.
+        if leaf in ARTIFACT_LEAVES:
+            return returns_artifact(o, leaf)
+        return not model or bool(set(o.modalities) & kinds)
+
+    rest = sorted((r for r in ranked if not r.contender and may_follow(r.offering)),
                   key=lambda r: (-round(r.match, 1), not r.best["fundable"], -band(r.quality), -r.offering.mean,
                                  r.offering.id))
     return inside + rest, {"left_out": left_out, "capability": leaf, "model": model, "matching": len(group),
@@ -1008,6 +1016,14 @@ def _model_quality(o: Offering, model: str | None) -> float:
     return own
 
 
+def model_rating(o: Offering, model: str | None) -> float:
+    """quality_first's quality, as the tree rates it (W6's rank_quality_first): the leaderboard prior of
+    the model asked for, else of the best model the offering sells; a model nobody rated counts 3.0."""
+    rated = [p for name, (family, p) in (o.models or {}).items()
+             if p is not None and (model is None or name == model or family == model)]
+    return float(max(rated)) if rated else value_ranking.NEUTRAL_RATING
+
+
 def best_model(o: Offering, model: str | None) -> str | None:
     """The model an offering's quality comes from: its own, the asked-for one, or its best by prior."""
     if o.model:
@@ -1018,10 +1034,22 @@ def best_model(o: Offering, model: str | None) -> str | None:
 
 
 def policy(leaf: str | None, modalities: set[str]) -> str:
-    """C13 amendment: `quality_first` for media and models, `value_first` for everything else."""
+    """C13 amendment: the capability tree's own rule (W6), so search and the tree agree: media and models
+    `quality_first` (their transcribe/analyse leaves excepted), everything else `value_first`."""
+    from crowdcode.capability_tree import ranking_policy
+
     if leaf is not None:
-        return "quality_first" if leaf.split(".")[0] in QUALITY_FIRST_NODES else "value_first"
+        return ranking_policy(leaf.split(".")[0], leaf)
     return "quality_first" if modalities & QUALITY_FIRST_MODALITIES else "value_first"
+
+
+def meets_minimums(o: Offering, leaf: str | None) -> bool:
+    """The media minimums (C13: video 720p and 4 s, images 1024 px), read from the offering's own words
+    by the tree's rule (W6's value_ranking.meets_minimums); saying nothing passes."""
+    node = (leaf or "").split(".")[0]
+    if node not in ("video", "image"):
+        return True
+    return value_ranking.meets_minimums(" ".join(filter(None, [o.endpoint, o.name, o.description])), node)[0]
 
 
 # Until the tree re-classifies media leaves under the amendment, an endpoint whose own path or name says it
@@ -1033,8 +1061,11 @@ def returns_artifact(o: Offering, leaf: str) -> bool:
     """A generator or editor belongs in its leaf only when it returns the artifact: classified there by
     the tree's model (C7, which applies the rule), or selling a model of that modality (C9). A leaf
     inferred from neighbours is not enough: prompt writers and metadata endpoints read like generators."""
+    from crowdcode.capability_tree import NOT_A_GENERATOR
+
     path = o.endpoint.split("://", 1)[-1].split("/", 1)[-1]
-    if _NOT_ARTIFACT.search(path) or _NOT_ARTIFACT.search(o.name or ""):
+    # The tree's generator rule (W6), then search's stricter words for names and drafts.
+    if NOT_A_GENERATOR.search("/" + path) or _NOT_ARTIFACT.search(path) or _NOT_ARTIFACT.search(o.name or ""):
         return False
     if leaf in o.leaves:
         return True

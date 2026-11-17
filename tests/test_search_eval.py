@@ -32,13 +32,14 @@ from tests.search_eval.snapshot import load_snapshot, offline_search
 # `expected` (0.689 / 0.800 on the 2026-11-04 snapshot it was tuned on).
 LIVE_RECALL_FLOOR = 0.63
 LIVE_MRR_FLOOR = 0.75
-# The index search, mean over SEEDS, against `expected` plus `also`: recall@3 0.746,
-# MRR 0.849, hit@3 0.912 on the 80 cases over 47,831 offerings (the live search: 0.533,
-# 0.765, 0.838 against the same labels; on the original 60, 0.738 / 0.844 / 0.900 against
-# the live search's 0.589 / 0.833 / 0.950). The floors leave room for a snapshot refresh.
-INDEX_RECALL_FLOOR = 0.71
-INDEX_MRR_FLOOR = 0.82
-INDEX_HIT_FLOOR = 0.88
+# The index search, mean over SEEDS, against `expected` plus `also`: recall@3 0.740,
+# MRR 0.837, hit@3 0.907 on the 80 cases over 47,831 offerings (the live search: 0.533,
+# 0.765, 0.838 against the same labels; on the original 60, 0.726 / 0.828 / 0.893 against
+# the live search's 0.589 / 0.833 / 0.950; quality_first trades a little of the labels' MRR
+# for the better model). The floors leave room for a snapshot refresh.
+INDEX_RECALL_FLOOR = 0.70
+INDEX_MRR_FLOOR = 0.80
+INDEX_HIT_FLOOR = 0.87
 SEEDS = (20261117, 1, 2, 3, 4)
 DRIP = "https://dripstack.xyz/api/v1/publications/{publicationSlug}/{postSlug}"
 OWNER = "is there a service on CrowdCode that will get me really good sell-side reports / investment memos?"

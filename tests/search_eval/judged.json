@@ -1405,6 +1405,10 @@
    "https://agent402.tools/api/image-gen-hd": {
     "relevant": true,
     "why": "text-to-image generation"
+   },
+   "https://www.amnt.io/api/agent/amnt/gpt-image-2-low": {
+    "relevant": true,
+    "why": "GPT Image 2 text-to-image generation"
    }
   },
   "image-generation-long": {
@@ -1483,6 +1487,10 @@
    "https://agent402.tools/api/image-gen-hd": {
     "relevant": false,
     "why": "returns base64 only, no public URL"
+   },
+   "https://www.amnt.io/api/agent/amnt/gpt-image-2-low": {
+    "relevant": true,
+    "why": "Text-to-image generation; public URL not checkable from description"
    }
   },
   "image-edit": {
@@ -1603,6 +1611,14 @@
    "https://www.studio-x.cc/api/generate/video-ultra": {
     "relevant": false,
     "why": "NSFW image-to-video, not text-to-video"
+   },
+   "https://api.glianalabs.com/x402/wan-2.7-i2v": {
+    "relevant": false,
+    "why": "Image-to-video requires input image, not text-to-video"
+   },
+   "https://stablestudio.dev/api/generate/veo-3.1/generate": {
+    "relevant": true,
+    "why": "Veo 3.1 text-to-video generation"
    }
   },
   "music-generation": {
@@ -4885,6 +4901,10 @@
    "https://www.studio-x.cc/api/generate/video-ultra": {
     "relevant": false,
     "why": "NSFW image-to-video, not prompt video"
+   },
+   "https://api.glianalabs.com/x402/wan-2.7-i2v": {
+    "relevant": false,
+    "why": "Image-to-video only; query is plain video generation"
    }
   },
   "video-cinematic": {
@@ -4935,6 +4955,10 @@
    "https://www.studio-x.cc/api/generate/video-ultra": {
     "relevant": false,
     "why": "NSFW image-to-video, not cinematic generation"
+   },
+   "https://api.glianalabs.com/x402/wan-2.7-i2v": {
+    "relevant": false,
+    "why": "Image-to-video only; query is plain video generation"
    }
   },
   "image-to-video": {
@@ -4997,6 +5021,14 @@
    "https://www.studio-x.cc/api/generate/video-ultra": {
     "relevant": true,
     "why": "Wan 2.7 image-to-video"
+   },
+   "https://api.glianalabs.com/x402/wan-2.7-i2v": {
+    "relevant": true,
+    "why": "Wan 2.7 image-to-video animates input image"
+   },
+   "https://stablestudio.dev/api/generate/veo-3.1/generate": {
+    "relevant": false,
+    "why": "No stated image input; separate i2v routes exist"
    }
   },
   "veo-video": {
@@ -5163,6 +5195,10 @@
    "https://api.x-402.online/v1/transcribe": {
     "relevant": false,
     "why": "Only social video URLs, not audio files"
+   },
+   "https://x402.forgemesh.io/speech-generator": {
+    "relevant": false,
+    "why": "Text-to-speech, not transcription"
    }
   },
   "llm-inference": {
