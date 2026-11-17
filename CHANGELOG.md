@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **reliability-v2** (SRI-115 Phase 2, contract C10). Every offering now has a
+  delivery estimate, a quality estimate, one score and a tier.
+  - **Delivery:** `Beta(alpha, beta)`. The prior comes from outside evidence:
+    ≥ 10 Bazaar payers with ≥ 1.5 calls each gives `Beta(8,1)`; ≥ 3 payers,
+    or the mpp.dev curated catalog, gives `Beta(3,1)`; otherwise `Beta(1,1)`.
+    Each judged purchase in 30 days adds to alpha or beta. So does each paid
+    call that failed before settlement through the seller's fault (W2's
+    signed records). Old `partial` verdicts count once C11's re-read resolves
+    them (`reviews.delivery_reread`).
+  - **Quality:** the v3.1 review score, re-shrunk to the model's leaderboard
+    prior (`model_quality_priors`, C9) when there is one.
+  - **One score:** delivery mean × quality, on CrowdCode's pages. The API's
+    `score` stays the v3.1 review score (clients validate it as 2–5).
+    `/api/services` and `/api/services/{id}` add `tier`,
+    `reliability_score` and `reliability_state`.
+  - **Tiers:** `bad`, `proven`, `popular` and `new`. `state` stays for v1
+    readers: `bad` is `unreliable`, `proven`/`popular` are `reliable`, `new`
+    is `unverified`.
+  - **API:** the reliability endpoints add `tier`, `posterior`, `quality` and
+    `score`, and `GET /api/reliability?tier=` lists one tier. Unknown
+    endpoints are `new`.
+  - **Schema:** re-apply `supabase/reliability.sql` (it adds `tier`, `alpha`,
+    `beta`, `quality` and `score`).
 - **`kind` (gap or leverage) and `unlocks` are gone from service requests** (owner decision, 2026-11-17). `request_service` no longer takes them; FastMCP ignores them when an older client still sends them, so nothing is rejected for it. `validate_request_extras(builds_on, frequency, capability)` keeps `builds_on` required in strict mode. The screen accepts a reusable paid service that would fix the described failure, poor result or cost, without the act/reach/persist/verify wording. Proposals no longer carry `kind` or `unlocks`, and the payload drops `listed_by_kind`. The `request_kind` and `unlocks` columns stay, holding what earlier rows stored; nothing writes or reads them.
 
 - **Feed redaction for crowdcode.app's home feed** (SRI-117). CrowdCode's

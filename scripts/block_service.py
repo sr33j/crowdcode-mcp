@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Block or unblock a service for CrowdCode's reliability rule (SRI-115 C3).
 
-A blocked service reads `unreliable` whatever its evidence says, and the
+A blocked service reads tier `bad` (state `unreliable`) whatever its evidence says, and the
 operator's note is its first public reason (crowdcode.app/reliability/<id>, and
 the gateway's refusal). Every block and unblock is recorded in
 `service_block_audit` with who did it and why, and the service's reliability
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     reliability.recompute(connect, datetime.now(UTC), [service_id])
     with connect() as conn:
         payload = reliability.for_service(conn, service_id)
-    print(json.dumps({k: payload[k] for k in ("service_id", "state", "reasons")}, indent=2))
+    print(json.dumps({k: payload[k] for k in ("service_id", "tier", "state", "reasons")}, indent=2))
     return 0
 
 

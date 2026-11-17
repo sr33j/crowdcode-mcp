@@ -3,7 +3,7 @@
 -- design-docs/RELIABLE_SERVICES_BUILD.md). Idempotent: safe to rerun. Apply
 -- after services-index.sql.
 --
--- service_reliability   one row per tracked (or blocked) service: the state
+-- service_reliability   one row per tracked, blocked or reviewed service: the tier and state
 --                       crowdcode.reliability computed, the rule version, the
 --                       reasons, and every input the rule read. Rewritten only
 --                       when the answer changes, so an hourly recompute of
@@ -22,6 +22,17 @@ create table if not exists service_reliability (
   inputs jsonb not null default '{}'::jsonb
 );
 create index if not exists service_reliability_state_idx on service_reliability (state);
+
+-- reliability-v2 (C10): the tier, the delivery estimate Beta(alpha, beta), the
+-- quality estimate (1-5) and the one score (delivery mean x quality). Null on
+-- rows a v1 recompute wrote; the first v2 recompute fills every row.
+alter table service_reliability
+  add column if not exists tier text check (tier is null or tier in ('bad', 'proven', 'popular', 'new')),
+  add column if not exists alpha numeric,
+  add column if not exists beta numeric,
+  add column if not exists quality numeric,
+  add column if not exists score numeric;
+create index if not exists service_reliability_tier_idx on service_reliability (tier, score desc);
 
 create table if not exists service_blocks (
   service_id text primary key references services(id) on delete cascade,
