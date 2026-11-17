@@ -1,5 +1,12 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.2 — 2026-11-17
+
+- `logout` revokes the sign-in even after the hour-long access token has
+  expired. It refreshes once, then revokes. Before, signing out more than an
+  hour after the last use only deleted the local file and left the grant live
+  on crowdcode.app until it expired. Found in the production test.
+
 ## 0.13.1 — 2026-11-17
 
 - Codex starts the server fast enough for the first turn. `install --client

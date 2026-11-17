@@ -238,5 +238,12 @@ describe.skipIf(!PYTHON || !existsSync(PYTHON))("spec/conformance.json against t
     const revoked = await fetch(`${mock.url}/api/app/v1/me`, { headers: { authorization: `Bearer ${token}` } });
     expect(revoked.status).toBe(401);
     expect((await dashboard.run("logout")).text).toBe("This machine was not signed in to a CrowdCode account.");
+
+    // Signing out after the hour-long access token has expired still revokes: refresh once, then revoke.
+    await login({ baseUrl: mock.url, home: env.CROWDCODE_HOME!, openBrowser: browser, log: () => undefined });
+    const stale = (await readCredentials(env.CROWDCODE_HOME!))!;
+    await saveCredentials(env.CROWDCODE_HOME!, { ...stale, access_token: "cc_at_expired" });
+    expect((await dashboard.run("logout")).text).toContain("Disconnected this machine from your CrowdCode account");
+    expect(await readCredentials(env.CROWDCODE_HOME!)).toBeNull();
   }, 60_000);
 });

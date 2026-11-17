@@ -281,15 +281,24 @@ export async function logout(home: string): Promise<{ signedIn: boolean; revoked
     return { signedIn: false, revoked: false };
   }
   let revoked = false;
-  try {
-    // The token goes only to the origin it was issued by.
+  // The token goes only to the origin it was issued by.
+  const revoke = async (accessToken: string) => {
     const response = await http(credentials.base_url + "/api/app/v1/connection/revoke", {
       method: "POST",
       body: jsonBody({}),
-      headers: { authorization: `Bearer ${credentials.access_token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
     });
-    revoked = response.ok;
     await response.body?.cancel().catch(() => undefined);
+    return response.status;
+  };
+  try {
+    let status = await revoke(credentials.access_token);
+    // Access tokens last an hour, and people sign out days later: refresh once, then revoke.
+    if (status === 401) {
+      const fresh = await refreshCredentials(home, credentials);
+      status = await revoke(fresh.access_token);
+    }
+    revoked = status >= 200 && status < 300;
   } catch {
     revoked = false;
   } finally {
