@@ -771,3 +771,17 @@ def test_a_version_stored_before_the_rule_still_shows_it():
     assert f"Hard rule: {ct.MEDIA_RULE}" in ct.render_l0(tree)
     assert f"Hard rule: {ct.MEDIA_RULE}" in ct.render_entry(tree, "video")
     assert "Hard rule" not in ct.render_entry(tree, "finance")
+
+
+def test_the_curated_catalog_and_model_sellers_are_classified_before_the_long_tail(db):
+    seed(db)
+    with db() as conn:
+        conn.execute("""insert into index_resources (resource_key, method, origin, route_template, probe_url, payable,
+                          sources, bazaar_payers_30d, description) values
+                        ('POST https://studio.example/veo', 'POST', 'https://studio.example', 'https://studio.example/veo',
+                         'https://studio.example/veo', true, '{mpp}', null, 'Veo 3.1 video generation')""")
+        conn.commit()
+        resources = ct.load_resources(conn)
+        items = ct._pending_items(conn, resources, [], ct.ReliabilityView())
+    # The curated listing, with no payers at all, comes before sellers with 10-12 payers.
+    assert items[0].payload.get("url", "").startswith("studio.example/veo")

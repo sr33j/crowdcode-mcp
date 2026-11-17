@@ -1470,8 +1470,16 @@ def store_version(conn: Any, tree: dict[str, Any], *, fingerprint: str, trigger:
 # --- The job -----------------------------------------------------------------------
 
 
+# Classification order: what the tree can name first. Proven and popular
+# offerings, then the curated catalog and offerings that sell a named model
+# (C9), then everything else by Bazaar payers.
+PRIORITY_KNOWN = 1e7
+PRIORITY_CURATED_OR_MODEL = 1e6
+
+
 def _pending_items(conn: Any, resources: list[dict[str, Any]], proposals: list[dict[str, Any]],
-                   reliability: ReliabilityView) -> list[Item]:
+                   reliability: ReliabilityView,
+                   offering_models: dict[int, list[dict[str, Any]]] | None = None) -> list[Item]:
     stored = {row["item_key"]: row["fingerprint"] for row in
               conn.execute("select item_key, fingerprint from capability_classifications").fetchall()}
     items = []
@@ -1479,7 +1487,9 @@ def _pending_items(conn: Any, resources: list[dict[str, Any]], proposals: list[d
         item = resource_item(row)
         state = reliability.states.get(row.get("service_id")) or {}
         if (state.get("tier") or (state.get("inputs") or {}).get("tier")) in ("proven", "popular"):
-            item.weight += 1e6
+            item.weight += PRIORITY_KNOWN
+        if "mpp" in (row.get("sources") or []) or (offering_models or {}).get(int(row["id"])):
+            item.weight += PRIORITY_CURATED_OR_MODEL
         if stored.get(item.key) != item.fingerprint:
             items.append(item)
     items.extend(item for item in map(proposal_item, proposals) if stored.get(item.key) != item.fingerprint)
@@ -1695,7 +1705,8 @@ def run(connect: Callable[[], Any], now: datetime, *, chat: ChatFn | None = None
         remaining = cap - spent_today(conn, now)
         resources = load_resources(conn)
         proposals = load_proposals(conn)
-        items = _pending_items(conn, resources, proposals, reliability)
+        offering_models, _ = media_models.load(conn)
+        items = _pending_items(conn, resources, proposals, reliability, offering_models)
     spend = Spend(model=model, remaining_usd=max(0.0, remaining))
     report: dict[str, Any] = {"pending": len(items), "budget_left_usd": round(spend.remaining_usd, 4)}
 
