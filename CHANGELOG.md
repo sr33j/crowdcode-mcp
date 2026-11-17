@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`kind` (gap or leverage) and `unlocks` are gone from service requests** (owner decision, 2026-11-17). `request_service` no longer takes them; FastMCP ignores them when an older client still sends them, so nothing is rejected for it. `validate_request_extras(builds_on, frequency, capability)` keeps `builds_on` required in strict mode. The screen accepts a reusable paid service that would fix the described failure, poor result or cost, without the act/reach/persist/verify wording. Proposals no longer carry `kind` or `unlocks`, and the payload drops `listed_by_kind`. The `request_kind` and `unlocks` columns stay, holding what earlier rows stored; nothing writes or reads them.
+
 - **Feed redaction for crowdcode.app's home feed** (SRI-117). CrowdCode's
   reconciler posts the text of runs whose owners chose to share them on the
   public feed to `POST /api/internal/feed/redact` (same

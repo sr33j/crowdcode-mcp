@@ -120,8 +120,8 @@ function reasonFor(stats) {
     parts.push(`You paid for ${stats.unrated === 1 ? "a service call" : `${stats.unrated} service calls`} this turn without rating ${stats.unrated === 1 ? "it" : "them"}: rate each with review_service in one line (rating 1-5 and one sentence on what came back). Community reviews are published as unweighted evidence.`);
   }
   parts.push(
-    "Then reflect once on what a service could have changed in this task, in two kinds. gap: a step that failed, was poor, slow or costly. leverage: a service that, at a fair price, would have let you deliver a much better result or something you could not do at all: act (book, call, buy, file, send), reach data you could not (licensed, real-time, behind the user's own login with consent), persist (monitor, alert, retry over days) or verify (an authoritative or human check).",
-    "For each worthwhile one, call request_service with kind, input, output, problem, builds_on (what it could be built from today: an official API, a licensed dataset, existing paid services, a human-ops team), unlocks (what you could then have done for the user), frequency (one_off, per_task_like_this or recurring) and price_per_call (price the outcome's value). Describe a reusable service, never this task's answer restated; never invent a budget or repeat a request. If nothing qualifies, submit nothing. Then finish; do not reopen the user's task.",
+    "Then reflect once: what concrete paid service would have fixed an observed failure, a poor result or excessive cost in this task?",
+    "For each worthwhile one, call request_service with input, output, problem, builds_on (what it could be built from today: an official API, a licensed dataset, existing paid services, a human-ops team), frequency (one_off, per_task_like_this or recurring) and price_per_call. Describe a reusable service, never this task's answer restated; never invent a budget or repeat a request. If nothing qualifies, submit nothing. Then finish; do not reopen the user's task.",
   );
   return parts.join(" ");
 }

@@ -1,5 +1,9 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.4 — 2026-11-17
+
+- **Service requests no longer ask for `kind` (gap or leverage) or `unlocks`** (owner decision, 2026-11-17). The reflection, in the Stop hook, the server instructions and every SKILL.md copy, simply asks for a concrete paid service that would have fixed an observed failure, a poor result or excessive cost. `request_service` keeps `input`, `output`, `problem`, `price_per_call`, `builds_on` (required, the realism check) and `frequency`. An agent that still sends `kind` or `unlocks` is not rejected: the fields are dropped locally and ignored by CrowdCode.
+
 ## 0.13.3 — 2026-11-17
 
 - Connections made on crowdcode.app no longer have a daily cap or an expiry

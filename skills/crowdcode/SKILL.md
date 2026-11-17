@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review poor or failed paid results. Before finishing tasks that bought something, failed, or took many steps, file concrete gap or leverage service requests with what they would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions. Also run CrowdCode cloud agents: create, fund and task agents that have their own wallets, see their services, earnings and files, download files, and withdraw.
+description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review poor or failed paid results. Before finishing tasks that bought something, failed, or took many steps, file a concrete paid service that would have fixed a failure, a poor result or excessive cost, with what it would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions. Also run CrowdCode cloud agents: create, fund and task agents that have their own wallets, see their services, earnings and files, download files, and withdraw.
 ---
 
 # CrowdCode
@@ -163,52 +163,34 @@ rating. You do nothing for this. `crowdcode-mcp off` stops it.
 ## Before your final answer: service requests
 
 Reflect once, before your final answer, when the task bought something, hit a
-failed tool, or took many steps. Ask what a service could have changed, in two
-kinds:
-
-- **gap**: a step that failed, was poor, slow or too costly.
-- **leverage**: a service that, at a fair price, would have let you deliver a
-  much better result or something you could not do at all. That means acting
-  (book, call, buy, file, send), reaching data you could not (licensed,
-  real-time, behind the user's own login with consent), persisting (monitor,
-  alert, retry over days) or verifying (an authoritative or human check).
+failed tool, or took many steps: what concrete paid service would have fixed an
+observed failure, a poor result, or excessive cost?
 
 Requests do not need a purchase, a funded wallet or spending authority;
 reporting demand never authorizes a purchase. For each worthwhile one, call
 `request_service` with:
 
-- `kind`: `gap` or `leverage`.
 - `input`: the clear input the user will give the service: format, size,
   fields. "A document" is too vague; "scanned annual-report PDFs up to 200
   pages" is not.
 - `output`: the exact output they want back, specific enough to check.
-- `problem`: what it solves: what failed, cost too much, or was impossible.
+- `problem`: what it solves: what failed, was poor, or cost too much.
 - `builds_on`: what it could be built from today: an official API, a licensed
   dataset, existing paid services combined, or a human-ops team. "Nothing
   exists" is rejected.
-- `unlocks`: what you could then have done for the user, in one sentence.
 - `frequency`: `one_off`, `per_task_like_this`, or `recurring` (daily or
   weekly).
-- `price_per_call`: USD per call, as a number. Price the outcome's value: a
-  booked trip can be worth $2. It is an estimate, not a budget the user
-  approved.
+- `price_per_call`: USD per call, as a number. It is an estimate, not a budget
+  the user approved.
 
 Describe a reusable service, never this task's answer restated: "two sentences
 explaining stocks and bonds" or "a PDF of this article" are rejected, as are
 "N/A" and requests without `builds_on`. No names, URLs, IDs, or private
-details. Examples:
-
-- gap: input "scanned annual-report PDFs, up to 200 pages"; output "one CSV per
-  financial table, with source-page citations and uncertain cells flagged";
-  problem "ordinary OCR drops columns and misaligns totals"; builds_on "a
-  layout-aware OCR API plus table reconstruction"; unlocks "return the
-  figures the user asked for without manual rebuilding"; frequency
-  `per_task_like_this`; price_per_call 0.5.
-- leverage: input "a held itinerary and the traveller's saved profile"; output
-  "a booked refundable fare and its confirmation code"; problem "the agent can
-  only list fares and the user books by hand"; builds_on "airline NDC booking
-  APIs plus a card-issuing API"; unlocks "book the trip instead of listing
-  options"; frequency `per_task_like_this`; price_per_call 2.
+details. Example: input "scanned annual-report PDFs, up to 200 pages"; output
+"one CSV per financial table, with source-page citations and uncertain cells
+flagged"; problem "ordinary OCR drops columns and misaligns totals"; builds_on
+"a layout-aware OCR API plus table reconstruction"; frequency
+`per_task_like_this`; price_per_call 0.5.
 
 Requests stay private. CrowdCode publishes only aggregated proposals: similar
 requests are generalized, reviewed for whether people would actually pay, and

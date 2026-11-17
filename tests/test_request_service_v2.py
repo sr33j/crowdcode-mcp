@@ -23,9 +23,7 @@ GOOD = {
     "price_per_call": 0.05,
 }
 EXTRAS = {
-    "kind": "gap",
     "builds_on": "the X API v2 media upload endpoint with resumable chunk retries",
-    "unlocks": "publish the owner's clip in one step and report the live post URL",
     "frequency": "per_task_like_this",
 }
 
@@ -246,14 +244,11 @@ from crowdcode.demand import is_filler, validate_request_extras  # noqa: E402
 
 
 @pytest.mark.parametrize("field,value,expected", [
-    ("kind", None, "kind is required"),
-    ("kind", "wish", "kind is required"),
     ("frequency", "sometimes", "frequency is required"),
     ("builds_on", None, "builds_on is required"),
     ("builds_on", "N/A", "builds_on cannot be N/A"),
     ("builds_on", "nothing exists that could do this today", "must name something that exists"),
-    ("unlocks", "n/a (no service needed)", "unlocks cannot be N/A"),
-    ("unlocks", "more", "unlocks is too vague"),
+    ("builds_on", "more", "builds_on is too vague"),
 ])
 def test_invalid_extras_say_what_to_fix(field, value, expected):
     extras, error = validate_request_extras(**{**EXTRAS, field: value})
@@ -261,11 +256,10 @@ def test_invalid_extras_say_what_to_fix(field, value, expected):
 
 
 def test_extras_normalize_and_keep_a_capability_id():
-    extras, error = validate_request_extras(**{**EXTRAS, "kind": " Leverage ",
-                                               "frequency": "per task like this",
+    extras, error = validate_request_extras(**{**EXTRAS, "frequency": "per task like this",
                                                "capability": "Act/Booking.travel"})
     assert error is None
-    assert extras.kind == "leverage" and extras.frequency == "per_task_like_this"
+    assert extras.frequency == "per_task_like_this"
     assert extras.capability == "act/booking.travel"
     assert validate_request_extras(**{**EXTRAS, "capability": "not a node id!"})[0].capability is None
 
@@ -282,13 +276,13 @@ def test_request_service_stores_the_new_fields(hosted, monkeypatch):  # noqa: F8
     seen = []
     monkeypatch.setattr(server_mod, "screen_request",
                         lambda fields: seen.append(fields) or request_screen.ScreenResult("accept"))
-    result = server_mod.request_service(**GOOD, **{**EXTRAS, "kind": "leverage", "capability": "social.post"},
+    result = server_mod.request_service(**GOOD, **{**EXTRAS, "capability": "social.post"},
                                         requester_wallet=WALLET)
     assert result["accepted"], result
-    assert result["recorded"]["kind"] == "leverage" and result["screen"] == "accept"
+    assert "kind" not in result["recorded"] and result["screen"] == "accept"
     row = conn.execute("select * from service_requests").fetchone()
-    assert row["request_kind"] == "leverage" and row["builds_on"] == EXTRAS["builds_on"]
-    assert row["unlocks"] == EXTRAS["unlocks"] and row["frequency"] == "per_task_like_this"
+    assert row["request_kind"] is None and row["unlocks"] is None
+    assert row["builds_on"] == EXTRAS["builds_on"] and row["frequency"] == "per_task_like_this"
     assert row["capability"] == "social.post" and row["screen_verdict"] == "accept"
     # The screen sees the request, never the wallet.
     assert WALLET not in json.dumps(seen)
@@ -327,27 +321,37 @@ def test_the_screen_fails_open(monkeypatch):
     assert request_screen.screen_request({}).verdict == "unchecked"
 
 
-def test_proposals_take_kind_and_frequency_from_the_requests():
+def test_proposals_take_frequency_and_capability_from_the_requests():
     rows = [_row(1, 2.0, requester="a"), _row(2, 1.5, requester="b"), _row(3, 0.05, requester="c")]
-    rows[0].update(request_kind="leverage", frequency="recurring", capability="monitor.prices",
-                   builds_on="airline fare APIs and a scheduler", unlocks="rebook when the fare drops")
-    rows[1].update(request_kind="leverage", frequency="per_task_like_this", capability="monitor.prices")
-    rows[2].update(request_kind="gap", frequency="one_off")
+    # A row stored before kind/unlocks were dropped keeps them; nothing reads them.
+    rows[0].update(request_kind="leverage", frequency="recurring", capability="docs.ocr",
+                   builds_on="a layout-aware OCR API", unlocks="old field")
+    rows[1].update(frequency="per_task_like_this", capability="docs.ocr")
+    rows[2].update(frequency="one_off")
     parsed = {"proposals": [
-        {**_proposal("Fare drop watcher", [1, 2]), "builds_on": "fare search APIs plus a daily job",
-         "unlocks": "rebook a held trip automatically when the price falls"},
+        {**_proposal("Table OCR", [1, 2]), "builds_on": "a layout-aware OCR API with table reconstruction"},
         _proposal("DNS propagation check", [3]),
     ]}
     payload = proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "m")
-    fare = next(p for p in payload["proposals"] if p["title"] == "Fare drop watcher")
-    assert fare["kind"] == "leverage" and fare["capability"] == "monitor.prices"
-    assert fare["frequency"] == {"recurring": 1, "per_task_like_this": 1}
-    assert fare["builds_on"] == "fare search APIs plus a daily job"
-    assert "_member_ids" not in fare
-    assert payload["listed_by_kind"] == {"leverage": 2, "gap": 1}
+    ocr = next(p for p in payload["proposals"] if p["title"] == "Table OCR")
+    assert "kind" not in ocr and "unlocks" not in ocr and ocr["capability"] == "docs.ocr"
+    assert ocr["frequency"] == {"recurring": 1, "per_task_like_this": 1}
+    assert ocr["builds_on"] == "a layout-aware OCR API with table reconstruction"
+    assert "_member_ids" not in ocr and "listed_by_kind" not in payload
     items = proposals._model_items(rows)
-    assert items[0]["kind"] == "leverage" and items[0]["builds_on"]
-    assert "kind" in items[2] and "builds_on" not in items[2]
+    assert items[0]["builds_on"] and "kind" not in items[0] and "unlocks" not in items[0]
+    assert "builds_on" not in items[2]
+
+
+def test_an_old_client_sending_kind_and_unlocks_is_not_rejected(hosted, monkeypatch):  # noqa: F811
+    import asyncio
+    conn, _ = hosted
+    monkeypatch.setattr(server_mod, "screen_request", lambda fields: request_screen.ScreenResult("accept"))
+    asyncio.run(server_mod.mcp.call_tool("request_service", {
+        **GOOD, **EXTRAS, "kind": "leverage", "unlocks": "book it directly", "requester_wallet": WALLET}))
+    row = conn.execute("select * from service_requests").fetchone()
+    assert row is not None and row["builds_on"] == EXTRAS["builds_on"]
+    assert row["request_kind"] is None and row["unlocks"] is None
 
 
 def test_rollout_mode_accepts_a_pre_c6_client_but_still_screens_it(hosted, monkeypatch):  # noqa: F811
@@ -361,7 +365,7 @@ def test_rollout_mode_accepts_a_pre_c6_client_but_still_screens_it(hosted, monke
     assert result["accepted"], result
     assert "builds_on" not in screened[-1]
     row = conn.execute("select * from service_requests").fetchone()
-    assert row["request_kind"] is None and row["builds_on"] is None
+    assert row["builds_on"] is None
     # A client that sends some of the new fields is validated in full.
-    partial = server_mod.request_service(**GOOD, kind="gap", requester_wallet=WALLET)
+    partial = server_mod.request_service(**GOOD, builds_on=EXTRAS["builds_on"], requester_wallet=WALLET)
     assert partial["accepted"] is False and "frequency is required" in partial["reason"]

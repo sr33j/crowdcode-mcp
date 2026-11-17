@@ -119,7 +119,8 @@ describe("conditional Stop hook", () => {
     ]);
     expect(decision.decision).toBe("block");
     expect(decision.reason).toContain("without rating it");
-    expect(decision.reason).toContain("leverage");
+    expect(decision.reason).toContain("fixed an observed failure, a poor result or excessive cost");
+    expect(decision.reason).not.toMatch(/leverage|unlocks|kind,/);
     expect(decision.reason).toContain("builds_on");
   });
   it("only looks at the current turn, and a rated purchase with few calls is silent", async () => {
