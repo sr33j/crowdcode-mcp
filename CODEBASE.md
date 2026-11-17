@@ -46,6 +46,14 @@ reason resolution conflicts, the service's registered endpoint is probed and
 every advertised payee joins its payee set (docs/shared-payment-wallets.md).
 `scripts/fix_machine_payees.py` uses the same parser.
 
+## `src/crowdcode/payee_hints.py`
+
+The payees a paid review is checked against when it names none (SRI-118):
+the index's probed `payees` for the endpoint, and a feed `pay_to` only when
+the endpoint's own 402 still advertises it. `review_service` looks them up
+before opening its connection; the on-chain check accepts the reviewer's
+transfer to any of them and the review is stored under the one it reached.
+
 ## `src/crowdcode/agent_listings.py`
 
 Names and descriptions for services CrowdCode agents sell at

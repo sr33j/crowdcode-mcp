@@ -8,7 +8,7 @@ import re
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Sequence
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -237,6 +237,27 @@ class PaymentVerification:
     # Set when payer_signature did not verify, so review_service can return
     # the exact payer message to sign.
     expected_payer_message: str | None = None
+    # The payee and protocol the payment actually verified against. They are
+    # the review's own when it named them, else the ones CrowdCode found for
+    # the service (crowdcode.payee_hints), and are what the review is stored
+    # and registered under.
+    payee: str | None = None
+    provider: str | None = None
+    # Every payee the on-chain check tried, reported when none matched.
+    checked_payees: tuple[str, ...] = ()
+
+
+def _candidate_payees(target: str | None, extra: Sequence[str] = ()) -> tuple[str, ...]:
+    """The review's own payee first, then the ones CrowdCode knows, once each
+    (EVM case-insensitively)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for payee in ([target] if target else []) + list(extra):
+        key = payee.lower() if payee.startswith("0x") else payee
+        if payee and key not in seen:
+            seen.add(key)
+            out.append(payee)
+    return tuple(out)
 
 
 def reviewer_id_from_payment(payment_reference: str) -> str:
@@ -316,9 +337,18 @@ def verify_review_payment(
     signature_scheme: str = "eip191",
     payer_signature: str | None = None,
     payer_wallet: str | None = None,
+    extra_payees: Sequence[str] = (),
+    fallback_provider: str | None = None,
 ) -> PaymentVerification:
+    """`extra_payees` and `fallback_provider` are what CrowdCode itself knows
+    about where the service collects (crowdcode.payee_hints), used only when
+    the review does not name them. The signature is always checked against the
+    identity exactly as the reviewer signed it."""
+    provider = identity.payment_provider
+    if provider is None and payment_reference is not None and fallback_provider in MACHINE_PAYMENT_PROVIDERS:
+        provider = fallback_provider
     if (payer_signature is not None or payer_wallet is not None) and (
-        identity.payment_provider != "x402" or solana_reference_signature(payment_reference) is None
+        provider != "x402" or solana_reference_signature(payment_reference) is None
     ):
         return PaymentVerification(
             False, "payer_signature and payer_wallet are only used for x402 Solana payments"
@@ -332,12 +362,14 @@ def verify_review_payment(
             return PaymentVerification(False, "review_nonce must be an 8-128 character unique identifier for an unpaid review")
     elif review_nonce is not None:
         return PaymentVerification(False, "review_nonce is only used when payment_reference is omitted")
-    elif identity.payment_provider is None:
+    elif provider is None:
         return PaymentVerification(False, "payment_provider is required when claiming payment")
 
-    if payment_reference is None or identity.payment_provider in MACHINE_PAYMENT_PROVIDERS:
+    if payment_reference is None or provider in MACHINE_PAYMENT_PROVIDERS:
         return _verify_signed_machine_payment(
             identity=identity,
+            provider=provider,
+            payees=_candidate_payees(identity.payment_target_ref, extra_payees),
             rating=rating,
             reason=reason,
             payment_reference=payment_reference,
@@ -373,6 +405,8 @@ def verify_review_payment(
 def _verify_signed_machine_payment(
     *,
     identity: ServiceIdentity,
+    provider: str | None,
+    payees: tuple[str, ...],
     rating: int,
     reason: str,
     payment_reference: str | None,
@@ -441,12 +475,12 @@ def _verify_signed_machine_payment(
 
     solana_signature = (
         solana_reference_signature(payment_reference)
-        if identity.payment_provider == "x402"
+        if provider == "x402"
         else None
     )
     if solana_signature is not None:
         payment = _verify_solana_x402_payment(
-            identity=identity,
+            payees=payees,
             payment_reference=payment_reference,
             signature=solana_signature,
             payment_proof=payment_proof,
@@ -475,6 +509,8 @@ def _verify_signed_machine_payment(
             payment_verification_metadata=payment.payment_verification_metadata,
             canonical_reference=payment.canonical_reference,
             claims_reference=payment.claims_reference,
+            payee=payment.payee,
+            provider=provider,
         )
 
     # Proof is optional, but a supported-chain transaction hash is mandatory.
@@ -490,11 +526,12 @@ def _verify_signed_machine_payment(
                 error_code="unsupported_payment_reference",
             )
         network = None
-        if identity.payment_provider == "x402":
+        if provider == "x402":
             network = x402_reference_network(payment_reference) or DEFAULT_X402_NETWORK
         check, verification_meta = check_payment_reference_onchain(
-            provider=identity.payment_provider,
-            payment_target_ref=identity.payment_target_ref,
+            provider=provider,
+            payment_target_ref=None,
+            payees=payees,
             reviewer_wallet=wallet,
             tx_hash=canonical,
             network=network,
@@ -502,7 +539,7 @@ def _verify_signed_machine_payment(
         verification_meta["proof_present"] = False
         verification_meta["source"] = "payment_reference"
         if not check.ok or check.transfer is None:
-            return _chain_failure(identity.payment_provider, check, verification_meta["network"])
+            return _chain_failure(provider, check, verification_meta["network"], payees)
         metadata: dict[str, Any] = {
             "review_payload": json.loads(payload),
             "signature_recovered_wallet": recovered,
@@ -532,19 +569,21 @@ def _verify_signed_machine_payment(
             payment_verification_level=LEVEL_ONCHAIN_VERIFIED,
             payment_verification_metadata=verification_meta,
             canonical_reference=canonical,
+            payee=check.payee,
+            provider=provider,
         )
 
-    if identity.payment_provider == "mppx":
+    if provider == "mppx":
         payment = _verify_mppx_payment(
-            identity=identity,
+            payees=payees,
             payment_reference=payment_reference,
             payment_proof=payment_proof,
             payment_challenge=payment_challenge,
             reviewer_wallet=wallet,
         )
-    elif identity.payment_provider == "x402":
+    elif provider == "x402":
         payment = _verify_x402_payment(
-            identity=identity,
+            payees=payees,
             payment_reference=payment_reference,
             payment_proof=payment_proof,
             reviewer_wallet=wallet,
@@ -573,12 +612,14 @@ def _verify_signed_machine_payment(
         payment_verification_level=payment.payment_verification_level,
         payment_verification_metadata=payment.payment_verification_metadata,
         canonical_reference=canonical,
+        payee=payment.payee,
+        provider=provider,
     )
 
 
 def _verify_mppx_payment(
     *,
-    identity: ServiceIdentity,
+    payees: tuple[str, ...],
     payment_reference: str,
     payment_proof: str,
     payment_challenge: str | None,
@@ -609,7 +650,8 @@ def _verify_mppx_payment(
 
     check, verification_meta = check_payment_reference_onchain(
         provider="mppx",
-        payment_target_ref=identity.payment_target_ref,
+        payment_target_ref=None,
+        payees=payees,
         reviewer_wallet=reviewer_wallet,
         tx_hash=tx_hash,
     )
@@ -617,7 +659,7 @@ def _verify_mppx_payment(
     verification_meta["source"] = "payment_proof"
 
     if not check.ok or check.transfer is None:
-        return _chain_failure("mppx", check, verification_meta["network"])
+        return _chain_failure("mppx", check, verification_meta["network"], payees)
 
     transfer = check.transfer
     metadata: dict[str, Any] = {
@@ -639,7 +681,7 @@ def _verify_mppx_payment(
         recipient = _normalize_evm_address(challenge.get("recipient"))
         if recipient:
             metadata["transaction"]["recipient"] = recipient
-            target = _normalize_evm_address(identity.payment_target_ref)
+            target = _normalize_evm_address(check.payee)
             if target and target.lower() != recipient.lower():
                 return PaymentVerification(False, "mppx payment recipient does not match payment_target_ref")
         amount = _amount_to_int(challenge.get("amount"))
@@ -658,12 +700,13 @@ def _verify_mppx_payment(
         amount=transfer["value"],
         payment_verification_level=LEVEL_ONCHAIN_VERIFIED,
         payment_verification_metadata=verification_meta,
+        payee=check.payee,
     )
 
 
 def _verify_x402_payment(
     *,
-    identity: ServiceIdentity,
+    payees: tuple[str, ...],
     payment_reference: str,
     payment_proof: str,
     reviewer_wallet: str,
@@ -710,7 +753,8 @@ def _verify_x402_payment(
 
     check, verification_meta = check_payment_reference_onchain(
         provider="x402",
-        payment_target_ref=identity.payment_target_ref,
+        payment_target_ref=None,
+        payees=payees,
         reviewer_wallet=reviewer_wallet,
         tx_hash=tx_hash,
         network=network,
@@ -719,7 +763,7 @@ def _verify_x402_payment(
     verification_meta["source"] = "payment_proof"
 
     if not check.ok or check.transfer is None:
-        return _chain_failure("x402", check, network)
+        return _chain_failure("x402", check, network, payees)
 
     transfer = check.transfer
     required = _amount_to_int(
@@ -757,6 +801,7 @@ def _verify_x402_payment(
         amount=transfer["value"],
         payment_verification_level=LEVEL_ONCHAIN_VERIFIED,
         payment_verification_metadata=verification_meta,
+        payee=check.payee,
     )
 
 
@@ -766,10 +811,12 @@ class OnchainCheck:
     failure: str | None = None
     transfer: dict[str, Any] | None = None
     block_number: int | None = None
+    # The candidate payee (as given) the transfer reached.
+    payee: str | None = None
 
 
 def _chain_failure(
-    provider: str, check: OnchainCheck, network: str | None
+    provider: str, check: OnchainCheck, network: str | None, payees: tuple[str, ...] = ()
 ) -> PaymentVerification:
     chain = X402_CHAINS.get(network or "") if provider == "x402" else None
     network = chain.label if chain else "Tempo"
@@ -790,7 +837,11 @@ def _chain_failure(
     if check.failure == FAILURE_PAYEE_UNKNOWN:
         return PaymentVerification(
             False,
-            "service payment recipient is not registered",
+            "CrowdCode does not know this service's payment recipient: it is not "
+            "registered, the services index has none for this endpoint, and the "
+            "endpoint's 402 did not advertise one. Retry review_service with "
+            "payment_target_ref set to the payee you paid: the x402 offer's payTo "
+            "(accepts[].payTo) or the MPP challenge's recipient.",
             error_code="payment_payee_unknown",
         )
     if check.failure == FAILURE_TX_FAILED:
@@ -809,14 +860,19 @@ def _chain_failure(
         )
     return PaymentVerification(
         False,
-        "reviewer wallet did not send the expected token to the registered service payee",
+        "reviewer wallet did not send the expected token to the registered service payee"
+        if len(payees) <= 1 else
+        "reviewer wallet did not send the expected token to any payee this service "
+        "registers or advertises (checked_payees); if you paid another payTo, pass it as "
+        "payment_target_ref",
         error_code="payment_transfer_mismatch",
+        checked_payees=payees,
     )
 
 
 def _verify_solana_x402_payment(
     *,
-    identity: ServiceIdentity,
+    payees: tuple[str, ...],
     payment_reference: str,
     signature: str,
     payment_proof: str | None,
@@ -869,14 +925,15 @@ def _verify_solana_x402_payment(
         )
 
     check, verification_meta = check_solana_payment_onchain(
-        payment_target_ref=identity.payment_target_ref,
+        payment_target_ref=None,
+        payees=payees,
         signature=signature,
         payer=payer,
     )
     verification_meta["proof_present"] = proof is not None
     verification_meta["source"] = "payment_proof" if proof is not None else "payment_reference"
     if not check.ok or check.transfer is None:
-        return _chain_failure("x402", check, SOLANA_NETWORK)
+        return _chain_failure("x402", check, SOLANA_NETWORK, payees)
 
     by_payer: dict[str, int] = check.transfer["by_payer"]
     message = payer_link_message(reviewer_wallet=reviewer_wallet, payload=payload)
@@ -930,6 +987,7 @@ def _verify_solana_x402_payment(
             payment_verification_metadata=verification_meta,
             canonical_reference=unlinked_reference_key(reviewer_wallet, signature),
             claims_reference=False,
+            payee=check.payee,
         )
     metadata["payer_link"] = {
         "scheme": "ed25519",
@@ -945,6 +1003,7 @@ def _verify_solana_x402_payment(
         payment_verification_level=LEVEL_ONCHAIN_VERIFIED,
         payment_verification_metadata=verification_meta,
         canonical_reference=signature,
+        payee=check.payee,
     )
 
 
@@ -953,6 +1012,7 @@ def check_solana_payment_onchain(
     payment_target_ref: str | None,
     signature: str,
     payer: str | None = None,
+    payees: Sequence[str] | None = None,
 ) -> tuple[OnchainCheck, dict[str, Any]]:
     """getTransaction, require meta.err == null, and find pinned-USDC SPL
     transfers into token accounts owned by the service payee. ``payer``
@@ -964,7 +1024,10 @@ def check_solana_payment_onchain(
     rpc_url = os.environ.get(chain.rpc_env) or chain.default_rpc_url
     mint = os.environ.get(chain.token_env) or chain.default_token
     token = mint if is_solana_address(mint) else None
-    payee = payment_target_ref.strip() if payment_target_ref else None
+    candidates = [
+        p.strip() for p in (payees if payees else [payment_target_ref] if payment_target_ref else [])
+        if p and is_solana_address(p.strip())
+    ]
     meta: dict[str, Any] = {
         "network": SOLANA_NETWORK,
         "token_pinned": token is not None,
@@ -977,7 +1040,7 @@ def check_solana_payment_onchain(
 
     if token is None:
         return done(OnchainCheck(False, failure=FAILURE_TOKEN_NOT_PINNED))
-    if payee is None or not is_solana_address(payee):
+    if not candidates:
         return done(OnchainCheck(False, failure=FAILURE_PAYEE_UNKNOWN))
     tx = _solana_transaction(rpc_url, signature)
     if tx is None:
@@ -985,24 +1048,28 @@ def check_solana_payment_onchain(
     meta_block = tx.get("meta")
     if not isinstance(meta_block, dict) or meta_block.get("err") is not None:
         return done(OnchainCheck(False, failure=FAILURE_TX_FAILED))
-    transfers = find_usdc_transfers(tx, payee=payee, mint=token)
-    by_payer = transfers.by_payer
-    if payer is not None:
-        by_payer = {payer: by_payer[payer]} if payer in by_payer else {}
+    failure = FAILURE_NO_MATCHING_TRANSFER
+    for payee in candidates:
+        transfers = find_usdc_transfers(tx, payee=payee, mint=token)
+        by_payer = transfers.by_payer
+        if payer is not None:
+            by_payer = {payer: by_payer[payer]} if payer in by_payer else {}
+            if not by_payer and transfers.by_payer:
+                failure = FAILURE_PAYER_MISMATCH
         if not by_payer:
-            return done(OnchainCheck(False, failure=FAILURE_PAYER_MISMATCH if transfers.by_payer else FAILURE_NO_MATCHING_TRANSFER))
-    if not by_payer:
-        return done(OnchainCheck(False, failure=FAILURE_NO_MATCHING_TRANSFER))
-    return done(OnchainCheck(
-        True,
-        transfer={
-            "by_payer": by_payer,
-            "to": payee,
-            "token": token,
-            "fee_payer": transfers.fee_payer,
-        },
-        block_number=transfers.slot,
-    ))
+            continue
+        return done(OnchainCheck(
+            True,
+            transfer={
+                "by_payer": by_payer,
+                "to": payee,
+                "token": token,
+                "fee_payer": transfers.fee_payer,
+            },
+            block_number=transfers.slot,
+            payee=payee,
+        ))
+    return done(OnchainCheck(False, failure=failure))
 
 
 def _solana_transaction(rpc_url: str, signature: str) -> dict[str, Any] | None:
@@ -1031,6 +1098,7 @@ def check_payment_reference_onchain(
     reviewer_wallet: str,
     tx_hash: str,
     network: str | None = None,
+    payees: Sequence[str] | None = None,
 ) -> tuple[OnchainCheck, dict[str, Any]]:
     """The single on-chain payment check, shared by the proof paths, the
     tx-hash-only path, and the cron re-verify pass: fetch the receipt, require
@@ -1064,12 +1132,12 @@ def check_payment_reference_onchain(
             "verification_failure": check.failure,
         }
 
-    recipient = _normalize_evm_address(payment_target_ref)
+    candidates = list(payees) if payees else [payment_target_ref] if payment_target_ref else []
     check = _check_onchain_transfer(
         rpc_url=rpc_url,
         tx_hash=tx_hash,
         sender=reviewer_wallet,
-        recipient=recipient,
+        recipients=[p for p in candidates if _normalize_evm_address(p)],
         token=token,
     )
     return check, {
@@ -1085,7 +1153,7 @@ def _check_onchain_transfer(
     rpc_url: str,
     tx_hash: str,
     sender: str,
-    recipient: str | None,
+    recipients: Sequence[str],
     token: str | None,
 ) -> OnchainCheck:
     """Both the token pin and the payee are required: without the pin a
@@ -1093,23 +1161,27 @@ def _check_onchain_transfer(
     known payee any transfer out of the reviewer's wallet would count."""
     if token is None:
         return OnchainCheck(False, failure=FAILURE_TOKEN_NOT_PINNED)
-    if recipient is None:
+    if not recipients:
         return OnchainCheck(False, failure=FAILURE_PAYEE_UNKNOWN)
     receipt = _rpc_transaction_receipt(rpc_url, tx_hash)
     if receipt is None:
         return OnchainCheck(False, failure=FAILURE_RPC_UNREACHABLE)
     if _hex_to_int(receipt.get("status")) != 1:
         return OnchainCheck(False, failure=FAILURE_TX_FAILED)
-    transfer = _find_erc20_transfer(
-        receipt, sender=sender, recipient=recipient, token=token
-    )
-    if transfer is None:
-        return OnchainCheck(False, failure=FAILURE_NO_MATCHING_TRANSFER)
-    return OnchainCheck(
-        True,
-        transfer=transfer,
-        block_number=_hex_to_int(receipt.get("blockNumber")),
-    )
+    # One receipt, every candidate payee: the first that received the pinned
+    # token from the reviewer is the payee this payment proves.
+    for recipient in recipients:
+        transfer = _find_erc20_transfer(
+            receipt, sender=sender, recipient=recipient, token=token
+        )
+        if transfer is not None:
+            return OnchainCheck(
+                True,
+                transfer=transfer,
+                block_number=_hex_to_int(receipt.get("blockNumber")),
+                payee=recipient,
+            )
+    return OnchainCheck(False, failure=FAILURE_NO_MATCHING_TRANSFER)
 
 
 def _reviewer_id_from_wallet(wallet: str) -> str:

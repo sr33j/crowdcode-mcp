@@ -194,6 +194,15 @@ invalid payment claims are rejected rather than automatically slashing wallets.
    the 402 challenge price** when one is stated) — else the review is
    **rejected outright**: a failing proof is worse than no proof and must
    never silently downgrade.
+4a. **A review that names no payee** (no `payment_target_ref`) is checked
+   against the payees CrowdCode knows for the service: its registered payee,
+   the payees the index's own probe saw in the endpoint's 402, and a payee a
+   feed listing names only if the endpoint's 402 still advertises it at review
+   time (`crowdcode.payee_hints`). The reviewer chooses none of them. The
+   review is stored, and the service registered, under the payee the transfer
+   reached. With no payee known at all the review is refused as
+   `payment_payee_unknown`, with a `next_step` naming the `payTo` to supply
+   (SRI-118).
 5. When claiming payment with **no proof header**, `payment_reference` must be a transaction hash and
    runs the same on-chain check. Failed transactions, wrong token/payee/payer,
    malformed references, and unsupported chains reject the review and store
