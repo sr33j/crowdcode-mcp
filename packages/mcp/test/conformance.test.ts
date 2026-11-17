@@ -125,6 +125,7 @@ describe.skipIf(!PYTHON || !existsSync(PYTHON))("spec/conformance.json against t
   let env: NodeJS.ProcessEnv;
   let cwd: string;
   let tools: AgentTools;
+  const opened: string[] = [];
 
   beforeAll(async () => {
     mock = await startMock(PYTHON!);
@@ -138,7 +139,7 @@ describe.skipIf(!PYTHON || !existsSync(PYTHON))("spec/conformance.json against t
       CROWDCODE_HOME: join(root, "crowdcode"),
       CROWDCODE_WALLET_DIR: join(root, "agentcash"),
     };
-    tools = createAgentTools({ env, cwd, createPollMs: 1_100, createWaitMs: 10_000, taskPollMs: 500 });
+    tools = createAgentTools({ env, cwd, createPollMs: 1_100, createWaitMs: 10_000, taskPollMs: 500, openBrowser: (url) => { opened.push(url); } });
   }, 30_000);
 
   afterAll(async () => {
@@ -172,6 +173,9 @@ describe.skipIf(!PYTHON || !existsSync(PYTHON))("spec/conformance.json against t
       check(step, result, saved);
     }
 
+    // Account-mode funding opened the approval page (amount filled in) in the browser, once.
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(new RegExp(`^${mock.url}/agent/[A-Za-z0-9_-]+/fund\\?amount=1\\.00&from=your\\+agent$`));
     // The downloads landed in ./crowdcode-files/scout/ of the session folder, none overwritten.
     const saved_files = (await readdir(join(cwd, "crowdcode-files", "scout"))).sort();
     expect(saved_files).toEqual(["notes.txt", "report-1.md", "report.md"]);

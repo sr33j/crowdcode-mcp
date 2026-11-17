@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { getConfig } from "../config.js";
 import { loadWallet } from "../wallet.js";
-import { AccountClient, modeSetting, readCredentials } from "./account.js";
+import { AccountClient, type BrowserOpener, modeSetting, openInBrowser, readCredentials } from "./account.js";
 import { ApiError, type OwnerApi, PublicClient, WalletClient } from "./client.js";
 import { AGENT_TOOL_NAMES, type AgentToolName } from "./contract.js";
 import {
@@ -60,6 +60,11 @@ export interface AgentToolsOptions {
   env?: NodeJS.ProcessEnv;
   /** The session's working directory (downloads); default process.cwd() at call time. */
   cwd?: string | (() => string);
+  /**
+   * Opens a crowdcode.app page for the owner (account-mode funding approvals). Default: the system
+   * browser; `CROWDCODE_NO_BROWSER=1` turns it off. Tests inject a recorder.
+   */
+  openBrowser?: BrowserOpener;
   /** Polling knobs; tests shorten them. */
   createPollMs?: number;
   createWaitMs?: number;
@@ -467,6 +472,18 @@ export class AgentTools {
     });
   }
 
+  private async openApproval(url: string): Promise<boolean> {
+    const env = this.options.env ?? process.env;
+    if (truthy(env.CROWDCODE_NO_BROWSER)) return false;
+    if (!url.startsWith(`${this.baseUrl()}/`)) return false;
+    try {
+      await (this.options.openBrowser ?? openInBrowser)(url);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async fundAgent(args: Args): Promise<ToolResult> {
     const agentId = checkId(args, "agent_id");
     const value = amount(args, "amount_usd");
@@ -485,12 +502,19 @@ export class AgentTools {
       } catch (err) {
         const detail = err instanceof ApiError && err.detail && typeof err.detail === "object" ? (err.detail as Record<string, any>) : {};
         if (err instanceof ApiError && err.error === "browser_approval_required" && detail.approve_url) {
+          const url = String(detail.approve_url);
+          // The owner approves on a page with just this request (amount filled in): open it for them,
+          // but only a page of the CrowdCode origin this machine signed in to.
+          const opened = await this.openApproval(url);
           return ok({
             agent_id: agentId,
             amount_usd: value,
             moved: false,
-            approve_url: detail.approve_url,
-            next: `Open ${detail.approve_url} and approve ${money(value)} from your main wallet. Nothing moves until you do.`,
+            approve_url: url,
+            opened,
+            next: opened
+              ? `Opened the approval page in the browser (${url}). Approve ${money(value)} there; nothing moves until you do.`
+              : `Open ${url} and approve ${money(value)} from your main wallet. Nothing moves until you do.`,
           });
         }
         throw err;

@@ -1,5 +1,14 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.5 — 2026-11-17
+
+- Funding an agent in account mode opens the approval page in your browser.
+  The page has just this request on it: the amount, from your main wallet,
+  to which agent, with approve or decline. Nothing to type. The link is still
+  returned (`approve_url`, `opened`). `CROWDCODE_NO_BROWSER=1` turns the
+  opening off, and only pages of the CrowdCode origin you signed in to are
+  opened.
+
 ## 0.13.4 — 2026-11-17
 
 - **Service requests no longer ask for `kind` (gap or leverage) or `unlocks`** (owner decision, 2026-11-17). The reflection, in the Stop hook, the server instructions and every SKILL.md copy, simply asks for a concrete paid service that would have fixed an observed failure, a poor result or excessive cost. `request_service` keeps `input`, `output`, `problem`, `price_per_call`, `builds_on` (required, the realism check) and `frequency`. An agent that still sends `kind` or `unlocks` is not rejected: the fields are dropped locally and ignored by CrowdCode.
