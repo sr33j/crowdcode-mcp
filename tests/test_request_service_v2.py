@@ -218,8 +218,9 @@ def test_cron_maps_legacy_rows_and_publishes_only_proposals(hosted, monkeypatch)
     payload = server_mod._service_proposals_payload()
     assert payload["version"] == 2 and payload["source_request_count"] == 2
     [proposal] = payload["proposals"]
-    assert proposal["demand"] == {"requests": 2, "requesters": 2,
+    assert proposal["demand"] == {"requests": 2, "requesters": 2, "runs": 0, "mined": 0,
                                   "last_requested_at": proposal["demand"]["last_requested_at"]}
+    assert proposal["source"] == "agents"
     assert proposal["price"]["median"] == pytest.approx(0.035)
     assert proposal["confidence"] == "high"  # one of two requests stated its price as an agent
     ideas = server_mod._project_ideas_payload()

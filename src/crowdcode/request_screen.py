@@ -63,7 +63,10 @@ class ScreenResult:
         return self.verdict in REJECT_REASONS
 
 
-def screen_request(fields: dict[str, Any]) -> ScreenResult:
+def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = None,
+                   extra: dict[str, Any] | None = None) -> ScreenResult:
+    """`usage`, when given, is filled with the call's token usage; `extra` adds
+    request fields (the demand miner asks for low reasoning effort)."""
     settings = get_settings()
     if not settings.openai_api_key:
         return ScreenResult("unchecked", "no model configured")
@@ -124,7 +127,9 @@ def screen_request(fields: dict[str, Any]) -> ScreenResult:
         # memory"; this one rejects both. One call per request (~100 a month).
         parsed = _chat_json(settings, SYSTEM, prompt, timeout=SCREEN_TIMEOUT,
                             model=os.environ.get("CROWDCODE_SCREEN_MODEL", "").strip()
-                            or settings.proposal_model)
+                            or settings.proposal_model,
+                            **({"usage": usage} if usage is not None else {}),
+                            **({"extra": extra} if extra else {}))
     except Exception as exc:  # fail open: the nightly pass still judges it
         logger.warning("request screen unavailable: %s", type(exc).__name__)
         return ScreenResult("unchecked", "model unavailable")

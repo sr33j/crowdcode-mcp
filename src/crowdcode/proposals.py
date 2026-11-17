@@ -29,6 +29,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from crowdcode import demand_miner
 from crowdcode.demand import SourceIndex, price_distribution
 from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts
@@ -61,7 +62,8 @@ def fetch_requests(conn: Any) -> list[dict[str, Any]]:
         select id, created_at, requester_id, service_description, task_context,
                request_input, request_output, request_problem,
                price_per_call_usd, fields_source, inference_confidence,
-               request_kind, builds_on, unlocks, frequency, capability
+               request_kind, builds_on, unlocks, frequency, capability,
+               source, miner_run_count
         from service_requests
         where created_at > now() - make_interval(days => %s)
         order by created_at desc
@@ -252,6 +254,9 @@ def propose_services(items: list[dict[str, Any]]) -> dict[str, Any]:
             "tools) or not_a_service.",
             "Requests marked low_confidence were mapped from older free text and carry "
             "a guessed price; weigh them less.",
+            "Requests with source miner were not filed by an agent: CrowdCode found the "
+            "need in summaries of `runs` hosted runs, and the price is an estimate. Judge "
+            "them like the others; more runs is more evidence of repeated need.",
         ],
         "schema": {
             "proposals": [{
@@ -286,8 +291,11 @@ def _model_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "problem": _text(row.get("request_problem"), FIELD_CHARS),
             "price_per_call_usd": float(row["price_per_call_usd"])
             if row.get("price_per_call_usd") is not None else None,
-            "low_confidence": row.get("fields_source") != "agent"
-            and row.get("inference_confidence") != "high",
+            # A miner request's price is the miner's estimate; its evidence is
+            # the runs it was seen in, which the item states instead.
+            "low_confidence": _is_low_confidence(row) and not _is_miner(row),
+            **({"source": "miner", "runs": int(row.get("miner_run_count") or 1)}
+               if _is_miner(row) else {}),
             **{key: value for key, value in {
                 "kind": row.get("request_kind"),
                 "builds_on": _text(row.get("builds_on"), FIELD_CHARS),
@@ -301,6 +309,17 @@ def _model_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _is_low_confidence(row: dict[str, Any]) -> bool:
     return row.get("fields_source") != "agent" and row.get("inference_confidence") != "high"
+
+
+def _is_miner(row: dict[str, Any]) -> bool:
+    return row.get("source") == "miner"
+
+
+def _source_of(members: list[dict[str, Any]]) -> str:
+    """`agents` when only agents asked, `miner` when only the nightly miner found
+    it in run summaries (demand_miner.py), `both` otherwise."""
+    miner = sum(1 for m in members if _is_miner(m))
+    return "miner" if miner == len(members) else "agents" if not miner else "both"
 
 
 def _member_shape(members: list[dict[str, Any]]) -> dict[str, Any]:
@@ -371,6 +390,12 @@ def build_payload(
             logger.warning("proposal dropped: it repeats a private request")
             hidden["vague"] += len(member_ids)
             continue
+        # Demand mined from runs must never be traceable to one (C8).
+        if any(_is_miner(m) for m in members) and any(
+                demand_miner.traceable(value) for value in fields.values()):
+            logger.warning("proposal dropped: it names something traceable")
+            hidden["vague"] += len(member_ids)
+            continue
 
         prices = [float(m["price_per_call_usd"]) for m in members
                   if m.get("price_per_call_usd") is not None]
@@ -384,9 +409,14 @@ def build_payload(
             "would_pay": would_pay,
             "realism": realism,
             "clarity": clarity,
+            "source": _source_of(members),
             "demand": {
                 "requests": len(members),
                 "requesters": len(requesters),
+                # Hosted runs the miner saw this need in (0 for agent requests).
+                "runs": sum(int(m.get("miner_run_count") or 0) for m in members if _is_miner(m)),
+                # Of `requests` (and `requesters`, where each counts once), the miner's.
+                "mined": sum(1 for m in members if _is_miner(m)),
                 "last_requested_at": last.isoformat() if hasattr(last, "isoformat") else last,
             },
             "price": price_distribution(prices),
@@ -424,6 +454,7 @@ def build_payload(
     listed = sum(p["demand"]["requests"] for p in proposals)
     published = [by_id[i] for p in proposals for i in p.pop("_member_ids")]
     listed_by_kind = dict(Counter(m.get("request_kind") or "unstated" for m in published))
+    listed_by_source = dict(Counter(m.get("source") or "agent" for m in published))
     return {
         "ok": True,
         "version": PAYLOAD_VERSION,
@@ -433,6 +464,8 @@ def build_payload(
         "listed_request_count": listed,
         # Which kind of need the published demand is (C6): gap or leverage.
         "listed_by_kind": listed_by_kind,
+        # Who found the published demand: agents' requests or the miner (C8).
+        "listed_by_source": listed_by_source,
         "hidden_request_count": len(rows) - listed,
         "hidden_reasons": hidden,
         "proposals": proposals,
@@ -458,7 +491,8 @@ def empty_payload(now: datetime, model: str | None = None) -> dict[str, Any]:
     return {
         "ok": True, "version": PAYLOAD_VERSION, "model": model,
         "generated_at": int(now.timestamp()), "source_request_count": 0,
-        "listed_request_count": 0, "listed_by_kind": {}, "hidden_request_count": 0,
+        "listed_request_count": 0, "listed_by_kind": {}, "listed_by_source": {},
+        "hidden_request_count": 0,
         "hidden_reasons": {reason: 0 for reason in HIDDEN_REASONS}, "proposals": [],
     }
 

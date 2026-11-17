@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The nightly demand miner** (SRI-115 ticket 11, contract C8). CrowdCode's
+  reconciler posts summaries of the previous day's hosted runs (never
+  transcripts; secrets already scrubbed; owners who opted out are never read)
+  to `POST /api/internal/demand-miner/batch`, authenticated with
+  `CROWDCODE_DEMAND_MINER_TOKEN`.
+  - **One model call per batch** (the proposals model, low reasoning effort)
+    proposes leverage and gap services in the C6 shape. Each must pass the
+    request_service validation, a traceability check (no URL, domain, email,
+    handle, id, address, file name, long number or redaction placeholder),
+    the eight-word copy check against the batch, the same model screen (which
+    fails closed here) and the redactor once more.
+  - **Storage:** survivors become `service_requests` with `source = 'miner'`,
+    no requester wallet, and only the reconciler's HMAC run references
+    (`miner_run_count`, `miner_run_refs`). `demand_miner_batches` makes a
+    retried batch a no-op. Apply `supabase/demand-miner.sql` first.
+  - **Cost:** every call is costed and capped per UTC day
+    (`CROWDCODE_DEMAND_MINER_DAILY_USD`, default $0.24); the response reports it.
+  - **Proposals** now carry `source` (`agents`, `miner` or `both`) and
+    `demand.runs` / `demand.mined`; the payload adds `listed_by_source`. A
+    proposal built on mined demand that names anything traceable is not
+    published.
+
 - **The reliability rule** (SRI-115 ticket 6, contract C3). Every tracked
   service now has a state: `reliable`, `unverified` or `unreliable`.
   - **The rule:** `reliability-v1`, in `crowdcode.reliability`, with every
