@@ -1,5 +1,12 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.6 — 2026-11-17
+
+- **`npm i crowdcode-mcp` works again on Linux x64.** It failed because `@crowdcode/redaction` required `@huggingface/transformers` 3.x, whose `onnxruntime-node` 1.21.0 install script downloads a CUDA package from a GitHub release that now answers 404.
+  - The redaction engine is now bundled into crowdcode-mcp, so installing it no longer fetches `@crowdcode/redaction` from npm.
+  - The PII model stack is an *optional* dependency: `@huggingface/transformers` ^4.3.2, whose `onnxruntime-node` 1.30.0 installs from NuGet. If that native install ever fails, npm drops the optional dependency and the install still succeeds. Redaction then runs on the deterministic layers (secrets, emails, cards, IPs, URLs) and reports `modelActive: false`.
+  - No environment variable is needed.
+
 ## 0.13.5 — 2026-11-17
 
 - Funding an agent in account mode opens the approval page in your browser.
