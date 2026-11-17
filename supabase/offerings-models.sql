@@ -9,7 +9,7 @@
 --     seller's own catalog (/models) lists for a multi-model endpoint.
 -- model_quality_priors
 --     public leaderboard scores per model (Artificial Analysis arenas and the
---     Intelligence Index), with source URL and date; prior_rating is 1-5.
+--     Intelligence Index), with source URL and date; prior_rating is 3-5.
 
 alter table index_resources
   add column if not exists model text,
@@ -55,7 +55,8 @@ create table if not exists model_quality_priors (
   metric text not null,
   score numeric not null,
   rank int not null,
-  -- 1 + 4 x percentile of the model on its board (best = 5), on the judge's scale.
+  -- 3 + 2 x percentile of the model on its board (best = 5, last = 3), on the
+  -- judge's 1-5 scale: a ranked arena model is competent; 1 means a failed purchase.
   prior_rating numeric not null,
   leaderboard_name text,
   fetched_at timestamptz not null default now()

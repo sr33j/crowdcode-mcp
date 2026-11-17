@@ -27,7 +27,10 @@ table, so ``model_quality_priors`` joins on ``model``.
 Quality priors come from Artificial Analysis's public leaderboards (video,
 image, speech: arena Elo; language models: the Intelligence Index), read
 weekly. Each row keeps its source URL and date. ``prior_rating`` maps a
-model's place on its board to the judge's 1–5 scale: 1 + 4 × percentile.
+model's place on its board to the judge's 1–5 scale: 3 + 2 × percentile. A
+model ranked on a public arena is a competent model, so the last of a board is
+3.0 (no better or worse than an unknown offering), the first 5.0. A 1 means a
+failed purchase, which a leaderboard cannot say.
 """
 
 from __future__ import annotations
@@ -373,6 +376,11 @@ BOARD_MODALITY = {"text-to-video": "video", "image-to-video": "video", "text-to-
                   "text-to-speech": "audio", "llm-intelligence-index": "llm"}
 
 
+# prior_rating = PRIOR_FLOOR + PRIOR_SPAN x percentile on the board (3.0 to 5.0).
+PRIOR_FLOOR = 3.0
+PRIOR_SPAN = 2.0
+
+
 @dataclass(frozen=True)
 class Prior:
     model: Model
@@ -427,7 +435,7 @@ def parse_leaderboard(board: str, source_url: str, metric: str, page: str) -> li
     n = len(ranked)
     return [
         Prior(model, board, source_url, metric, score, index + 1,
-              round(1 + 4 * (1 - index / (n - 1)), 3) if n > 1 else 3.0, name)
+              round(PRIOR_FLOOR + PRIOR_SPAN * (1 - index / (n - 1)), 3) if n > 1 else 4.0, name)
         for index, (score, name, model) in enumerate(ranked)
     ]
 
