@@ -105,6 +105,22 @@
    "https://api.tickersfeed.net/sec/:symbol/filings": {
     "relevant": false,
     "why": "Raw SEC filings, not sell-side reports"
+   },
+   "https://tempo-mpp-prediction-market.vercel.app/v1/report": {
+    "relevant": false,
+    "why": "Polymarket report, not sell-side research"
+   },
+   "https://horizonpulse.dev/api/sec/earnings-calendar": {
+    "relevant": false,
+    "why": "SEC filing calendar, not investment memos"
+   },
+   "https://agent402.tools/api/skill/company-dossier": {
+    "relevant": false,
+    "why": "Raw company data bundle, not research reports or memos"
+   },
+   "https://search.cyberwarex.com/news": {
+    "relevant": false,
+    "why": "General news headlines, not sell-side research"
    }
   },
   "sell-side-research-reports": {
@@ -1155,6 +1171,18 @@
    "https://agent402.tools/api/transcribe": {
     "relevant": false,
     "why": "speech-to-text, opposite direction"
+   },
+   "https://sol.blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech audio"
+   },
+   "https://api.glianalabs.com/x402/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech audio"
+   },
+   "https://siroagent.com/v1/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech audio"
    }
   },
   "tts-neural-voice": {
@@ -1221,6 +1249,18 @@
    "https://llmrt-companion.manhliemcn4euwlu.workers.dev/speech-402": {
     "relevant": true,
     "why": "Neural voice TTS returning mp3"
+   },
+   "https://sol.blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs neural text-to-speech"
+   },
+   "https://api.glianalabs.com/x402/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs neural text-to-speech"
+   },
+   "https://siroagent.com/v1/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs neural text-to-speech"
    }
   },
   "tts-narration": {
@@ -1283,6 +1323,22 @@
    "https://voice.forgemesh.io/v1/tts/base-long": {
     "relevant": true,
     "why": "Paragraph text to spoken WAV audio"
+   },
+   "https://blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech narration audio"
+   },
+   "https://sol.blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech narration audio"
+   },
+   "https://api.glianalabs.com/x402/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech narration audio"
+   },
+   "https://siroagent.com/v1/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech narration audio"
    }
   },
   "image-generation": {
@@ -1337,6 +1393,18 @@
    "https://mystudios.fun/api/v1/images/generations": {
     "relevant": true,
     "why": "Image generation on many models"
+   },
+   "https://blockrun.ai/api/v1/images/image2image": {
+    "relevant": false,
+    "why": "image editing, not text-to-image generation"
+   },
+   "https://agent402.tools/api/image-gen": {
+    "relevant": true,
+    "why": "text-to-image generation"
+   },
+   "https://agent402.tools/api/image-gen-hd": {
+    "relevant": true,
+    "why": "text-to-image generation"
    }
   },
   "image-generation-long": {
@@ -1399,6 +1467,22 @@
    "https://api.x402node.dev/image/ocr": {
     "relevant": false,
     "why": "OCR, not image generation"
+   },
+   "https://blockrun.ai/api/v1/images/generations": {
+    "relevant": true,
+    "why": "text-to-image generation service"
+   },
+   "https://blockrun.ai/api/v1/images/image2image": {
+    "relevant": false,
+    "why": "image editing, not generation"
+   },
+   "https://agent402.tools/api/image-gen": {
+    "relevant": false,
+    "why": "returns base64 only, no public URL"
+   },
+   "https://agent402.tools/api/image-gen-hd": {
+    "relevant": false,
+    "why": "returns base64 only, no public URL"
    }
   },
   "image-edit": {
@@ -1457,6 +1541,10 @@
    "https://api.xona-agent.com/image/gpt-image-2": {
     "relevant": false,
     "why": "Generation only, no input-image editing stated"
+   },
+   "https://stablestudio.dev/api/generate/nano-banana-pro/edit": {
+    "relevant": true,
+    "why": "edits input image with Nano Banana Pro"
    }
   },
   "video-generation": {
@@ -1503,6 +1591,18 @@
    "https://mystudios.fun/api/v1/videos/generations": {
     "relevant": true,
     "why": "Prompt-to-video generation on many models"
+   },
+   "https://api.glianalabs.com/x402/seedance-2.5": {
+    "relevant": true,
+    "why": "Seedance text-to-video clip"
+   },
+   "https://siroagent.com/v1/seedance-2-5": {
+    "relevant": true,
+    "why": "Seedance text-to-video clip"
+   },
+   "https://www.studio-x.cc/api/generate/video-ultra": {
+    "relevant": false,
+    "why": "NSFW image-to-video, not text-to-video"
    }
   },
   "music-generation": {
@@ -1577,6 +1677,22 @@
    "https://medien.halowerk.com/v1/music-ducking": {
     "relevant": false,
     "why": "Mixes existing tracks, not generation"
+   },
+   "https://blockrun.ai/api/v1/audio/speech": {
+    "relevant": false,
+    "why": "text-to-speech, not music generation"
+   },
+   "https://sol.blockrun.ai/api/v1/audio/speech": {
+    "relevant": false,
+    "why": "text-to-speech, not music generation"
+   },
+   "https://api.glianalabs.com/x402/eleven-v3": {
+    "relevant": false,
+    "why": "text-to-speech, not music generation"
+   },
+   "https://siroagent.com/v1/eleven-v3": {
+    "relevant": false,
+    "why": "text-to-speech, not music generation"
    }
   },
   "meme": {
@@ -1619,6 +1735,10 @@
    "https://api.delx.ai/api/v1/x402/caption-image": {
     "relevant": false,
     "why": "Alt-text captioning, not meme"
+   },
+   "https://www.trezalabs.com/api/x402/clip": {
+    "relevant": false,
+    "why": "YouTube clip captioning, not meme image"
    }
   },
   "youtube-download": {
@@ -1677,6 +1797,10 @@
    "https://api.weblens.dev/social/youtube/transcript": {
     "relevant": false,
     "why": "Transcript, not video download"
+   },
+   "https://api.sumvid.app/v1/transcript": {
+    "relevant": false,
+    "why": "transcript only, no video download"
    }
   },
   "ocr": {
@@ -1985,6 +2109,10 @@
    "https://agdata.shveik.dev/x402/domain-contacts": {
     "relevant": false,
     "why": "Contact finder, not sending email"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/drafts/:draft_id/send": {
+    "relevant": false,
+    "why": "sends existing draft only; needs prior draft creation"
    }
   },
   "disposable-inbox": {
@@ -2115,6 +2243,42 @@
    "https://agent-exec.448c.org/inbox": {
     "relevant": true,
     "why": "Disposable receive-only inbox"
+   },
+   "https://agents.writerslogic.com/api/v1/inbox-poll": {
+    "relevant": false,
+    "why": "polls existing inbox, does not create"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
+   },
+   "https://agentsvc.io/api/v1/proxy/agent-inbox": {
+    "relevant": false,
+    "why": "agent JSON message queue, not email inbox"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/messages/:message_id/forward": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/messages/send": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
+   },
+   "https://stableemail.dev/api/inbox/send": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/:message_id/forward": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
+   },
+   "https://mpp.orthogonal.com/agentmail/v0/inboxes/:inbox_id/messages/:message_id/reply-all": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
+   },
+   "https://mpp.api.agentmail.to/v0/inboxes/:inbox_id/messages/:message_id/reply": {
+    "relevant": false,
+    "why": "acts on existing inbox, does not create one"
    }
   },
   "phone-call": {
@@ -2215,6 +2379,10 @@
    "https://palmyr.ai/phone/numbers/:id/messages": {
     "relevant": false,
     "why": "Reads received SMS, not sending"
+   },
+   "https://api.gadgethumans.com/contacts": {
+    "relevant": false,
+    "why": "contact extraction, not SMS sending"
    }
   },
   "x-search": {
@@ -2799,6 +2967,26 @@
    "https://resolve402.dev/api/markdown-to-pdf": {
     "relevant": false,
     "why": "Markdown input, not HTML"
+   },
+   "https://x402-zadenworks.zaden-gaming.workers.dev/snap": {
+    "relevant": false,
+    "why": "URL-to-PDF only, no HTML input"
+   },
+   "https://qf-api.quietforge-studio.workers.dev/v1/render": {
+    "relevant": true,
+    "why": "renders HTML string to PDF"
+   },
+   "https://screenshot-api-production-fe7e.up.railway.app/capture/pdf": {
+    "relevant": false,
+    "why": "URL-to-PDF only, no HTML input"
+   },
+   "https://web.cyberwarex.com/pdf": {
+    "relevant": false,
+    "why": "URL-to-PDF only, no HTML input"
+   },
+   "https://softbot-screenshot-mainnet.softbot.workers.dev/v1/pdf": {
+    "relevant": false,
+    "why": "URL-to-PDF only, no HTML input"
    }
   },
   "markdown-pdf": {
@@ -3039,6 +3227,14 @@
    "https://datastand.dev/api/search/bazaar": {
     "relevant": false,
     "why": "x402 service directory search, meta-service"
+   },
+   "https://market2000.xyz/get_trends": {
+    "relevant": false,
+    "why": "top trending queries, not term over time"
+   },
+   "https://api.weblens.dev/search/trends": {
+    "relevant": true,
+    "why": "Google Trends interest over time"
    }
   },
   "headless-browser": {
@@ -3973,6 +4169,34 @@
    "https://api.laminarity.uk/v1/chat/completions": {
     "relevant": true,
     "why": "Pay-per-request chat completions"
+   },
+   "https://ask.singitai.app/v1/chat/claude-opus-5.5": {
+    "relevant": true,
+    "why": "pay-per-call LLM chat completions"
+   },
+   "https://x402.agentindex.world/llm/claude-sonnet": {
+    "relevant": true,
+    "why": "pay-per-call LLM chat completions"
+   },
+   "https://ask.singitai.app/v1/chat/kimi-k3.1-pro": {
+    "relevant": true,
+    "why": "pay-per-call LLM chat completions"
+   },
+   "https://ask.singitai.app/v1/chat/claude-sonnet-5.5": {
+    "relevant": true,
+    "why": "pay-per-call LLM chat completions"
+   },
+   "https://blockrun.ai/api/v1/messages": {
+    "relevant": true,
+    "why": "Pay-per-token Anthropic-compatible LLM messages API"
+   },
+   "https://sol.blockrun.ai/api/v1/chat/completions": {
+    "relevant": true,
+    "why": "Pay-per-call Claude chat completions endpoint"
+   },
+   "https://siroagent.com/v1/claude-opus-5-5": {
+    "relevant": true,
+    "why": "Paid Claude Opus model call endpoint"
    }
   },
   "code-review": {
@@ -4039,6 +4263,10 @@
    "https://api.xynaptic.io/v1/code-review": {
     "relevant": true,
     "why": "AI code review with findings"
+   },
+   "https://blockrun.ai/api/v1/chat/completions": {
+    "relevant": false,
+    "why": "Generic LLM chat, not a PR code review service"
    }
   },
   "weather": {
@@ -4385,6 +4613,10 @@
    "https://api.findmydirectdoctor.com/v1/costs/medication": {
     "relevant": false,
     "why": "Medication cost benchmarks, not drug info"
+   },
+   "https://api.agent-data.workers.dev/api/v1/science/druglabel": {
+    "relevant": true,
+    "why": "openFDA prescription drug label lookup"
    }
   },
   "fda-recalls": {
@@ -4583,6 +4815,22 @@
    "https://api.kit-rx.com/v1/text/translate": {
     "relevant": true,
     "why": "AI translation to target language"
+   },
+   "https://aipaygen.com/v1/translate": {
+    "relevant": true,
+    "why": "text translation supporting English target"
+   },
+   "https://siroagent.com/v1/translate": {
+    "relevant": true,
+    "why": "text translation supporting English target"
+   },
+   "https://api.gadgethumans.com/translate": {
+    "relevant": true,
+    "why": "text translation supporting English target"
+   },
+   "https://agent-toolbox.zafermemon87.workers.dev/v1/translate": {
+    "relevant": true,
+    "why": "text translation supporting English target"
    }
   },
   "video-10s": {
@@ -4625,6 +4873,18 @@
    "https://www.agentgram.site/api/generate/video": {
     "relevant": true,
     "why": "Video generation endpoint per URL"
+   },
+   "https://api.glianalabs.com/x402/seedance-2.5": {
+    "relevant": true,
+    "why": "Seedance text-to-video generation"
+   },
+   "https://siroagent.com/v1/seedance-2-5": {
+    "relevant": false,
+    "why": "fixed 5 s clips, not 10 seconds"
+   },
+   "https://www.studio-x.cc/api/generate/video-ultra": {
+    "relevant": false,
+    "why": "NSFW image-to-video, not prompt video"
    }
   },
   "video-cinematic": {
@@ -4667,6 +4927,14 @@
    "https://api.xona-agent.com/video/seedance-generation": {
     "relevant": true,
     "why": "Seedance text-to-video generation, up to 10s"
+   },
+   "https://agent402.tools/v1/videos/generations": {
+    "relevant": false,
+    "why": "locked 4s 720p budget clip, not cinematic"
+   },
+   "https://www.studio-x.cc/api/generate/video-ultra": {
+    "relevant": false,
+    "why": "NSFW image-to-video, not cinematic generation"
    }
   },
   "image-to-video": {
@@ -4717,6 +4985,18 @@
    "https://medien.halowerk.com/v1/clip-finder": {
     "relevant": false,
     "why": "Finds clips in existing media; no image animation"
+   },
+   "https://api.glianalabs.com/x402/seedance-2.5": {
+    "relevant": false,
+    "why": "text-to-video only, no image input"
+   },
+   "https://siroagent.com/v1/seedance-2-5": {
+    "relevant": false,
+    "why": "no image input stated"
+   },
+   "https://www.studio-x.cc/api/generate/video-ultra": {
+    "relevant": true,
+    "why": "Wan 2.7 image-to-video"
    }
   },
   "veo-video": {
@@ -4811,6 +5091,18 @@
    "https://x402.forgemesh.io/speech-generator": {
     "relevant": true,
     "why": "Text to speech WAV"
+   },
+   "https://sol.blockrun.ai/api/v1/audio/speech": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech"
+   },
+   "https://api.glianalabs.com/x402/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech"
+   },
+   "https://siroagent.com/v1/eleven-v3": {
+    "relevant": true,
+    "why": "ElevenLabs text-to-speech"
    }
   },
   "image-editing": {
@@ -4825,6 +5117,10 @@
    "https://api.koinelix.com/v1/images/generations": {
     "relevant": true,
     "why": "Edits with reference input images"
+   },
+   "https://api.jarvisclaw.ai/v1/marketplace/api/image-edit": {
+    "relevant": true,
+    "why": "instruction-based image editing"
    }
   },
   "speech-to-text": {
@@ -4909,6 +5205,26 @@
    "https://exchangerebel.com/toll/inference/chat": {
     "relevant": true,
     "why": "LLM chat completions inference"
+   },
+   "https://umbra-inference.app/v1/chat/completions": {
+    "relevant": true,
+    "why": "OpenAI-compatible LLM inference"
+   },
+   "https://blockrun.ai/api/v1/messages": {
+    "relevant": true,
+    "why": "LLM inference via Anthropic-compatible Messages API"
+   },
+   "https://sol.blockrun.ai/api/v1/chat/completions": {
+    "relevant": true,
+    "why": "Claude chat completions inference endpoint"
+   },
+   "https://ask.singitai.app/v1/chat/claude-opus-5.5": {
+    "relevant": true,
+    "why": "LLM chat completions for Claude Opus"
+   },
+   "https://siroagent.com/v1/claude-opus-5-5": {
+    "relevant": true,
+    "why": "Paid Claude Opus model inference endpoint"
    }
   },
   "embeddings": {
@@ -4981,6 +5297,26 @@
    "https://api.delx.ai/api/v1/x402/upscale-image-hq": {
     "relevant": true,
     "why": "Image upscaling"
+   },
+   "https://blockrun.ai/api/v1/images/image2image": {
+    "relevant": false,
+    "why": "general image editing, not upscaling"
+   },
+   "https://stablestudio.dev/api/generate/gpt-image-1.5/edit": {
+    "relevant": false,
+    "why": "general image editing, not upscaling"
+   },
+   "https://agent402.tools/v1/images/edits": {
+    "relevant": false,
+    "why": "general image editing, not upscaling"
+   },
+   "https://stablestudio.dev/api/generate/nano-banana-pro/edit": {
+    "relevant": false,
+    "why": "general image editing, not upscaling"
+   },
+   "https://api.jarvisclaw.ai/v1/marketplace/api/image-edit": {
+    "relevant": false,
+    "why": "general image editing, not upscaling"
    }
   },
   "flux-image": {
@@ -5479,6 +5815,10 @@
    "https://agent-data-tools.revmesh2074.workers.dev/pdf/text": {
     "relevant": true,
     "why": "PDF text extraction"
+   },
+   "https://agentsvc.io/api/v1/proxy/html-to-pdf": {
+    "relevant": false,
+    "why": "Creates PDFs from HTML; does not extract text"
    }
   },
   "phone-validate": {

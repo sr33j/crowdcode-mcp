@@ -101,7 +101,10 @@ go (the live catalogs answer meanwhile). A query:
 2. **finds what was asked for**: a named model's sellers (C9), else the capability
    leaf the strongest matches and the leaf labels agree on (C7), which gates out
    neighbours that share words ("video transcript" for "generate a video");
-3. **ranks** the matching set by a seeded Thompson draw of delivery × quality ×
+3. **ranks** by the node's policy (C13 amendment). `quality_first` (video, image, audio, llm): every
+   offering that returns the artifact (`returns_artifact`, `OfferingIndex.producers`), models by
+   quality in ±0.25 bands, then sellers by delivery, then price. `value_first` (everything else):
+   the matching set (quality ≥ 3) by a seeded Thompson draw of delivery × quality ×
    fit per effective dollar (price, a transfer when short, plus ~$0.05 of the
    agent's own cost per call). Offerings with evidence all compete; only the
    two most relevant with none are drawn against them (`EXPLORE_SLOTS`). `bad`

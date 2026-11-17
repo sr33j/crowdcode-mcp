@@ -122,6 +122,23 @@ DESCRIPTION_STORED = 200
 NAME_MAX = 48
 DESCRIPTION_MAX = 60
 
+# C13 amendment (2026-11-17): where outputs differ in quality more than in price, quality decides.
+QUALITY_FIRST_NODES = frozenset({"video", "image", "audio", "llm"})
+QUALITY_FIRST_MODALITIES = frozenset({"video", "image", "audio", "music", "llm"})
+# Leaves whose offerings must return the artifact itself (a file, or a job that yields one).
+ARTIFACT_LEAVES = frozenset({"video.generate", "video.edit", "image.generate", "image.edit", "audio.tts", "audio.music",
+                             "llm.conversational-chat"})
+LEAF_MODALITY = {"video.generate": {"video"}, "video.edit": {"video"}, "image.generate": {"image"},
+                 "image.edit": {"image"}, "audio.tts": {"audio"}, "audio.music": {"music"},
+                 "llm.conversational-chat": {"llm"}}
+_ARTIFACT_WORDS = {"video": "video|t2v|i2v|clip|movie|animat", "image": "image|img|photo|picture|t2i|i2i",
+                   "audio": "audio|speech|tts|voice|sound|music|song", "llm": "chat|completion|llm|inference|messages"}
+_EDIT = re.compile(r"edit|image2image|img2img|i2i|inpaint|outpaint|retouch|upscal|remove", re.I)
+# Price breaks ties only within a quality band this wide (±0.25).
+QUALITY_BAND = 0.5
+# value_first ranks only offerings at least this good on the judge's 1-5 scale.
+VALUE_MIN_QUALITY = 3.0
+
 TIERS = ("proven", "popular", "new", "bad")
 _GOOD_TIERS = frozenset({"proven", "popular"})
 
@@ -226,6 +243,8 @@ class Offering:
     model: str | None = None
     model_family: str | None = None
     modality: str | None = None
+    # The kinds of artifact its models produce (C9: video, image, audio, music, llm, embedding).
+    modalities: tuple[str, ...] = ()
     # Every model the offering sells, with each one's quality prior (C9): {model: (family, prior_rating)}.
     models: dict[str, tuple[str | None, float | None]] | None = None
     # Reliability (C10): the tier, the delivery posterior, quality on the judge's 1-5 scale, the first reason.
@@ -310,8 +329,17 @@ class OfferingIndex:
     def semantic(self) -> bool:
         return self.vectors is not None and len(self.vectors) == len(self.offerings)
 
+    def producers(self, leaf: str) -> list[Offering]:
+        """Every offering that returns a leaf's artifact (classified there, or selling a model of its
+        modality), whatever its words: "generate a video" considers every video generator."""
+        cache = self.__dict__.setdefault("_producers", {})
+        if leaf not in cache:
+            cache[leaf] = [o for o in self.offerings if returns_artifact(o, leaf)]
+        return cache[leaf]
+
     def reassess(self) -> None:
         """Re-read leaves and models after their classification changed, without rebuilding."""
+        self.__dict__.pop("_producers", None)
         for o in self.offerings:
             o.inferred = ()
         if self.semantic:
@@ -655,9 +683,12 @@ class _Builder:
         self.scores = data.get("scores") or {}
         self.priors = data.get("model_priors") or {}
         self.models: dict[int, dict[str, tuple[str | None, float | None]]] = {}
+        self.modalities: dict[int, set[str]] = {}
         for row in data.get("offering_models") or []:
             self.models.setdefault(int(row["resource_id"]), {})[row["model"]] = (
                 row.get("model_family"), self.priors.get(row["model"]))
+            if row.get("modality"):
+                self.modalities.setdefault(int(row["resource_id"]), set()).add(str(row["modality"]))
 
     def __call__(self, row: dict[str, Any]) -> Offering:
         return self.assess(self.make(row))
@@ -700,6 +731,7 @@ class _Builder:
         if o.model and o.model not in sold:
             sold[o.model] = (o.model_family, priors.get(o.model))
         o.models = sold or None
+        o.modalities = tuple(sorted(self.modalities.get(o.id, set()) | ({o.modality} if o.modality else set())))
         rel = self.reliability.get(o.service_id) if o.service_id else None
         rating = priors.get(o.model) if o.model else None
         # One definition of the tier and the delivery estimate, shared with the capability tree (W6's
@@ -814,6 +846,7 @@ class Ranked:
     in_group: bool
     explore: bool = False
     contender: bool = False
+    model: str | None = None  # the model the query named, if any
 
     @property
     def fit(self) -> float:
@@ -831,7 +864,8 @@ class Ranked:
 
 def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str, float] | None, seed: int,
          model_rows: set[int] | None = None, model: str | None = None,
-         leaf_similarity: dict[str, float] | None = None) -> tuple[list[Ranked], dict[str, Any]]:
+         leaf_similarity: dict[str, float] | None = None,
+         producers: Callable[[str], list[Offering]] | None = None) -> tuple[list[Ranked], dict[str, Any]]:
     """C13 over the matches, best first.
 
     1. The matching set: offerings of the model the query names, or of the leaf the strongest
@@ -869,8 +903,9 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
             return False
         if leaf is None:
             return True
-        if m.offering.listed and not m.offering.leaves:
-            # CrowdCode lists it but nobody has classified it: an inferred leaf is a guess, so its match decides.
+        if m.offering.listed:
+            # CrowdCode's directory lists it (reviewed, or ours): it competes on relevance within the band,
+            # as the directory always did, whatever leaf the classifier or a neighbour put it in.
             return True
         if not m.offering.capabilities:
             return m.strength >= top - UNCLASSIFIED_BAND
@@ -879,13 +914,29 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
     group = [(m, b) for m, b in usable if in_group(m)]
     if not group:  # a model nobody sells payably: the strongest matches stand alone
         group = [(m, b) for m, b in usable if m.strength >= floor]
+    asked = {mod for m, _ in group if model_rows for mod in m.offering.modalities}
+    rule = policy(leaf, asked)
+    if rule == "quality_first":
+        if leaf in ARTIFACT_LEAVES:
+            # Every producer of the artifact is a candidate, matched or not; those that do not return
+            # it (prompt writers, metadata) are not, however well they match.
+            seen = {id(m.offering) for m, _ in usable}
+            for o in producers(leaf) if producers else []:
+                if id(o) in seen or o.tier == "bad" or not o.payable:
+                    continue
+                best = best_offer(o, networks, balances, o.price_usd)
+                if best is not None:
+                    usable.append((Match(o, 0.0, None, MATCH_FLOOR), best))
+            group = [(m, b) for m, b in usable if returns_artifact(m.offering, leaf)] or group
+        return _quality_first(usable, group, leaf, model, typical_of(group), left_out)
+    # value_first: only offerings at least VALUE_MIN_QUALITY good are drawn.
+    group = [(m, b) for m, b in group if _model_quality(m.offering, model) >= VALUE_MIN_QUALITY] or group
     unproven = sorted((m for m, _ in group if not m.offering.evidenced),
                       key=lambda m: (-round(m.strength, 2), -(m.offering.payers or 0), m.offering.id))
     explorers = {id(m.offering) for m in unproven[:EXPLORE_SLOTS]}
     contenders = {id(m.offering) for m, _ in group if m.offering.evidenced or id(m.offering) in explorers}
     members = {id(m.offering) for m, _ in group}
-    known = sorted(m.offering.price_usd for m, _ in group if m.offering.price_usd is not None)
-    typical = known[len(known) // 2] if known else 0.01
+    typical = typical_of(group)
     rng = np.random.default_rng(seed)
     ranked: list[Ranked] = []
     # One draw per offering in a fixed order, so a seed reproduces the list.
@@ -905,16 +956,97 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
         r.explore = r.sample > r.offering.mean and mean_position[id(r)] > position
     rest = sorted((r for r in ranked if not r.contender),
                   key=lambda r: (not r.in_group, -round(r.match, 1), not r.best["fundable"], -r.mean_value, r.offering.id))
-    return inside + rest, {"left_out": left_out, "capability": leaf, "model": model, "matching": len(group)}
+    return inside + rest, {"left_out": left_out, "capability": leaf, "model": model, "matching": len(group),
+                           "policy": "value_first"}
+
+
+def typical_of(group: list[tuple[Match, dict[str, Any]]]) -> float:
+    known = sorted(m.offering.price_usd for m, _ in group if m.offering.price_usd is not None)
+    return known[len(known) // 2] if known else 0.01
+
+
+def _quality_first(usable: list[tuple[Match, dict[str, Any]]], group: list[tuple[Match, dict[str, Any]]],
+                   leaf: str | None, model: str | None, typical: float, left_out: dict[str, int]
+                   ) -> tuple[list[Ranked], dict[str, Any]]:
+    """C13 amendment, `quality_first`: models by quality (the leaderboard prior, then judged quality), in
+    bands of QUALITY_BAND; within a band, sellers by expected delivery, then effective price. No draw:
+    `explore` marks a seller with no delivery evidence yet (tier `new`), which is how a top model's
+    untried sellers get tried. A cheaper, worse model never outranks a better one for its price."""
+    members = {id(m.offering) for m, _ in group}
+    ranked: list[Ranked] = []
+    for m, best in usable:
+        o = m.offering
+        price = best["effective_price_usd"]
+        value_price = (price if price is not None else typical) + CALL_OVERHEAD_USD
+        r = Ranked(o, m.strength, best, o.price_usd, value_price, _model_quality(o, model), o.mean, id(o) in members)
+        r.contender, r.model = r.in_group, model
+        r.explore = r.contender and o.tier == "new"
+        ranked.append(r)
+
+    def band(q: float) -> float:
+        return math.floor(q / QUALITY_BAND + 0.5) * QUALITY_BAND
+
+    inside = sorted((r for r in ranked if r.contender), key=lambda r: (
+        not r.best["fundable"], -band(r.quality), -round(r.offering.mean, 2), r.value_price, -r.match, r.offering.id))
+    kinds = {mod for r in inside for mod in r.offering.modalities}
+    rest = sorted((r for r in ranked if not r.contender and (not model or set(r.offering.modalities) & kinds)),
+                  key=lambda r: (-round(r.match, 1), not r.best["fundable"], -band(r.quality), -r.offering.mean,
+                                 r.offering.id))
+    return inside + rest, {"left_out": left_out, "capability": leaf, "model": model, "matching": len(group),
+                           "policy": "quality_first"}
 
 
 def _model_quality(o: Offering, model: str | None) -> float:
-    """An offering's quality, or the asked-for model's prior on an offering that sells several."""
-    if model and o.models and model in o.models and not o.model:
-        prior_rating = o.models[model][1]
-        if prior_rating is not None:
-            return _quality(None, prior_rating)
-    return o.quality if o.quality is not None else NEUTRAL_QUALITY
+    """An offering's quality: the asked-for model's (or family's) prior when it sells several; for an
+    offering that sells several and none was asked for, its best model's; else its own (C10)."""
+    own = o.quality if o.quality is not None else NEUTRAL_QUALITY
+    if o.models and not o.model:
+        priors = [p for name, (family, p) in o.models.items() if p is not None and (
+            model is None or name == model or family == model)]
+        if priors:
+            return _quality(None, max(priors))
+    return own
+
+
+def best_model(o: Offering, model: str | None) -> str | None:
+    """The model an offering's quality comes from: its own, the asked-for one, or its best by prior."""
+    if o.model:
+        return o.model
+    rated = [(p, name) for name, (family, p) in (o.models or {}).items()
+             if p is not None and (model is None or name == model or family == model)]
+    return max(rated)[1] if rated else None
+
+
+def policy(leaf: str | None, modalities: set[str]) -> str:
+    """C13 amendment: `quality_first` for media and models, `value_first` for everything else."""
+    if leaf is not None:
+        return "quality_first" if leaf.split(".")[0] in QUALITY_FIRST_NODES else "value_first"
+    return "quality_first" if modalities & QUALITY_FIRST_MODALITIES else "value_first"
+
+
+# Until the tree re-classifies media leaves under the amendment, an endpoint whose own path or name says it
+# writes prompts, scripts or drafts, or reads metadata, is not taken for a generator.
+_NOT_ARTIFACT = re.compile(r"prompt|script|storyboard|draft|planner|metadata|transcri|caption|pricing|price-list", re.I)
+
+
+def returns_artifact(o: Offering, leaf: str) -> bool:
+    """A generator or editor belongs in its leaf only when it returns the artifact: classified there by
+    the tree's model (C7, which applies the rule), or selling a model of that modality (C9). A leaf
+    inferred from neighbours is not enough: prompt writers and metadata endpoints read like generators."""
+    path = o.endpoint.split("://", 1)[-1].split("/", 1)[-1]
+    if _NOT_ARTIFACT.search(path) or _NOT_ARTIFACT.search(o.name or ""):
+        return False
+    if leaf in o.leaves:
+        return True
+    if not set(o.modalities) & LEAF_MODALITY.get(leaf, set()):
+        return False
+    node = leaf.split(".")[0]
+    # A path that names another kind of artifact only ("/generate/image" for a video model) is that kind.
+    others = [w for n, w in _ARTIFACT_WORDS.items() if n != node and re.search(w, path, re.I)]
+    if others and not re.search(_ARTIFACT_WORDS[node], path, re.I):
+        return False
+    # An editor says so; a generator of the same modality is not one.
+    return not leaf.endswith(".edit") or bool(_EDIT.search(f"{path} {o.name or ''}"))
 
 
 def describe(r: Ranked, position: int, detail: bool = False, capability: str | None = None) -> dict[str, Any]:
@@ -933,8 +1065,9 @@ def describe(r: Ranked, position: int, detail: bool = False, capability: str | N
     if description and (detail or not name or name.lower() not in description.lower()[:len(name) + 5]):
         out["description"] = description[:300] if detail else (
             description if len(description) <= DESCRIPTION_MAX else description[:DESCRIPTION_MAX - 1] + "…")
-    if o.model:
-        out["model"] = o.model
+    sold = best_model(o, r.model)
+    if sold:
+        out["model"] = sold
     if o.capabilities and (detail or o.capabilities[0] != capability):
         out["capability"] = o.capabilities[0]  # said once in the envelope when it is the one asked for
     out["tier"] = o.tier
@@ -960,8 +1093,8 @@ def describe(r: Ranked, position: int, detail: bool = False, capability: str | N
     return out
 
 
-RANKING = ("By a seeded draw of delivery x quality per dollar (C13); bad left out. proven/popular pay within "
-           "the owner's caps, new from the exploration allowance. Inspect before paying.")
+RANKING = ("quality_first (media, models): best model, then likeliest seller, then price. value_first: a seeded "
+           "draw of delivery x quality per $. bad left out.")
 
 
 # --- The shared index ------------------------------------------------------------------------
@@ -1046,6 +1179,8 @@ class SharedIndex:
                 self._index = OfferingIndex(offerings, vectors=vectors, leaf_text=leaf_text,
                                             leaf_vectors=leaf_vectors if leaf_ids else None)
                 self._leaf_text = leaf_text
+                for leaf in ARTIFACT_LEAVES:
+                    self._index.producers(leaf)  # warm, so no search waits for the scan
                 self.error = None
                 delay = REFRESH_SECONDS
         except Exception as exc:

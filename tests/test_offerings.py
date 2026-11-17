@@ -228,3 +228,65 @@ def test_an_offering_paid_through_crowdcode_but_listed_nowhere_is_payable_on_an_
     result = search(OfferingIndex([o]), "translate documents", seed=1)
     assert result["source"] == "index"
     assert result["services"][0]["networks"] == []
+
+
+# --- C13 amendment: quality first for media and models ---------------------------------------
+
+
+def _video(id: int, name: str, path: str, price: float, model: str | None, prior: float | None, *, tier: str = "new",
+           alpha: float = 1.0, leaves: tuple[str, ...] = ("video.generate",), modality: str | None = "video") -> Offering:
+    o = offering(id, name, f"{name}: generate a video clip from a text prompt", price=price, tier=tier, alpha=alpha,
+                 leaves=leaves, endpoint=f"https://v{id}.example/{path}")
+    o.models = {model: (model.split("-")[0], prior)} if model else None
+    o.model = model
+    o.modalities = (modality,) if modality else ()
+    o.quality = offerings._quality(None, prior) if prior is not None else 3.0
+    return o
+
+
+CINEMA = [
+    _video(1, "Cheap clip", "wan/t2v/480p", 0.01, None, None, tier="popular", alpha=8),
+    _video(2, "Seedance seller", "seedance-2-5", 0.65, "seedance-2.5", 4.88),
+    _video(3, "Another Seedance seller", "x402/seedance-2.5", 1.60, "seedance-2.5", 4.88, tier="popular", alpha=8),
+    _video(4, "Launch teaser prompts", "v1/prompts/launch-teaser", 0.005, "seedance-1.5-pro", 4.5),
+    _video(5, "Veo seller", "veo-3.1/generate", 0.90, "veo-3.1", 4.2),
+]
+
+
+def test_media_ranks_the_best_model_first_then_the_seller_most_likely_to_deliver():
+    result = search(OfferingIndex(CINEMA), "generate a short cinematic video", seed=1)
+    assert result["policy"] == "quality_first"
+    ranked = endpoints(result)
+    # Seedance 2.5 (4.88) before Veo 3.1 (4.2) before the unrated $0.01 480p clip, whatever the price;
+    # between the two Seedance sellers, the one with delivery evidence first.
+    assert ranked[:3] == ["https://v3.example/x402/seedance-2.5", "https://v2.example/seedance-2-5",
+                          "https://v5.example/veo-3.1/generate"]
+    assert ranked.index("https://v1.example/wan/t2v/480p") > 2
+    first = result["services"][0]
+    assert first["model"] == "seedance-2.5" and "explore" not in first
+    assert result["services"][1].get("explore") is True  # an untried seller of the top model
+
+
+def test_a_prompt_writer_never_ranks_as_a_generator():
+    ranked = endpoints(search(OfferingIndex(CINEMA), "generate a short cinematic video", seed=1, limit=10))
+    assert "https://v4.example/v1/prompts/launch-teaser" not in ranked[:4]
+    assert not offerings.returns_artifact(CINEMA[3], "video.generate")
+
+
+def test_an_image_generator_is_not_an_image_editor():
+    generator = offering(1, "Image gen", "generate an image", leaves=(), endpoint="https://g.example/api/image-gen")
+    editor = offering(2, "Image edit", "edit an image", leaves=(), endpoint="https://e.example/api/image2image")
+    for o in (generator, editor):
+        o.modalities = ("image",)
+    assert offerings.returns_artifact(generator, "image.generate") and not offerings.returns_artifact(generator, "image.edit")
+    assert offerings.returns_artifact(editor, "image.edit")
+
+
+def test_utilities_rank_by_value_but_only_over_quality_3_or_better():
+    rows = [
+        offering(1, "Weather", "current weather forecast", price=0.001, quality=2.0, tier="popular", alpha=8),
+        offering(2, "Weather two", "current weather forecast", price=0.01, quality=3.5, tier="popular", alpha=8),
+    ]
+    result = search(OfferingIndex(rows), "weather forecast", seed=1)
+    assert result["policy"] == "value_first"
+    assert endpoints(result)[0] == "https://s2.example/api"
