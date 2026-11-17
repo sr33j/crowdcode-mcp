@@ -38,6 +38,20 @@ preserves unrelated MCP entries, and backs up an existing unmanaged
 `crowdcode` skill rather than overwriting it.
 
 Codex can alternatively install the bundled plugin from `plugins/crowdcode`.
+Claude Code can install the same folder as a plugin, which adds a `/crowdcode`
+command:
+
+```text
+/plugin marketplace add sr33j/crowdcode-mcp
+/plugin install crowdcode@crowdcode
+```
+
+**Cloud agents.** The same server runs CrowdCode cloud agents from Codex and
+Claude Code. Sign in with `npx crowdcode-mcp login` to use your CrowdCode
+account, or use a local wallet (`npx crowdcode-mcp wallet init`). Then create,
+fund and task agents, list and download their files, and withdraw.
+`npx crowdcode-mcp dashboard` shows everything. See
+[Agents](packages/mcp/README.md#agents).
 Claude Desktop release artifacts use the current `.mcpb` bundle format and are
 platform-specific because the local redaction stack contains native
 dependencies.

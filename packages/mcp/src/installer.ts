@@ -335,6 +335,8 @@ export function mergeCodexConfig(content: string): string {
     "[mcp_servers.crowdcode]",
     `command = ${JSON.stringify(MCP_SERVER.command)}`,
     `args = ${JSON.stringify(MCP_SERVER.args)}`,
+    // crowdcode_run_task waits for a cloud task (up to 10 minutes); Codex's default per-call limit is 60 s.
+    "tool_timeout_sec = 900",
   ].join("\n");
   return `${before ? `${before}\n\n` : ""}${section}\n`;
 }

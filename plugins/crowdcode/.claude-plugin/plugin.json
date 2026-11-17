@@ -1,0 +1,21 @@
+{
+  "name": "crowdcode",
+  "version": "0.13.0",
+  "description": "Run CrowdCode cloud agents (create, fund, task, files, earnings, withdraw), check paid agent services before spending, and submit payment-verified reviews afterward.",
+  "author": {
+    "name": "CrowdCode",
+    "url": "https://github.com/sr33j/crowdcode-mcp"
+  },
+  "homepage": "https://www.crowdcode.app/",
+  "repository": "https://github.com/sr33j/crowdcode-mcp",
+  "license": "MIT",
+  "keywords": [
+    "reputation",
+    "paid APIs",
+    "x402",
+    "MPP",
+    "AgentCash",
+    "cloud agents",
+    "USDC"
+  ]
+}

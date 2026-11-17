@@ -72,3 +72,24 @@ jobs:
           git clone -q --depth 1 --branch v0.23.1 https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
           (cd "$RUNNER_TEMP/hermes-agent" && uv sync -q --frozen --no-dev -p 3.14)
           HERMES_HOME="$RUNNER_TEMP/hermes-home" "$RUNNER_TEMP/hermes-agent/.venv/bin/hermes" plugins validate . --install-deps
+  agent-conformance:
+    # crowdcode-mcp's agent tools against the shared mock (spec/conformance.json); the
+    # Hermes plugin runs the same session in the hermes-plugin job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Python for the mock owner API
+        run: |
+          uv venv -p 3.12 "$RUNNER_TEMP/mock-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/mock-venv" uv pip install --exclude-newer "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" "eth-account>=0.13.0,<0.15"
+      - run: npm ci
+      - run: npm run build -w @crowdcode/redaction
+      - name: crowdcode-mcp tests with the conformance session
+        run: npm test -w crowdcode-mcp
+        env:
+          CROWDCODE_MOCK_PYTHON: ${{ runner.temp }}/mock-venv/bin/python

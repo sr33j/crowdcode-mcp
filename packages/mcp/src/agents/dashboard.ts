@@ -159,7 +159,9 @@ export class Dashboard {
     switch (head) {
       case "dashboard":
       case "status":
-        return this.overview();
+        // `dashboard <subcommand …>` runs the subcommand, so one entry point (the Claude Code
+        // /crowdcode command, `npx crowdcode-mcp dashboard $ARGUMENTS`) covers every screen.
+        return rest.length && head === "dashboard" ? this.dispatch(rest) : this.overview();
       case "help":
       case "-h":
       case "--help":

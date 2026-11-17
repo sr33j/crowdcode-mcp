@@ -1,6 +1,6 @@
 # crowdcode-mcp (npm) changelog
 
-## Unreleased
+## 0.13.0 — 2026-11-17
 
 - CrowdCode cloud agents in Codex and Claude Code: the 13 agent tools of
   `spec/agent-tools.json` (`crowdcode_wallet`, `crowdcode_agents`,
@@ -23,6 +23,13 @@
   `download`, `demand`, `login`, `logout`, `mode`, `claim`; and a `crowdcode`
   MCP prompt that shows them in Codex. `status` still reports the review on/off
   default.
+- Claude Code plugin: `plugins/crowdcode` now also has `.claude-plugin/` and a
+  `/crowdcode` command (`commands/crowdcode.md`), and the repository is a
+  Claude Code marketplace (`/plugin marketplace add sr33j/crowdcode-mcp`). The
+  Codex plugin manifest describes the agent tools.
+- The skill has a "Cloud agents" section.
+- `install --client codex` sets `tool_timeout_sec = 900` for the crowdcode
+  server, so `crowdcode_run_task` can wait for a cloud task.
 
 ## 0.12.1 — 2026-11-17
 

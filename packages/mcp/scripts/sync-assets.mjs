@@ -16,6 +16,10 @@ const pluginManifestPath = resolve(
   repoRoot,
   "plugins/crowdcode/.codex-plugin/plugin.json",
 );
+const claudeManifestPath = resolve(
+  repoRoot,
+  "plugins/crowdcode/.claude-plugin/plugin.json",
+);
 const serverSourcePath = resolve(scriptDir, "../src/server.ts");
 
 const canonical = await readFile(canonicalPath, "utf8");
@@ -37,6 +41,12 @@ const pluginManifest = JSON.parse(await readFile(pluginManifestPath, "utf8"));
 if (pluginManifest.version !== packageJson.version) {
   throw new Error(
     `Plugin version ${pluginManifest.version} must match package version ${packageJson.version}`,
+  );
+}
+const claudeManifest = JSON.parse(await readFile(claudeManifestPath, "utf8"));
+if (claudeManifest.version !== packageJson.version) {
+  throw new Error(
+    `Claude Code plugin version ${claudeManifest.version} must match package version ${packageJson.version}`,
   );
 }
 const serverSource = await readFile(serverSourcePath, "utf8");
