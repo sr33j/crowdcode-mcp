@@ -50,7 +50,7 @@ SCHEDULER = {
     "problem": "agents run once and cannot come back every morning to publish a recurring post",
     "builds_on": "official social platform posting APIs plus a hosted scheduler with retries",
     "unlocks": "recurring social posting without the owner starting a run every day",
-    "frequency": "recurring", "price_per_call": 0.05, "capability": "social", "runs": [2],
+    "frequency": "recurring", "price_per_call": 0.05, "capability": "social", "runs": [1, 2],
 }
 
 
@@ -135,6 +135,8 @@ def test_a_retried_batch_is_not_mined_twice(miner):
     ({"problem": "Get me the full text of a magazine story the film was based on"}, "copies_run"),
     ({"builds_on": "N/A"}, "invalid"),
     ({"runs": [7]}, "no_runs"),
+    ({"runs": [0]}, "single_run"),
+    ({"runs": [0, 0, 9]}, "single_run"),
     ({"capability": "made-up", "kind": "wish"}, "invalid"),
 ])
 def test_candidates_that_fail_a_check_are_not_stored(miner, change, reason):
@@ -295,3 +297,18 @@ def test_a_proposal_the_redactor_changes_is_not_published(monkeypatch):
     assert "_tally" not in out["proposals"][0]
     assert out["listed_request_count"] == 1 and out["hidden_reasons"]["vague"] == 2
     assert out["listed_by_source"] == {"agent": 1}
+
+
+def test_the_miner_is_told_what_is_already_published(miner):
+    with miner() as conn:
+        conn.execute(
+            "insert into app_cache (key, payload, generated_at) values ('service_proposals', %s::jsonb, now())",
+            ('{"proposals": [{"id": "p_1", "title": "Social Post Publisher", '
+             '"problem": "agents cannot post to social accounts reliably", "input": "x"}]}',))
+        conn.commit()
+    chat = _chat([LICENSED], miner)
+    demand_miner.mine(_body(), miner, NOW, chat=chat, screen=_accept)
+    prompt = chat.calls[0]
+    assert prompt["already_published"] == [
+        {"title": "Social Post Publisher", "problem": "agents cannot post to social accounts reliably"}]
+    assert any("already_published" in rule and "none of them covers" in rule for rule in prompt["requirements"])

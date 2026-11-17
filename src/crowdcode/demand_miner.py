@@ -53,6 +53,11 @@ SPEND_CACHE_KEY = "demand_miner_spend"
 DEFAULT_DAILY_BUDGET_USD = 0.24
 MAX_RUNS_PER_BATCH = 60
 MAX_CANDIDATES = 8
+# A need seen in one run is an anecdote; the miner exists to find patterns.
+MIN_RUNS = 2
+# The published proposals the miner is told about, so it proposes only needs
+# they do not cover (titles and problems are already public).
+MAX_PUBLISHED = 80
 # Run summary limits. The reconciler truncates to these already; the backend
 # enforces them so a misbehaving client cannot send transcripts.
 PROMPT_CHARS = 500
@@ -233,7 +238,20 @@ def redact_batch(batch: Batch) -> Batch:
 
 # --- the model call --------------------------------------------------------
 
-def miner_prompt(batch: Batch) -> dict[str, Any]:
+def published_proposals(conn: Any) -> list[dict[str, str]]:
+    """The proposals crowdcode.app lists now: title and one-line problem, both
+    already public. The miner proposes only needs these do not cover."""
+    row = conn.execute("select payload from app_cache where key = 'service_proposals'").fetchone()
+    payload = (row or {}).get("payload") or {}
+    out = []
+    for proposal in (payload.get("proposals") or [])[:MAX_PUBLISHED]:
+        if isinstance(proposal, dict) and proposal.get("title"):
+            out.append({"title": _text(proposal.get("title"), 70) or "",
+                        "problem": _text(proposal.get("problem"), 160) or ""})
+    return out
+
+
+def miner_prompt(batch: Batch, published: list[dict[str, str]] | None = None) -> dict[str, Any]:
     return {
         "task": (
             "Read these summaries of hosted AI agent runs and propose the paid services that "
@@ -270,7 +288,12 @@ def miner_prompt(batch: Batch) -> dict[str, Any]:
             "price_per_call: a realistic USD price per call for the outcome's value (a booked "
             "trip can be worth dollars, a lookup cents).",
             f"capability: the closest of {sorted(CAPABILITIES)}.",
-            "runs: the i of every run above that would have used it (at least one).",
+            f"runs: the i of every run above that would have used it. At least {MIN_RUNS}: "
+            "a need seen in one run is not a pattern, so leave it out.",
+            "already_published lists the services CrowdCode already publishes. Propose only "
+            "needs none of them covers. A variant of a published one (another vendor, price, "
+            "format or scope) is covered, so leave it out. If every need is covered, return an "
+            "empty list.",
             f"At most {MAX_CANDIDATES} proposals. Fewer is better than weak ones; an empty "
             "list is a fine answer.",
         ],
@@ -280,6 +303,7 @@ def miner_prompt(batch: Batch) -> dict[str, Any]:
             "frequency": "one_off|per_task_like_this|recurring", "price_per_call": "number",
             "capability": "string", "runs": ["integer"],
         }]},
+        "already_published": published or [],
         "runs": [
             {"i": i, "prompt": run.prompt, "turns": run.turns, "verdict": run.verdict,
              **({"failed_tools": run.failed_tools} if run.failed_tools else {}),
@@ -316,6 +340,9 @@ def _candidate(raw: Any, batch: Batch, sources: SourceIndex, outcome: Outcome) -
             refs.append(batch.runs[index].ref)
     if not refs:
         outcome.reject("no_runs")
+        return None
+    if len(refs) < MIN_RUNS:
+        outcome.reject("single_run")
         return None
     fields, _ = validate_request_fields(raw.get("input"), raw.get("output"), raw.get("problem"),
                                        raw.get("price_per_call"))
@@ -398,6 +425,7 @@ def mine(body: Any, connect: Callable[[], Any], now: datetime, *,
         done = conn.execute("select result from demand_miner_batches where batch_key = %s",
                             (batch.key,)).fetchone()
         already = spent_today(conn, now)
+        published = published_proposals(conn)
     if done:
         result = dict(done["result"])
         result["duplicate"] = True
@@ -418,7 +446,7 @@ def mine(body: Any, connect: Callable[[], Any], now: datetime, *,
         return outcome.as_json(already, budget)
     sources = SourceIndex([text for run in clean.runs for text in _run_texts(run)])
 
-    prompt = miner_prompt(clean)
+    prompt = miner_prompt(clean, published)
     if spend.estimate(prompt, SYSTEM, MINER_OUTPUT_TOKENS) > spend.remaining_usd:
         outcome.skipped = "budget"
         return outcome.as_json(already, budget)

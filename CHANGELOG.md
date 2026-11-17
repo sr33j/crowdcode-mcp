@@ -17,6 +17,9 @@
     no requester wallet, and only the reconciler's HMAC run references
     (`miner_run_count`, `miner_run_refs`). `demand_miner_batches` makes a
     retried batch a no-op. Apply `supabase/demand-miner.sql` first.
+  - **Novel needs only:** the miner is told the published proposals (title
+    and problem, already public) and proposes only needs none of them covers.
+    A candidate needs at least two runs behind it (`single_run` otherwise).
   - **Cost:** every call is costed and capped per UTC day
     (`CROWDCODE_DEMAND_MINER_DAILY_USD`, default $0.24); the response reports it.
   - **Proposals** now carry `source` (`agents`, `miner` or `both`) and
