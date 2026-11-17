@@ -36,6 +36,7 @@ Run `supabase/schema.sql` in the Supabase SQL editor or with `psql`:
 ```bash
 psql "$DATABASE_URL" -f supabase/schema.sql
 psql "$DATABASE_URL" -f supabase/services-index.sql   # the services index (idempotent)
+psql "$DATABASE_URL" -f supabase/offerings-models.sql # offerings, models, quality priors
 psql "$DATABASE_URL" -f supabase/reliability.sql      # the reliability rule's results and blocks (idempotent)
 psql "$DATABASE_URL" -f supabase/capability-tree.sql  # the capability tree (idempotent)
 ```

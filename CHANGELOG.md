@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Offerings, model identity and coverage** (SRI-115 C9).
+  - **Coverage:** the index lists every listing from the Bazaar, PayAI,
+    Dexter and thirdweb (about 47.6k resources, deduplicated by normalized URL
+    and method; thirdweb's method-less items join the resource another feed
+    listed). Every paid mpp.dev endpoint is tracked as `curated`. That brings
+    in StableStudio, fal-queue, Kling, HeyGen and OpenRouter's video
+    endpoints.
+  - **Model identity:** each offering's model comes from the seller's own
+    `/models` catalog (mpp.dev services that publish one, and BlockRun), its
+    route, or a description that names exactly one model. Names normalize
+    across sellers and leaderboards (`google/veo-3.1`, `fal-ai/veo3.1` and
+    "Veo 3.1" are all `veo-3.1`).
+  - **Storage:** `index_resources` gains `model`, `model_family` and
+    `modality`. `index_offering_models` holds one row per offering and model,
+    with the seller's id and pricing.
+  - **Quality priors:** `model_quality_priors` stores weekly Artificial
+    Analysis leaderboard scores (video, image, speech Elo and the LLM
+    Intelligence Index) with source URL and date, and `prior_rating` on the
+    judge's 1–5 scale.
+  - **Probes:** a media generator with no documented body is asked for a quote
+    with a short prompt, plus one of its catalog's models.
+  - **Health:** `/api/index/health` adds counts per source, models per
+    modality, and the priors' date.
+  - **Schema:** `supabase/offerings-models.sql`.
+
 - **reliability-v2** (SRI-115 Phase 2, contract C10). Every offering now has a
   delivery estimate, a quality estimate, one score and a tier.
   - **Delivery:** `Beta(alpha, beta)`. The prior comes from outside evidence:

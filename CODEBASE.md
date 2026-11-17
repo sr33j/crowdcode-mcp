@@ -128,6 +128,19 @@ endpoint aliases) and `GET /api/reliability?state=` or `?tier=`. Operators
 block and unblock with `scripts/block_service.py` (audited in
 `service_block_audit`). Schema: `supabase/reliability.sql`.
 
+### `src/crowdcode/index_models.py` (C9)
+
+Which model an offering sells and how good the model is said to be. It
+covers:
+- the normalizer (`find_models`, `normalize_model`): one pattern table shared
+  by routes, descriptions, seller catalogs and leaderboards;
+- seller `/models` catalogs (`mpp_catalogs`, `STATIC_CATALOGS` for BlockRun),
+  which become `index_offering_models` rows;
+- the Artificial Analysis leaderboards, which become `model_quality_priors`
+  rows (weekly; a board only scores models of its own modality).
+
+`index.update_models` runs after each daily sweep.
+
 ## `src/crowdcode/search_eval.py`
 
 recall@3 and MRR for the evaluation set in `tests/search_eval/cases.json`,
