@@ -1834,6 +1834,41 @@ async def capability_tree_route(request: Request) -> JSONResponse:
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
 
+async def tree_publish(request: Request) -> JSONResponse:
+    """W8's test gate: `POST /api/internal/tree/publish {version, by, evidence}`
+    serves a candidate that did at least as well as the current version as
+    `current` (C7, "Publishing"). Bearer `CROWDCODE_TREE_GATE_TOKEN`."""
+    token = get_settings().tree_gate_token
+    if not token:
+        return JSONResponse({"ok": False, "error": "tree publishing is not enabled"}, status_code=404)
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_request")
+    version, by, evidence = (body.get("version"), body.get("by"), body.get("evidence")) if isinstance(body, dict) else (None, None, None)
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1 or not isinstance(by, str) or not by.strip() \
+            or not isinstance(evidence, dict):
+        return _json_error("version (a positive integer), by and evidence (an object) are required",
+                           status_code=400, error_code="invalid_request")
+
+    def apply() -> str:
+        from crowdcode import capability_tree
+        with connect() as conn:
+            with conn.transaction():
+                return capability_tree.publish_gated(conn, version, by=by.strip(), evidence=evidence,
+                                                     now=datetime.now(UTC))
+
+    try:
+        result = await run_in_threadpool(apply)
+    except Exception:
+        return _unexpected_json_error("tree_publish")
+    status_code = {"published": 200, "already_published": 200, "not_found": 404}.get(result, 409)
+    return JSONResponse({"ok": status_code == 200, "result": result, "version": version}, status_code=status_code)
+
+
 async def service_proposals(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_service_proposals_payload)
@@ -1950,6 +1985,7 @@ def create_app() -> Starlette:
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             Route("/api/internal/hosted-services/sync", hosted_services_sync, methods=["POST"]),
             Route("/api/internal/demand-miner/batch", demand_miner_batch, methods=["POST"]),
+            Route("/api/internal/tree/publish", tree_publish, methods=["POST"]),
             *mcp_app.routes,
         ],
         lifespan=mcp_app.router.lifespan_context,
