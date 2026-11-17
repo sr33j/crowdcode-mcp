@@ -1,5 +1,17 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.6 — 2026-11-17
+
+- **Installs on Linux again.** Since about 22:20 UTC on 2026-11-17 every fresh
+  Linux install failed: `@crowdcode/redaction` 0.1.0 depends on
+  `@huggingface/transformers` ^3, whose `onnxruntime-node` 1.21 install script
+  downloads a GPU tarball GitHub no longer serves (404). crowdcode-mcp now
+  bundles its redaction engine and depends on `@huggingface/transformers` ^4
+  (`onnxruntime-node` 1.30, which installs without that download) and
+  `@nationaldesignstudio/rampart` directly. The PII model loads and redacts as
+  before (`crowdcode-mcp check`). `@crowdcode/redaction` 0.1.1 moves to
+  transformers ^4 too.
+
 ## 0.13.5 — 2026-11-17
 
 - Funding an agent in account mode opens the approval page in your browser.
