@@ -55,8 +55,9 @@ create table if not exists model_quality_priors (
   metric text not null,
   score numeric not null,
   rank int not null,
-  -- 3 + 2 x percentile of the model on its board (best = 5, last = 3), on the
-  -- judge's 1-5 scale: a ranked arena model is competent; 1 means a failed purchase.
+  -- 3 to 5 on the judge's 1-5 scale (a ranked arena model is competent; 1 means
+  -- a failed purchase): Elo boards 5 - min(2, elo gap to the leader / 150);
+  -- the language model index 3 + 2 x percentile.
   prior_rating numeric not null,
   leaderboard_name text,
   fetched_at timestamptz not null default now()

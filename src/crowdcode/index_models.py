@@ -27,10 +27,15 @@ table, so ``model_quality_priors`` joins on ``model``.
 Quality priors come from Artificial Analysis's public leaderboards (video,
 image, speech: arena Elo; language models: the Intelligence Index), read
 weekly. Each row keeps its source URL and date. ``prior_rating`` maps a
-model's place on its board to the judge's 1–5 scale: 3 + 2 × percentile. A
-model ranked on a public arena is a competent model, so the last of a board is
-3.0 (no better or worse than an unknown offering), the first 5.0. A 1 means a
-failed purchase, which a leaderboard cannot say.
+model's standing on its board to the judge's 1–5 scale, between 3 and 5: a
+model ranked on a public arena is a competent model (3.0 is neutral, the same
+as an unknown offering); a 1 means a failed purchase, which a leaderboard
+cannot say.
+
+- Arena boards (Elo): ``5 − min(2, gap / 150)``, ``gap`` being the Elo
+  distance to the board's leader. 150 Elo is about a 70% head-to-head
+  preference, so the leader is 5.0 and a model 300 or more behind is 3.0.
+- The language-model board (Intelligence Index, not Elo): ``3 + 2 × percentile``.
 """
 
 from __future__ import annotations
@@ -376,9 +381,11 @@ BOARD_MODALITY = {"text-to-video": "video", "image-to-video": "video", "text-to-
                   "text-to-speech": "audio", "llm-intelligence-index": "llm"}
 
 
-# prior_rating = PRIOR_FLOOR + PRIOR_SPAN x percentile on the board (3.0 to 5.0).
+# prior_rating is between PRIOR_FLOOR and PRIOR_FLOOR + PRIOR_SPAN (3.0 to 5.0).
 PRIOR_FLOOR = 3.0
 PRIOR_SPAN = 2.0
+# Elo boards: one point of rating per ELO_PER_POINT behind the leader.
+ELO_PER_POINT = 150.0
 
 
 @dataclass(frozen=True)
@@ -433,9 +440,15 @@ def parse_leaderboard(board: str, source_url: str, metric: str, page: str) -> li
             best[model.model] = (score, name, model)
     ranked = sorted(best.values(), key=lambda item: -item[0])
     n = len(ranked)
+    leader = ranked[0][0] if ranked else 0.0
+
+    def rating(index: int, score: float) -> float:
+        if metric == "elo":
+            return round(PRIOR_FLOOR + PRIOR_SPAN - min(PRIOR_SPAN, (leader - score) / ELO_PER_POINT), 3)
+        return round(PRIOR_FLOOR + PRIOR_SPAN * (1 - index / (n - 1)), 3) if n > 1 else 4.0
+
     return [
-        Prior(model, board, source_url, metric, score, index + 1,
-              round(PRIOR_FLOOR + PRIOR_SPAN * (1 - index / (n - 1)), 3) if n > 1 else 4.0, name)
+        Prior(model, board, source_url, metric, score, index + 1, rating(index, score), name)
         for index, (score, name, model) in enumerate(ranked)
     ]
 
