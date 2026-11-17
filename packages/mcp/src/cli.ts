@@ -9,6 +9,15 @@
  *   flush            submit pending paid-call records (observations)
  *   check [text]     show what the redaction pipeline does to sample text
  *   clear-cache      delete the downloaded model cache
+ *   on | off | status  the saved review on/off default
+ *
+ * CrowdCode cloud agents (the same screens as Hermes's `/crowdcode`):
+ *   dashboard        wallet or account, agents, balances, recent tasks, services
+ *   wallet [init] | agents | tasks | services <agent> | files <agent> [--task ID]
+ *   download <agent> <id…|all> [--task ID] [--dest DIR] | demand [keyword]
+ *   login | logout | mode [auto|account|wallet] | claim [agent…]
+ * `status` keeps its older meaning (the review on/off default); the agents'
+ * overview is `dashboard`.
  */
 
 import { rm, stat } from "node:fs/promises";
@@ -219,6 +228,34 @@ async function runDoctor(args: string[]): Promise<void> {
   if (!healthy) process.exitCode = 1;
 }
 
+async function runAgents(command: string, rest: string[]): Promise<void> {
+  const { createAgentTools } = await import("./agents/tools.js");
+  const { Dashboard } = await import("./agents/dashboard.js");
+  const dashboard = new Dashboard(createAgentTools(), {
+    interactive: true,
+    log: (line) => console.error(line),
+  });
+  const { text, ok } = await dashboard.run([command, ...rest]);
+  // stdout either way, so the Claude Code and Codex commands that run this show it; failures exit 1.
+  console.log(text);
+  if (!ok) process.exitCode = 1;
+}
+
+const AGENT_COMMANDS = new Set([
+  "dashboard",
+  "wallet",
+  "agents",
+  "tasks",
+  "services",
+  "files",
+  "download",
+  "demand",
+  "login",
+  "logout",
+  "mode",
+  "claim",
+]);
+
 function printHelp(): void {
   console.error(
     "usage: crowdcode-mcp [serve|on|off|status|flush|install|doctor|check <text>|clear-cache]\n" +
@@ -232,7 +269,19 @@ function printHelp(): void {
       "  doctor       verify skill and MCP config [--client <client>] [--all-detected]\n" +
       "  check        demo the local redaction pipeline on sample text\n" +
       "  clear-cache  delete the downloaded model cache\n" +
-      `  clients      ${CORE_CLIENTS.join(", ")}`,
+      `  clients      ${CORE_CLIENTS.join(", ")}\n` +
+      "\n" +
+      "CrowdCode cloud agents:\n" +
+      "  dashboard                 wallet or account, agents, balances, recent tasks, services\n" +
+      "  login | logout            sign this machine in to (or out of) your CrowdCode account\n" +
+      "  mode [auto|account|wallet]  which credential the agent tools use\n" +
+      "  claim [agent…]            move this wallet's agents into your CrowdCode account\n" +
+      "  wallet [init]             address, USDC balance; init creates ~/.agentcash/wallet.json\n" +
+      "  agents | tasks            agents and balances; recent tasks started from here\n" +
+      "  services <agent>          an agent's paid services and earnings\n" +
+      "  files <agent> [--task ID] files an agent produced (nothing is downloaded)\n" +
+      "  download <agent> <id…|all> [--task ID] [--dest DIR]  save them to ./crowdcode-files/<agent>/\n" +
+      "  demand [keyword]          services other agents are asking for",
   );
 }
 
@@ -283,9 +332,14 @@ async function main(): Promise<void> {
       break;
     case "--help":
     case "-h":
+    case "help":
       printHelp();
       break;
     default:
+      if (AGENT_COMMANDS.has(command)) {
+        await runAgents(command, rest);
+        break;
+      }
       console.error(`unknown command: ${command} (try --help)`);
       process.exit(2);
   }

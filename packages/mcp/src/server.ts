@@ -38,6 +38,13 @@ import {
 import { UpstreamClient, type Upstream } from "./upstream.js";
 import { loadWallet } from "./wallet.js";
 import { flushPending, observationsUrl } from "./observations.js";
+import {
+  AGENT_TOOL_NAMES,
+  hostDescription,
+  zodShape,
+} from "./agents/contract.js";
+import { Dashboard } from "./agents/dashboard.js";
+import { createAgentTools, type AgentToolsOptions } from "./agents/tools.js";
 
 export interface ServerDeps {
   engine: RedactionEngine;
@@ -45,7 +52,12 @@ export interface ServerDeps {
   /** Wallet loading knobs; defaults come from getConfig(). Injectable in tests. */
   wallet?: Partial<WalletOptions>;
   preferences?: Preferences;
+  /** Settings for the CrowdCode agent tools (env, working directory); injectable in tests. */
+  agents?: AgentToolsOptions;
 }
+
+/** Agent tools that only read. */
+const READ_ONLY_AGENT_TOOLS = new Set(["crowdcode_agents", "crowdcode_demand", "crowdcode_files"]);
 
 type ToolResult = ReturnType<typeof toToolResult>;
 
@@ -396,6 +408,11 @@ const SERVER_INSTRUCTIONS = [
   "continue the user's task, skip reflection, checks and submissions; never backfill.",
   "Use list_my_reviews for 'show my reviews'; delete_my_review only for review IDs the",
   "user asks to delete. These management tools remain available while CrowdCode is off.",
+  "",
+  "CrowdCode cloud agents (crowdcode_wallet, crowdcode_agents, crowdcode_create_agent, crowdcode_run_task …)",
+  "are the user's own agents with their own wallets. Use them when the user asks. Create, fund, withdraw and",
+  "transfer only when the user asked for that amount; give run_task the budget the user named. Download files",
+  "only when the user asks for them. They work whether CrowdCode reviews are on or off.",
 ].join("\n");
 
 export function buildServer(deps: ServerDeps): McpServer {
@@ -404,6 +421,8 @@ export function buildServer(deps: ServerDeps): McpServer {
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
+  const agentTools = createAgentTools(deps.agents);
+  const agentHandlers = agentTools.handlers();
 
   server.registerTool("crowdcode_status", {
     description: "Read CrowdCode's effective on/off state and saved default locally. Check at task start.",
@@ -527,6 +546,39 @@ export function buildServer(deps: ServerDeps): McpServer {
       inputSchema: reviewServiceShape,
     },
     (args) => handlers.review_service(args),
+  );
+
+  for (const name of AGENT_TOOL_NAMES) {
+    server.registerTool(
+      name,
+      {
+        description: hostDescription(name),
+        inputSchema: zodShape(name),
+        ...(READ_ONLY_AGENT_TOOLS.has(name) ? { annotations: { readOnlyHint: true } } : {}),
+      },
+      async (args: Record<string, unknown>) => {
+        const result = await agentHandlers[name](args);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result };
+      },
+    );
+  }
+
+  server.registerPrompt(
+    "crowdcode",
+    {
+      title: "CrowdCode",
+      description:
+        "CrowdCode dashboard: wallet or account, agents and balances, recent tasks, services and earnings. " +
+        "Optional args: wallet [init] | agents | tasks | services <agent> | files <agent> [--task ID] | " +
+        "download <agent> <id…|all> [--task ID] [--dest DIR] | demand [keyword] | login | logout | mode [auto|account|wallet] | claim [agent…]",
+      argsSchema: {
+        args: z.string().optional().describe("A subcommand and its arguments, e.g. \"files scout\"; empty for the dashboard."),
+      },
+    },
+    async ({ args }) => {
+      const { text } = await new Dashboard(agentTools).run(args ?? "");
+      return { messages: [{ role: "user" as const, content: { type: "text" as const, text } }] };
+    },
   );
 
   return server;
