@@ -22,6 +22,12 @@ GOOD = {
     "problem": "agents publishing video to X fail on chunked uploads and cannot tell whether it posted",
     "price_per_call": 0.05,
 }
+EXTRAS = {
+    "kind": "gap",
+    "builds_on": "the X API v2 media upload endpoint with resumable chunk retries",
+    "unlocks": "publish the owner's clip in one step and report the live post URL",
+    "frequency": "per_task_like_this",
+}
 
 
 # --- validation ------------------------------------------------------------
@@ -83,7 +89,7 @@ def test_price_distribution():
 
 def test_request_service_stores_the_four_fields(hosted):  # noqa: F811
     conn, _ = hosted
-    result = server_mod.request_service(**GOOD, requester_wallet=WALLET)
+    result = server_mod.request_service(**GOOD, **EXTRAS, requester_wallet=WALLET)
     assert result["accepted"], result
     assert result["recorded"]["price_per_call"] == 0.05
     row = conn.execute("select * from service_requests").fetchone()
@@ -97,7 +103,7 @@ def test_request_service_stores_the_four_fields(hosted):  # noqa: F811
 
 def test_request_service_rejects_vague_requests_before_storing(hosted):  # noqa: F811
     conn, _ = hosted
-    result = server_mod.request_service(**{**GOOD, "output": "results"}, requester_wallet=WALLET)
+    result = server_mod.request_service(**{**GOOD, "output": "results"}, **EXTRAS, requester_wallet=WALLET)
     assert result["accepted"] is False
     assert result["error_code"] == "invalid_request_fields"
     assert "output is too vague" in result["reason"]
@@ -105,7 +111,7 @@ def test_request_service_rejects_vague_requests_before_storing(hosted):  # noqa:
 
 
 def test_request_service_needs_a_wallet(hosted):  # noqa: F811
-    result = server_mod.request_service(**GOOD)
+    result = server_mod.request_service(**GOOD, **EXTRAS)
     assert result["accepted"] is False and result["next_step"]["action"] == "install_wallet"
 
 
@@ -175,7 +181,7 @@ def test_cron_maps_legacy_rows_and_publishes_only_proposals(hosted, monkeypatch)
     conn, _ = hosted
     conn.execute("insert into service_requests (service_description, task_context, requester_id) "
                  "values (%s, %s, 'legacy-1')", (LEGACY_TEXT, "daily posting run for Priya Raman"))
-    server_mod.request_service(**GOOD, requester_wallet=WALLET)
+    server_mod.request_service(**GOOD, **EXTRAS, requester_wallet=WALLET)
     conn.execute("insert into app_cache (key, payload) values ('project_ideas', %s::jsonb)",
                  (json.dumps({"ideas": [{"example_requests": [LEGACY_TEXT]}]}),))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -230,3 +236,131 @@ def test_no_requests_publishes_an_empty_payload(hosted, monkeypatch):  # noqa: F
     cron.run_service_proposals(NOW)
     payload = server_mod._service_proposals_payload()
     assert payload["proposals"] == [] and payload["source_request_count"] == 0
+
+
+# --- requests v2 fields (C6) ---------------------------------------------------
+
+from crowdcode import request_screen  # noqa: E402
+from crowdcode.demand import is_filler, validate_request_extras  # noqa: E402
+
+
+@pytest.mark.parametrize("field,value,expected", [
+    ("kind", None, "kind is required"),
+    ("kind", "wish", "kind is required"),
+    ("frequency", "sometimes", "frequency is required"),
+    ("builds_on", None, "builds_on is required"),
+    ("builds_on", "N/A", "builds_on cannot be N/A"),
+    ("builds_on", "nothing exists that could do this today", "must name something that exists"),
+    ("unlocks", "n/a (no service needed)", "unlocks cannot be N/A"),
+    ("unlocks", "more", "unlocks is too vague"),
+])
+def test_invalid_extras_say_what_to_fix(field, value, expected):
+    extras, error = validate_request_extras(**{**EXTRAS, field: value})
+    assert extras is None and expected in error
+
+
+def test_extras_normalize_and_keep_a_capability_id():
+    extras, error = validate_request_extras(**{**EXTRAS, "kind": " Leverage ",
+                                               "frequency": "per task like this",
+                                               "capability": "Act/Booking.travel"})
+    assert error is None
+    assert extras.kind == "leverage" and extras.frequency == "per_task_like_this"
+    assert extras.capability == "act/booking.travel"
+    assert validate_request_extras(**{**EXTRAS, "capability": "not a node id!"})[0].capability is None
+
+
+def test_na_filler_is_rejected_in_the_four_fields_too():
+    assert is_filler("N/A (no service needed)") and is_filler(" none. ")
+    assert not is_filler("a CSV of every table")
+    _, error = validate_request_fields(**{**GOOD, "problem": "N/A - nothing needed"})
+    assert "cannot be N/A" in error
+
+
+def test_request_service_stores_the_new_fields(hosted, monkeypatch):  # noqa: F811
+    conn, _ = hosted
+    seen = []
+    monkeypatch.setattr(server_mod, "screen_request",
+                        lambda fields: seen.append(fields) or request_screen.ScreenResult("accept"))
+    result = server_mod.request_service(**GOOD, **{**EXTRAS, "kind": "leverage", "capability": "social.post"},
+                                        requester_wallet=WALLET)
+    assert result["accepted"], result
+    assert result["recorded"]["kind"] == "leverage" and result["screen"] == "accept"
+    row = conn.execute("select * from service_requests").fetchone()
+    assert row["request_kind"] == "leverage" and row["builds_on"] == EXTRAS["builds_on"]
+    assert row["unlocks"] == EXTRAS["unlocks"] and row["frequency"] == "per_task_like_this"
+    assert row["capability"] == "social.post" and row["screen_verdict"] == "accept"
+    # The screen sees the request, never the wallet.
+    assert WALLET not in json.dumps(seen)
+
+
+def test_a_task_restatement_is_rejected_and_not_stored(hosted, monkeypatch):  # noqa: F811
+    conn, _ = hosted
+    monkeypatch.setattr(server_mod, "screen_request",
+                        lambda fields: request_screen.ScreenResult("restates_task", "an explanation"))
+    result = server_mod.request_service(**GOOD, **EXTRAS, requester_wallet=WALLET)
+    assert result["accepted"] is False and result["error_code"] == "request_restates_task"
+    assert "reusable service" in result["reason"]
+    assert conn.execute("select count(*) as n from service_requests").fetchone()["n"] == 0
+
+
+def test_requests_without_builds_on_are_rejected_before_the_model(hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(server_mod, "screen_request", lambda fields: pytest.fail("model called"))
+    result = server_mod.request_service(**GOOD, **{**EXTRAS, "builds_on": None}, requester_wallet=WALLET)
+    assert result["accepted"] is False and "builds_on is required" in result["reason"]
+
+
+def test_the_screen_fails_open(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def down(*args, **kwargs):
+        raise TimeoutError("slow")
+
+    monkeypatch.setattr(request_screen, "_chat_json", down)
+    assert request_screen.screen_request({}).verdict == "unchecked"
+    monkeypatch.setattr(request_screen, "_chat_json", lambda *a, **k: {"verdict": "restates_task"})
+    assert request_screen.screen_request({}).rejected
+    monkeypatch.setattr(request_screen, "_chat_json", lambda *a, **k: {"verdict": "maybe?"})
+    assert request_screen.screen_request({}).verdict == "unchecked"
+    monkeypatch.delenv("OPENAI_API_KEY")
+    assert request_screen.screen_request({}).verdict == "unchecked"
+
+
+def test_proposals_take_kind_and_frequency_from_the_requests():
+    rows = [_row(1, 2.0, requester="a"), _row(2, 1.5, requester="b"), _row(3, 0.05, requester="c")]
+    rows[0].update(request_kind="leverage", frequency="recurring", capability="monitor.prices",
+                   builds_on="airline fare APIs and a scheduler", unlocks="rebook when the fare drops")
+    rows[1].update(request_kind="leverage", frequency="per_task_like_this", capability="monitor.prices")
+    rows[2].update(request_kind="gap", frequency="one_off")
+    parsed = {"proposals": [
+        {**_proposal("Fare drop watcher", [1, 2]), "builds_on": "fare search APIs plus a daily job",
+         "unlocks": "rebook a held trip automatically when the price falls"},
+        _proposal("DNS propagation check", [3]),
+    ]}
+    payload = proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "m")
+    fare = next(p for p in payload["proposals"] if p["title"] == "Fare drop watcher")
+    assert fare["kind"] == "leverage" and fare["capability"] == "monitor.prices"
+    assert fare["frequency"] == {"recurring": 1, "per_task_like_this": 1}
+    assert fare["builds_on"] == "fare search APIs plus a daily job"
+    assert "_member_ids" not in fare
+    assert payload["listed_by_kind"] == {"leverage": 2, "gap": 1}
+    items = proposals._model_items(rows)
+    assert items[0]["kind"] == "leverage" and items[0]["builds_on"]
+    assert "kind" in items[2] and "builds_on" not in items[2]
+
+
+def test_rollout_mode_accepts_a_pre_c6_client_but_still_screens_it(hosted, monkeypatch):  # noqa: F811
+    conn, _ = hosted
+    screened = []
+    monkeypatch.setattr(server_mod, "screen_request",
+                        lambda fields: screened.append(fields) or request_screen.ScreenResult("accept"))
+    assert server_mod.request_service(**GOOD, requester_wallet=WALLET)["accepted"] is False
+    monkeypatch.setenv("CROWDCODE_REQUESTS_V2_STRICT", "0")
+    result = server_mod.request_service(**GOOD, requester_wallet=WALLET)
+    assert result["accepted"], result
+    assert "builds_on" not in screened[-1]
+    row = conn.execute("select * from service_requests").fetchone()
+    assert row["request_kind"] is None and row["builds_on"] is None
+    # A client that sends some of the new fields is validated in full.
+    partial = server_mod.request_service(**GOOD, kind="gap", requester_wallet=WALLET)
+    assert partial["accepted"] is False and "frequency is required" in partial["reason"]

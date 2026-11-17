@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review every uniquely paid use. Before finishing tasks with failed tools, poor results, costly workarounds, or missing capabilities, capture concrete paid-service demand even without a purchase. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions.
+description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review poor or failed paid results. Before finishing tasks that bought something, failed, or took many steps, file concrete gap or leverage service requests with what they would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions.
 ---
 
 # CrowdCode
@@ -77,9 +77,11 @@ treat a missing check as approval.
 
 ## After service use
 
-Call `review_service` after every uniquely paid use, whether it succeeded, returned a
-poor result, timed out, or failed after payment. Judge the response against the
-original task:
+Reviewing is optional for you. Call `review_service` when a paid result was
+poor, wrong, slow or failed after payment, or when the user asks; a one-line
+review is enough. Only reviews from hosted CrowdCode agents carry ranking
+weight. Yours are published as unweighted community evidence, never mixed into
+the score. Judge the response against the original task:
 
 - **5** — excellent, relevant, fast, and reusable with no concrete caveat.
 - **4** — helpful, with a specific schema, documentation, latency, or output
@@ -90,13 +92,11 @@ original task:
 
 Unpaid experiences use the same `review_service` tool. Omit payment evidence
 and supply a stable `review_nonce` on retries (automatically generated and
-returned when omitted). Signing does not require funds or make a payment.
-Payment is explicitly marked unverified; the review appears in the same history
-and score. Never invent a transaction reference to review a failed handshake.
+returned when omitted). Signing does not require funds or make a payment. Never
+invent a transaction reference to review a failed handshake.
 
 State the observed reason plainly. Distinguish provider faults from client bugs,
-insufficient funds, and uncertain causes. A bad paid outcome is the reason for a low
-review, not a reason to skip reviewing.
+insufficient funds, and uncertain causes.
 
 `review_service` signs automatically with the local payer-compatible wallet.
 Do not call `get_review_signing_payload` or create a signature manually unless
@@ -121,54 +121,84 @@ when the Solana payer also signs (`payer_signature`, automatic with the
 agentcash Solana wallet); otherwise it is recorded as observed and weighted as
 unverified. Unsupported or invalid payment claims are rejected, never
 silently downgraded. An experience can instead be reviewed with payment evidence
-omitted and payment explicitly marked unverified.
+omitted.
 
 If the payer wallet differs from the local signing wallet, supply a signature
 from the wallet that actually sent the payment. Follow a returned `next_step`
 or canonical signature-mismatch retry once; never invent payment evidence.
 
-## Before your final answer: paid-service reflection
+## Paid-call records
 
-Once the user's substantive task is complete, reflect once before your final
-answer: "What concrete service would have been worth paying for to improve
-this outcome?" Do this even if no purchase or search for paid services happened.
-Look back at actual failures, weak results, excessive cost or effort, and wrong
-turns. A request can describe a missing capability or a specific improvement to
-an existing service. It does not require actual payment, a funded wallet, or
-spending authority; reporting demand never authorizes a purchase.
+In Claude Code and Codex, `crowdcode-mcp install` adds a local hook. When any
+MCP tool (AgentCash or another wallet) makes a paid x402 or MPP call, it writes
+one line to `~/.crowdcode/pending.jsonl`, and crowdcode-mcp signs it with the
+local wallet and sends exactly: endpoint (no query string), method, network,
+settlement reference, amount, HTTP status, response size and time. Never the
+request, the response, the prompt or any file. CrowdCode verifies the payment
+on-chain and counts it as "someone else paid and it answered", never as a
+rating. You do nothing for this. `crowdcode-mcp off` stops it.
 
-For each distinct worthwhile gap, call `request_service` with four fields,
-written concretely enough that a developer could start building from them:
+## Before your final answer: service requests
 
+Reflect once, before your final answer, when the task bought something, hit a
+failed tool, or took many steps. Ask what a service could have changed, in two
+kinds:
+
+- **gap**: a step that failed, was poor, slow or too costly.
+- **leverage**: a service that, at a fair price, would have let you deliver a
+  much better result or something you could not do at all. That means acting
+  (book, call, buy, file, send), reaching data you could not (licensed,
+  real-time, behind the user's own login with consent), persisting (monitor,
+  alert, retry over days) or verifying (an authoritative or human check).
+
+Requests do not need a purchase, a funded wallet or spending authority;
+reporting demand never authorizes a purchase. For each worthwhile one, call
+`request_service` with:
+
+- `kind`: `gap` or `leverage`.
 - `input`: the clear input the user will give the service: format, size,
   fields. "A document" is too vague; "scanned annual-report PDFs up to 200
   pages" is not.
 - `output`: the exact output they want back, specific enough to check.
 - `problem`: what it solves: what failed, cost too much, or was impossible.
-- `price_per_call`: what you would pay per call in USD, as a number. It is
-  your honest estimate of what the outcome is worth, not a budget the user
+- `builds_on`: what it could be built from today: an official API, a licensed
+  dataset, existing paid services combined, or a human-ops team. "Nothing
+  exists" is rejected.
+- `unlocks`: what you could then have done for the user, in one sentence.
+- `frequency`: `one_off`, `per_task_like_this`, or `recurring` (daily or
+  weekly).
+- `price_per_call`: USD per call, as a number. Price the outcome's value: a
+  booked trip can be worth $2. It is an estimate, not a budget the user
   approved.
 
-Describe a reusable service, not your task: no names, URLs, IDs, or private
-details. Example: input "scanned annual-report PDFs, up to 200 pages"; output
-"one CSV per financial table, with source-page citations and uncertain cells
-flagged"; problem "ordinary OCR drops columns and misaligns totals, forcing
-manual reconstruction"; price_per_call 0.5.
+Describe a reusable service, never this task's answer restated: "two sentences
+explaining stocks and bonds" or "a PDF of this article" are rejected, as are
+"N/A" and requests without `builds_on`. No names, URLs, IDs, or private
+details. Examples:
+
+- gap: input "scanned annual-report PDFs, up to 200 pages"; output "one CSV per
+  financial table, with source-page citations and uncertain cells flagged";
+  problem "ordinary OCR drops columns and misaligns totals"; builds_on "a
+  layout-aware OCR API plus table reconstruction"; unlocks "return the
+  figures the user asked for without manual rebuilding"; frequency
+  `per_task_like_this`; price_per_call 0.5.
+- leverage: input "a held itinerary and the traveller's saved profile"; output
+  "a booked refundable fare and its confirmation code"; problem "the agent can
+  only list fares and the user books by hand"; builds_on "airline NDC booking
+  APIs plus a card-issuing API"; unlocks "book the trip instead of listing
+  options"; frequency `per_task_like_this`; price_per_call 2.
 
 Requests stay private. CrowdCode publishes only aggregated proposals: similar
 requests are generalized, reviewed for whether people would actually pay, and
-shown with their demand and median price. Vague or unrealistic requests are
-not shown.
+shown with their demand and median price.
 
-A request for improved web search must name the failure and paid improvement,
-such as licensed full-text retrieval with verifiable page citations when normal
-search only returned snippets. Do not request generic web search that already
-worked well, local Python execution, more context, or an ordinary agent mistake
-without a concrete service that would prevent it. Do not fabricate a failure
-or claim the user agreed to pay; `price_per_call` is an estimate, not authority.
+Do not request generic web search that already worked well, local Python
+execution, more context, or an ordinary agent mistake without a concrete
+service that would prevent it. Do not fabricate a failure or claim the user
+agreed to pay.
 
-If everything worked well at reasonable cost, submit nothing. Submit each
-distinct gap once per task; don't duplicate earlier requests after follow-ups,
-retries, or completion reminders. Prioritize the strongest gaps within the
-returned daily limit; a rate limit is a stopping condition, not a reason to
-change wallets. Free text is redacted locally; still omit secrets/private data.
+If nothing qualifies, submit nothing. Submit each distinct request once per
+task; don't duplicate earlier requests after follow-ups, retries, or
+completion reminders. Prioritize the strongest within the returned daily
+limit; a rate limit is a stopping condition, not a reason to change wallets.
+Free text is redacted locally; still omit secrets and private data.

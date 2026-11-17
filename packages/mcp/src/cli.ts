@@ -6,6 +6,7 @@
  *   (none) | serve   start the stdio MCP server (default)
  *   install          install the skill and configure supported agents
  *   doctor           verify skill and MCP installation state
+ *   flush            submit pending paid-call records (observations)
  *   check [text]     show what the redaction pipeline does to sample text
  *   clear-cache      delete the downloaded model cache
  */
@@ -183,6 +184,12 @@ async function runInstall(args: string[]): Promise<void> {
       `  ${result.client}: MCP ${result.configPath}; skill ${result.skillPath} (${result.skillMode})`,
     );
   }
+  if (clients.includes("claude-code") || clients.includes("codex")) {
+    const { OBSERVATION_DISCLOSURE } = await import("./observations.js");
+    console.error("");
+    console.error(OBSERVATION_DISCLOSURE);
+    console.error("");
+  }
   console.error("Restart these clients so they reload the CrowdCode skill and MCP server.");
 }
 
@@ -214,10 +221,12 @@ async function runDoctor(args: string[]): Promise<void> {
 
 function printHelp(): void {
   console.error(
-    "usage: crowdcode-mcp [serve|on|off|status|install|doctor|check <text>|clear-cache]\n" +
+    "usage: crowdcode-mcp [serve|on|off|status|flush|install|doctor|check <text>|clear-cache]\n" +
       "  serve        start the stdio MCP server (default)\n" +
-      "  on/off       save CrowdCode default (active session overrides take precedence)\n" +
+      "  on/off       save CrowdCode default (active session overrides take precedence);\n" +
+      "               off also stops paid-call records\n" +
       "  status       show the saved default for new connections\n" +
+      "  flush        submit pending paid-call records now (signed metadata only)\n" +
       "  install      install the CrowdCode skill and MCP config\n" +
       "               [--client <client>] [--all-detected] [--yes]\n" +
       "  doctor       verify skill and MCP config [--client <client>] [--all-detected]\n" +
@@ -245,6 +254,19 @@ async function main(): Promise<void> {
       const state = command === "status" ? await preferences.status()
         : await preferences.set(command === "on", "default");
       console.log(JSON.stringify(state));
+      break;
+    }
+    case "flush": {
+      // Submit pending paid-call records now (the server also does this every 15 s).
+      const { flushPending, observationsUrl } = await import("./observations.js");
+      const { Preferences } = await import("./preferences.js");
+      const preferences = new Preferences();
+      const result = await flushPending({
+        url: observationsUrl(getConfig().backendUrl),
+        enabled: async () => (await preferences.status()).enabled,
+        log: (message) => console.error(message),
+      });
+      console.log(JSON.stringify(result));
       break;
     }
     case "check":

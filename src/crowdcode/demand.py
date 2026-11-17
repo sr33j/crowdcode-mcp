@@ -64,6 +64,8 @@ def validate_request_fields(
     for field, text in texts.items():
         if not text:
             return None, f"{field} is required: {FIELD_HINTS[field]}"
+        if is_filler(text):
+            return None, f"{field} cannot be N/A. If no service would have helped, submit nothing."
         if len(text) < TEXT_MIN_CHARS or len(_WORD_RE.findall(text.lower())) < TEXT_MIN_WORDS:
             return None, (
                 f"{field} is too vague ({len(text)} characters): {FIELD_HINTS[field]}"
@@ -84,6 +86,92 @@ def validate_request_fields(
     if price > PRICE_MAX_USD:
         return None, f"price_per_call must be at most {PRICE_MAX_USD:g} USD per call"
     return DemandFields(price_per_call=round(price, 6), **texts), None
+
+
+# --- requests v2 (C6): gap or leverage, and what it would be built from -----
+
+REQUEST_KINDS = ("gap", "leverage")
+FREQUENCIES = ("one_off", "per_task_like_this", "recurring")
+EXTRA_MAX_CHARS = {"builds_on": 400, "unlocks": 400}
+CAPABILITY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:/-]{0,79}$")
+
+EXTRA_HINTS = {
+    "kind": (
+        "kind is 'gap' (a step that failed, was poor, slow or costly) or 'leverage' (a "
+        "service that would have let you act, reach data, persist or verify in a way you "
+        "could not)"
+    ),
+    "builds_on": (
+        "builds_on is what it could be built from today: an official API, a licensed "
+        "dataset, existing paid services combined, or a human-ops team, for example "
+        "'the airline's NDC booking API plus a card-issuing API'"
+    ),
+    "unlocks": (
+        "unlocks is what you could then have done for the user, in one sentence, for "
+        "example 'book the cheapest refundable fare instead of only listing options'"
+    ),
+    "frequency": (
+        "frequency is 'one_off', 'per_task_like_this' or 'recurring' (daily or weekly)"
+    ),
+}
+
+# Filler an agent writes when it has nothing to ask for. Any field that is only
+# this is not a request.
+_FILLER = (r"(n\W?a|none|nothing|no service( is)? needed|not applicable|no gap|"
+           r"no (paid )?service|nothing needed|not needed|unknown|tbd|-+)")
+_FILLER_RE = re.compile(rf"^\W*{_FILLER}(\W+{_FILLER})*\W*$", re.IGNORECASE)
+# builds_on that admits nothing exists to build it from is a wish, not a service.
+_NOTHING_EXISTS_RE = re.compile(
+    r"^\W*(nothing|none|no(thing)? (existing|current|known)|does not exist|doesn't exist|"
+    r"not (yet )?possible|unknown|n\W?a|would need to be (invented|built from scratch))\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class RequestExtras:
+    kind: str
+    builds_on: str
+    unlocks: str
+    frequency: str
+    capability: str | None
+
+
+def is_filler(text: Any) -> bool:
+    return isinstance(text, str) and bool(_FILLER_RE.match(text.strip()))
+
+
+def validate_request_extras(
+    kind: Any, builds_on: Any, unlocks: Any, frequency: Any, capability: Any = None
+) -> tuple[RequestExtras | None, str | None]:
+    """The C6 fields. builds_on is required: a request nobody could build is
+    not demand a builder can act on."""
+    kind_text = _clean_text(kind).lower()
+    if kind_text not in REQUEST_KINDS:
+        return None, f"kind is required: {EXTRA_HINTS['kind']}"
+    frequency_text = _clean_text(frequency).lower().replace("-", "_").replace(" ", "_")
+    if frequency_text not in FREQUENCIES:
+        return None, f"frequency is required: {EXTRA_HINTS['frequency']}"
+    texts = {"builds_on": _clean_text(builds_on), "unlocks": _clean_text(unlocks)}
+    for field, text in texts.items():
+        if not text:
+            return None, f"{field} is required: {EXTRA_HINTS[field]}"
+        if is_filler(text):
+            return None, f"{field} cannot be N/A: {EXTRA_HINTS[field]}. If nothing qualifies, submit nothing."
+        if len(text) < TEXT_MIN_CHARS or len(_WORD_RE.findall(text.lower())) < TEXT_MIN_WORDS:
+            return None, f"{field} is too vague ({len(text)} characters): {EXTRA_HINTS[field]}"
+        if len(text) > EXTRA_MAX_CHARS[field]:
+            return None, f"{field} must be at most {EXTRA_MAX_CHARS[field]} characters"
+    if _NOTHING_EXISTS_RE.match(texts["builds_on"]):
+        return None, (
+            "builds_on must name something that exists today; a service nothing could be "
+            f"built from is not a request: {EXTRA_HINTS['builds_on']}"
+        )
+    capability_text = _clean_text(capability).lower() or None
+    if capability_text is not None and not CAPABILITY_RE.match(capability_text):
+        capability_text = None  # an unknown node id is mapped by the backend instead
+    return RequestExtras(kind=kind_text, frequency=frequency_text,
+                         capability=capability_text, **texts), None
 
 
 # --- privacy guard ---------------------------------------------------------

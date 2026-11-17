@@ -1,5 +1,33 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.12.1 — 2026-11-17
+
+- **Paid-call records (on by default).** `install` adds a PostToolUse hook for
+  Claude Code (`~/.claude/settings.json`) and Codex (`$CODEX_HOME/hooks.json`).
+  When any MCP tool's output carries an x402 `payment-response` or MPP
+  `Payment-Receipt` (AgentCash or any other wallet), it appends metadata to
+  `~/.crowdcode/pending.jsonl`: endpoint without its query string, method,
+  network, settlement reference, amount, HTTP status, response size and time.
+  No network calls, never the request or the response. The MCP server signs
+  each line with the local wallet and sends exactly those eight fields to
+  `POST /api/observations` every 15 seconds (`crowdcode-mcp flush` does it
+  now). CrowdCode verifies the payment on-chain and counts it as an external
+  payer and liveness, never as a rating. `install` prints this disclosure;
+  `crowdcode-mcp off` stops recording and sending.
+- **The Stop hook is conditional.** It reads the local transcript
+  (`transcript_path`, Claude Code or Codex) and asks for a reflection only
+  after an unrated purchase, a failed tool, or at least 8 tool calls in the
+  turn. A one-line answer gets no reminder. Hooks are now files in
+  `~/.crowdcode/hooks/`; re-running `install` upgrades the old entry in place.
+- **`request_service` asks for a gap or leverage service.** New required
+  fields `kind` (`gap` or `leverage`), `builds_on`, `unlocks` and `frequency`
+  (`one_off`, `per_task_like_this`, `recurring`), optional `capability`;
+  `builds_on` and `unlocks` are redacted locally. The backend rejects task
+  restatements, "N/A" and requests without `builds_on`.
+- Reviews are optional for local agents, and the skill and instructions now
+  say plainly that only hosted CrowdCode agents' reviews carry ranking weight
+  (they used to claim unpaid reviews "share the same score").
+
 ## 0.12.0 — 2026-10-27
 
 - `request_service` takes four required fields instead of free text: `input`
