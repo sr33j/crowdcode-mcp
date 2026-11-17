@@ -181,5 +181,45 @@ describe("completion hook installation", () => {
     expect(settings.hooks.UserPromptSubmit).toEqual([other]);
     const hook = await readFile(join(env.homeDir, ".crowdcode", "hooks", "completion.cjs"), "utf8");
     expect(hook.length).toBeGreaterThan(0);
+    // The paid-call recorder runs for MCP tools only, in exec form.
+    const hooksDir = join(env.homeDir, ".crowdcode", "hooks");
+    expect(settings.hooks.PostToolUse).toEqual([{ matcher: "mcp__.*",
+      hooks: [{ type: "command", command: "node", args: [join(hooksDir, "paid-call.cjs")], timeout: 5 }] }]);
+    for (const name of ["receipts.cjs", "paid-call.cjs", "completion.cjs"]) {
+      expect(await readFile(join(hooksDir, name), "utf8")).toContain("CrowdCode");
+    }
+    const [doctor] = await doctorClients(["claude-code"], env);
+    expect(doctor.completionHookCurrent).toBe(true);
+  });
+
+  it("upgrades the old unconditional Stop entry in place", async () => {
+    const env = await fixture("linux");
+    const path = join(env.homeDir, ".claude", "settings.json");
+    const hookPath = join(env.homeDir, ".crowdcode", "hooks", "completion.cjs");
+    await mkdir(join(env.homeDir, ".claude"), { recursive: true });
+    await writeFile(path, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "node", args: [hookPath], timeout: 5 }] }] } }));
+    await mkdir(join(env.homeDir, ".crowdcode", "hooks"), { recursive: true });
+    await writeFile(hookPath, "old unconditional reminder");
+    await installForClients(["claude-code"], env);
+    const settings = JSON.parse(await readFile(path, "utf8"));
+    expect(settings.hooks.Stop).toHaveLength(1);
+    expect(await readFile(hookPath, "utf8")).toContain("transcript_path");
+  });
+
+  it("installs Claude-compatible hooks for Codex in $CODEX_HOME/hooks.json", async () => {
+    const env = await fixture("linux");
+    const codexHome = join(env.homeDir, ".codex");
+    await mkdir(codexHome, { recursive: true });
+    const other = { matcher: "shell", hooks: [{ type: "command", command: "my-audit" }] };
+    await writeFile(join(codexHome, "hooks.json"), JSON.stringify({ hooks: { PostToolUse: [other] } }));
+    await installForClients(["codex"], env);
+    await installForClients(["codex"], env);
+    const hooks = JSON.parse(await readFile(join(codexHome, "hooks.json"), "utf8")).hooks;
+    const paid = join(env.homeDir, ".crowdcode", "hooks", "paid-call.cjs");
+    expect(hooks.PostToolUse).toEqual([other, { matcher: "mcp__.*",
+      hooks: [{ type: "command", command: `node ${JSON.stringify(paid)}`, timeout: 5 }] }]);
+    expect(hooks.Stop).toHaveLength(1);
+    const [doctor] = await doctorClients(["codex"], env);
+    expect(doctor.completionHookCurrent).toBe(true);
   });
 });

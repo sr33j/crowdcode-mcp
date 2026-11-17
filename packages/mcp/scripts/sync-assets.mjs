@@ -46,7 +46,19 @@ if (!serverSource.includes(`{ name: "crowdcode", version: "${packageJson.version
   );
 }
 
+// The local hooks (PostToolUse paid-call records, conditional Stop reminder)
+// ship as plain files the installer copies to ~/.crowdcode/hooks.
+const hookNames = ["receipts.cjs", "paid-call.cjs", "completion.cjs"];
+const hookSources = Object.fromEntries(await Promise.all(hookNames.map(async (name) =>
+  [name, await readFile(resolve(scriptDir, "../hooks", name), "utf8")])));
+const packagedHook = (name) => resolve(scriptDir, "../dist/hooks", name);
+
 if (process.argv.includes("--check")) {
+  for (const name of hookNames) {
+    if ((await readFile(packagedHook(name), "utf8")) !== hookSources[name]) {
+      throw new Error(`Packaged hook drift: ${packagedHook(name)} must match hooks/${name}`);
+    }
+  }
   const packaged = await readFile(packagedPath, "utf8");
   if (packaged !== canonical) {
     throw new Error(
@@ -56,4 +68,6 @@ if (process.argv.includes("--check")) {
 } else {
   await mkdir(dirname(packagedPath), { recursive: true });
   await writeFile(packagedPath, canonical);
+  await mkdir(dirname(packagedHook(hookNames[0])), { recursive: true });
+  for (const name of hookNames) await writeFile(packagedHook(name), hookSources[name]);
 }

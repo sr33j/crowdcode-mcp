@@ -38,8 +38,9 @@ const RATING_DESCRIPTION =
   "a 5 — do not hedge to 4 without a concrete caveat.";
 
 /**
- * request_service v2: four concrete fields a builder can act on. Bounds mirror
- * crowdcode.demand.validate_request_fields; the backend stays authoritative.
+ * request_service: concrete fields a builder can act on, and whether it is a gap
+ * or leverage (C6). Bounds mirror crowdcode.demand.validate_request_fields and
+ * validate_request_extras; the backend stays authoritative.
  */
 export const requestServiceShape = {
   input: z
@@ -75,9 +76,44 @@ export const requestServiceShape = {
     .positive()
     .max(100)
     .describe(
-      "What you would pay per call, in USD (e.g. 0.05). An honest estimate of the outcome's " +
-        "worth, not a budget the user approved.",
+      "What you would pay per call, in USD (e.g. 0.05). Price the outcome's value (a booked " +
+        "trip can be worth $2): an honest estimate, not a budget the user approved.",
     ),
+  kind: z
+    .enum(["gap", "leverage"])
+    .describe(
+      "gap: a step that failed, was poor, slow or costly. leverage: a service that would have " +
+        "let you act (book, call, buy, file, send), reach data you could not (licensed, " +
+        "real-time, behind the user's own login with consent), persist (monitor, alert, retry " +
+        "over days) or verify (an authoritative or human check).",
+    ),
+  builds_on: z
+    .string()
+    .trim()
+    .min(20)
+    .max(400)
+    .describe(
+      "What it could be built from today: an official API, a licensed dataset, existing paid " +
+        "services combined, or a human-ops team. Example: \"the airline's NDC booking API plus " +
+        "a card-issuing API\". \"Nothing exists\" is rejected.",
+    ),
+  unlocks: z
+    .string()
+    .trim()
+    .min(20)
+    .max(400)
+    .describe(
+      "What you could then have done for the user, in one sentence. Example: \"book the " +
+        "cheapest refundable fare instead of only listing options\".",
+    ),
+  frequency: z
+    .enum(["one_off", "per_task_like_this", "recurring"])
+    .describe("How often it would be called: one_off, per_task_like_this, or recurring (daily or weekly)."),
+  capability: z
+    .string()
+    .max(80)
+    .nullish()
+    .describe("Optional capability tree node id; CrowdCode maps one when omitted."),
   requester_wallet: z
     .string()
     .nullish()

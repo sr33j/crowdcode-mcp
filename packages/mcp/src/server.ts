@@ -37,6 +37,7 @@ import {
 } from "./tools/signing-payload.js";
 import { UpstreamClient, type Upstream } from "./upstream.js";
 import { loadWallet } from "./wallet.js";
+import { flushPending, observationsUrl } from "./observations.js";
 
 export interface ServerDeps {
   engine: RedactionEngine;
@@ -252,7 +253,7 @@ export function createToolHandlers(deps: ServerDeps) {
         }
       }
       return toToolResult({ ...payload, task_completion_reminder:
-        "Before your final answer, reflect on concrete paid services that would fix observed shortcomings. Use request_service for worthwhile gaps; submit nothing if all worked well. Respect CrowdCode off." });
+        "Before your final answer, consider one gap (a step that failed or cost too much) or one leverage service (one that would have let you act, reach data, persist or verify) worth paying for, and file it with request_service including builds_on. Submit nothing if none qualifies. Respect CrowdCode off." });
     },
 
     get_review_signing_payload: async (
@@ -332,7 +333,7 @@ export function createToolHandlers(deps: ServerDeps) {
       if (unlinkedArgs !== null) {
         payload = await forwardPayload("review_service", unlinkedArgs);
       }
-      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for concrete improvements worth paying for, grounded in this task. Skip if all worked well; do not duplicate earlier requests." });
+      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for a gap or leverage service grounded in this task, with builds_on. Skip if nothing qualifies; do not duplicate earlier requests." });
     },
   };
 }
@@ -361,35 +362,34 @@ const SERVER_INSTRUCTIONS = [
   "`summary` digests what reviewers reported (strengths / failure modes /",
   "caveats).",
   "",
-  "Review each paid service outcome with review_service. Unpaid experiences use",
-  "the same tool: omit payment_reference and payment_proof, and reuse a stable",
-  "review_nonce on retry (automatically generated when omitted). Payment is",
-  "explicitly marked unverified. The reviewer still signs with the local",
-  "AgentCash wallet; signing is automatic and does not make a payment.",
-  "Rate usefulness for the original task from 1 (unusable) to 5 (excellent).",
-  "Describe observed outcomes; distinguish provider faults from client bugs,",
-  "insufficient funds, and uncertain causes. Do not invent payment evidence.",
-  "When claiming payment, use the actual settlement reference and payee.",
-  "An optional payment_proof is the original base64 response header. Payment",
-  "claims must verify on x402 Base/Monad/Solana USDC or mppx Tempo. Reference an x402",
-  "Monad (eip155:143) settlement as x402:monad:<tx_hash> and a Solana settlement as",
-  "x402:solana:<signature> with the Solana payee. Invalid supplied claims",
-  "are rejected, never silently downgraded. Payment verification gives the",
-  "existing verified scoring weight; unpaid signed reviews share the same",
-  "history, score, and per-wallet/service/day influence cap.",
+  "Reviews are optional for you: use review_service when a paid result was poor or",
+  "failed, or when the user asks. Only reviews from hosted CrowdCode agents carry ranking",
+  "weight; yours are published as unweighted community evidence and are still useful.",
+  "Unpaid experiences use the same tool: omit payment_reference and payment_proof. The",
+  "reviewer signs with the local AgentCash wallet; signing is automatic and pays nothing.",
+  "Rate usefulness for the original task from 1 (unusable) to 5 (excellent), describe",
+  "observed outcomes, and distinguish provider faults from client bugs, insufficient funds",
+  "and uncertain causes. Never invent payment evidence; when claiming payment use the actual",
+  "settlement reference and payee (proof formats are in review_service's description).",
   "",
-  "Before the final answer to each substantive user task, reflect once: what concrete",
-  "paid service would have avoided an observed failure, poor result, expensive workaround,",
-  "or wrong turn? This applies even if no purchase was attempted. Call request_service",
-  "for each distinct, worthwhile gap (do not repeat the same gap on retries or follow-ups).",
-  "Fill its four fields concretely enough that a developer could start building: input",
-  "(what the user will give), output (the exact deliverable), problem (what it solves) and",
-  "price_per_call (what you would pay per call in USD). Describe a reusable service, not",
-  "your task. An inadequate existing service qualifies if you name the specific improvement.",
-  "No payment or spend authority is required; price_per_call is your honest estimate.",
-  "Skip generic local compute, run-Python wishes, ordinary agent mistakes without a",
-  "sellable remedy, and services that already worked well at reasonable cost. If nothing",
-  "qualifies, submit nothing. Never send secrets or private user data.",
+  "Paid-call records: in Claude Code and Codex, a local hook notes each paid x402/MPP call",
+  "any MCP tool makes (endpoint without query, method, network, settlement reference,",
+  "amount, HTTP status, response size, time) and crowdcode-mcp submits it signed, never the",
+  "request or response. CrowdCode counts it as a payer and liveness signal, not a rating.",
+  "`crowdcode-mcp off` stops it.",
+  "",
+  "Before the final answer to a substantive task that bought something, hit a failure or",
+  "took many steps, reflect once on two kinds of service. gap: a step that failed, was poor,",
+  "slow or costly. leverage: a service that, at a fair price, would have let you deliver a",
+  "much better result or something you could not do at all: act (book, call, buy, file,",
+  "send), reach data you could not (licensed, real-time, behind the user's own login with",
+  "consent), persist (monitor, alert, retry over days) or verify (an authoritative or human",
+  "check). For each worthwhile one call request_service with kind, input, output, problem,",
+  "builds_on (what it could be built from today), unlocks (what you could then have done),",
+  "frequency and price_per_call (price the outcome's value). Describe a reusable service,",
+  "never the task's answer restated; requests that restate the task, say N/A or lack",
+  "builds_on are rejected. If nothing qualifies, submit nothing. Never send secrets or",
+  "private user data.",
   "At task start check crowdcode_status. User says 'Crowdcode on'/'Crowdcode off': call",
   "set_crowdcode_enabled with enabled=true/false and scope=session, or scope=default",
   "when they ask to remember it. Off overrides all automatic CrowdCode workflows:",
@@ -400,7 +400,7 @@ const SERVER_INSTRUCTIONS = [
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.12.0" },
+    { name: "crowdcode", version: "0.12.1" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -429,20 +429,22 @@ export function buildServer(deps: ServerDeps): McpServer {
     "request_service",
     {
       description:
-        "Record a paid service that would have materially improved the task, as four " +
-        "concrete fields a developer could start building from: input (the clear input the " +
-        "user will give), output (the exact output they want back), problem (what it " +
-        "solves) and price_per_call (what you would pay per call, USD). Before your final " +
-        "answer, reflect on failures, poor results, excessive cost and avoidable detours, " +
-        "even when no purchase was attempted. Example: input \"scanned annual report PDFs, " +
-        "up to 200 pages\"; output \"one CSV per table with page citations and low-" +
-        "confidence cells flagged\"; problem \"OCR drops columns, forcing manual " +
-        "reconciliation\"; price_per_call 0.5. Describe a reusable service, not your task; " +
-        "no names, URLs or IDs. Skip web search that worked well, run-Python/local runtime " +
-        "wishes and bugs in your own tools. One request per distinct gap per task; respect " +
-        "the returned wallet limit. Submit nothing if all worked well at reasonable cost. " +
-        "Text is redacted locally; requests stay private and only aggregated proposals " +
-        "are published.",
+        "Record a reusable paid service that would have changed this task's outcome. kind " +
+        "is gap (a step failed, was poor, slow or costly) or leverage (a service that would " +
+        "have let you act: book, call, buy, file, send; reach data you could not: licensed, " +
+        "real-time, behind the user's own login with consent; persist: monitor, alert, retry " +
+        "over days; or verify: an authoritative or human check). Fill input (what the user " +
+        "gives), output (the exact deliverable), problem (what it solves), builds_on (what it " +
+        "could be built from today: an official API, licensed data, existing paid services, a " +
+        "human-ops team), unlocks (what you could then have done for the user), frequency " +
+        "(one_off, per_task_like_this, recurring) and price_per_call (USD; price the outcome's " +
+        "value, a booked trip can be worth $2). Example leverage: input \"a held itinerary and " +
+        "traveller profile\"; output \"a booked, refundable fare with confirmation code\"; " +
+        "builds_on \"airline NDC booking APIs plus a card-issuing API\"; unlocks \"book the " +
+        "trip instead of listing options\"; frequency per_task_like_this; price_per_call 2. " +
+        "Requests that restate the task's answer, say N/A or lack builds_on are rejected. No " +
+        "names, URLs or IDs. Submit nothing if nothing qualifies. Text is redacted locally; " +
+        "requests stay private and only aggregated proposals are published.",
       inputSchema: requestServiceShape,
     },
     (args) => handlers.request_service(args),
@@ -473,7 +475,7 @@ export function buildServer(deps: ServerDeps): McpServer {
       description:
         "Return the canonical trust-weighted score (`score`, with `n_eff` " +
         "evidence and an `unproven` flag), an AI review summary when " +
-        "available, plus raw rating stats and recent reviews for a service, " +
+        "available, and raw rating stats for a service, " +
         "identified by service_id, api_endpoint, payment target, or " +
         "directory_slug. Check this before paying for, provisioning, or calling " +
         "any paid agent service — especially x402 and mppx/MPP services.",
@@ -507,7 +509,9 @@ export function buildServer(deps: ServerDeps): McpServer {
       description:
         "Review a service experience, paid or unpaid, with a rating from 1 to 5 " +
         "and concrete observations about usefulness for the original task. " +
-        "Review every paid outcome; unpaid successes and failures can use the same tool. " +
+        "Optional for local agents: review a poor or failed paid result, or when the user asks. " +
+        "Only hosted CrowdCode agents' reviews carry ranking weight; yours are published as " +
+        "unweighted community evidence. Unpaid successes and failures can use the same tool. " +
         "Distinguish provider faults from client errors, insufficient funds, and uncertain causes. " +
         "Signing with the local AgentCash wallet is automatic. Omit payment_reference " +
         "and payment_proof when no payment is claimed; payment is then marked unverified. " +
@@ -550,7 +554,23 @@ export async function startServer(): Promise<void> {
     enableModel: !config.disableModel,
   });
   const upstream = new UpstreamClient(config.backendUrl, config.upstreamTimeoutMs);
-  const server = buildServer({ engine, upstream });
+  // One preferences object for the tools and the observation loop, so a
+  // session-scoped "CrowdCode off" stops submissions too.
+  const preferences = new Preferences();
+  const server = buildServer({ engine, upstream, preferences });
   await server.connect(new StdioServerTransport());
   if ((await new Preferences().status()).enabled) void warnOnToolDrift(upstream);
+  startObservationLoop(config.backendUrl, () => preferences.status().then((s) => s.enabled));
+}
+
+const OBSERVATION_INTERVAL_MS = 15_000;
+
+/** Submit the PostToolUse hook's paid-call records while this server runs. */
+export function startObservationLoop(backendUrl: string, enabled: () => Promise<boolean>): void {
+  const tick = () => {
+    void flushPending({ url: observationsUrl(backendUrl), enabled,
+      log: (message) => process.stderr.write(message + "\n") }).catch(() => {});
+  };
+  setTimeout(tick, 2_000).unref();
+  setInterval(tick, OBSERVATION_INTERVAL_MS).unref();
 }

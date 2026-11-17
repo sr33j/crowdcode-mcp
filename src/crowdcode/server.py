@@ -25,7 +25,9 @@ from crowdcode.advertised import learn_advertised_payee
 from crowdcode.agent_listings import agent_service_slug, refresh_in_background
 from crowdcode.db import connect
 from crowdcode.hosted_services import SyncError, parse_services, sync_hosted_services
-from crowdcode.demand import validate_request_fields
+from crowdcode.demand import RequestExtras, validate_request_extras, validate_request_fields
+from crowdcode.observations import submit_observation
+from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
 from crowdcode.discovery import find_services, warm_search
 from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
@@ -203,6 +205,10 @@ def _stable_tool(func):
     return wrapped
 
 
+def _requests_v2_strict() -> bool:
+    return os.environ.get("CROWDCODE_REQUESTS_V2_STRICT", "1").strip().lower() not in ("0", "false", "no")
+
+
 @mcp.tool()
 @_stable_tool
 def request_service(
@@ -210,32 +216,58 @@ def request_service(
     output: str,
     problem: str,
     price_per_call: float,
+    kind: str | None = None,
+    builds_on: str | None = None,
+    unlocks: str | None = None,
+    frequency: str | None = None,
+    capability: str | None = None,
     requester_wallet: str | None = None,
 ) -> dict[str, Any]:
-    """Record a paid service you needed and could not buy, as four concrete fields.
+    """Record a reusable paid service that would have changed this task's outcome.
 
-    Call it before your final answer when a real task hit a failure, poor
-    result, excessive cost or avoidable detour that a reusable paid API call
-    would have fixed. No purchase or spending authority is needed. Builders
-    read these fields to decide what to build, so write them so a developer
-    could start today:
+    Call it before your final answer when a real task had either:
+    - a gap (kind="gap"): a step that failed, was poor, slow or too costly; or
+    - leverage (kind="leverage"): a service that, at a fair price, would have let
+      you deliver a much better result or something you could not do at all:
+      act (book, call, buy, file, send), reach data you could not (licensed,
+      real-time, behind the user's own login with consent), persist (monitor,
+      alert, retry over days) or verify (an authoritative or human check).
+    No purchase or spending authority is needed. Builders read these fields to
+    decide what to build:
     - input: the clear input the user will give, e.g. "a public MP4 URL (up
       to 60 s) and the post text".
     - output: the exact output they want back, e.g. "the published post ID
       and URL, posted exactly once".
     - problem: the problem it solves, e.g. "agents publishing video to X fail
       on chunked uploads and cannot tell whether the post went out".
-    - price_per_call: what you would pay per call in USD, e.g. 0.05.
-    Describe a reusable service, not your task; no names, URLs, IDs or private
-    data. Skip local runtime wishes, generic web search that worked, and bugs
-    in your own tools. Submit each distinct gap once; if nothing qualifies,
-    submit nothing. Requests stay private: CrowdCode publishes only
-    aggregated, generalized proposals. requester_wallet is attached by the
-    local client.
+    - builds_on: what it could be built from today: an official API, a
+      licensed dataset, existing paid services combined, or a human-ops team.
+      Required; "nothing exists" is rejected.
+    - unlocks: what you could then have done for the user, in one sentence.
+    - frequency: one_off, per_task_like_this or recurring (daily or weekly).
+    - price_per_call: what you would pay per call in USD. Price the outcome's
+      value: a booked trip can be worth $2.
+    - capability: optional capability tree node id; mapped when omitted.
+    Describe a reusable service, not your task's answer: requests that restate
+    the task, say "N/A" or lack builds_on are rejected. No names, URLs, IDs or
+    private data. If nothing qualifies, submit nothing. Requests stay private:
+    CrowdCode publishes only aggregated, generalized proposals.
+    requester_wallet is attached by the local client.
     """
     fields, error = validate_request_fields(input, output, problem, price_per_call)
     if fields is None:
         return {"accepted": False, "error_code": "invalid_request_fields", "reason": error}
+    legacy = all(value is None for value in (kind, builds_on, unlocks, frequency))
+    if legacy and not _requests_v2_strict():
+        # Rollout only: a client that predates C6 sends none of the new fields.
+        # It is still screened below; once every client sends them, strict mode
+        # (the default) rejects it for lacking builds_on.
+        extras = RequestExtras(kind=None, builds_on="", unlocks="", frequency=None,
+                               capability=None)
+    else:
+        extras, error = validate_request_extras(kind, builds_on, unlocks, frequency, capability)
+        if extras is None:
+            return {"accepted": False, "error_code": "invalid_request_fields", "reason": error}
 
     wallet = _normalize_evm_address(requester_wallet) if requester_wallet else None
     if wallet is None:
@@ -256,7 +288,7 @@ def request_service(
     # so raw PII/secrets from clients that bypass crowdcode-mcp never land
     # in the shared database. Wallet fields are structured identifiers and
     # never pass through redaction.
-    texts = [fields.input, fields.output, fields.problem]
+    texts = [fields.input, fields.output, fields.problem, extras.builds_on, extras.unlocks]
     try:
         redacted = redact_texts(texts, fail_closed=True)
     except RedactionUnavailable:
@@ -278,6 +310,33 @@ def request_service(
         texts = [clean or "" for clean in redacted]
 
     settings = get_settings()
+    # The rate limit is checked before the model call (so a throttled wallet
+    # costs nothing) and again at insert; no connection is held across the call.
+    with connect() as conn:
+        limit_check = check_request_limit(
+            conn, requester_id, settings.request_rate_limit_per_day, utc_now()
+        )
+    if not limit_check.allowed:
+        return rate_limit_payload(
+            limit_check,
+            f"{settings.request_rate_limit_per_day} service requests per wallet per 24 hours",
+            retry_tool="request_service",
+        )
+
+    screen = screen_request({key: value for key, value in {
+        "kind": extras.kind, "input": texts[0], "output": texts[1], "problem": texts[2],
+        "builds_on": texts[3], "unlocks": texts[4], "frequency": extras.frequency,
+        "price_per_call_usd": fields.price_per_call,
+    }.items() if value})
+    if screen.rejected:
+        logger.info("service request rejected by screen: %s", screen.verdict)
+        return {
+            "accepted": False,
+            "error_code": f"request_{screen.verdict}",
+            "reason": REJECT_REASONS[screen.verdict],
+            "screen": {"verdict": screen.verdict, "note": screen.note, "version": SCREEN_VERSION},
+        }
+
     with connect() as conn:
         limit_check = check_request_limit(
             conn, requester_id, settings.request_rate_limit_per_day, utc_now()
@@ -293,17 +352,26 @@ def request_service(
             """
             insert into service_requests (
               request_input, request_output, request_problem, price_per_call_usd,
-              fields_source, requester_id, requester_wallet, redacted_at
+              fields_source, requester_id, requester_wallet, redacted_at,
+              request_kind, builds_on, unlocks, frequency, capability,
+              screen_verdict, screened_at
             )
-            values (%s, %s, %s, %s, 'agent', %s, %s, %s)
+            values (%s, %s, %s, %s, 'agent', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             returning id
             """,
             (
-                *texts,
+                *texts[:3],
                 fields.price_per_call,
                 requester_id,
                 wallet,
                 utc_now() if redaction_enabled() else None,
+                extras.kind,
+                texts[3] or None,
+                texts[4] or None,
+                extras.frequency,
+                extras.capability,
+                screen.verdict,
+                utc_now(),
             ),
         ).fetchone()
         conn.commit()
@@ -311,8 +379,11 @@ def request_service(
     return {
         "accepted": True,
         "request_id": row["id"],
-        "recorded": {"input": texts[0], "output": texts[1], "problem": texts[2],
-                     "price_per_call": fields.price_per_call},
+        "recorded": {"kind": extras.kind, "input": texts[0], "output": texts[1],
+                     "problem": texts[2], "builds_on": texts[3], "unlocks": texts[4],
+                     "frequency": extras.frequency, "price_per_call": fields.price_per_call,
+                     "capability": extras.capability},
+        "screen": screen.verdict,
         "requests_remaining_today": limit_check.remaining,
         "published_as": "aggregated proposals only; this request stays private",
     }
@@ -1625,6 +1696,22 @@ async def find_services_route(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+async def observations_route(request: Request) -> JSONResponse:
+    """C5: one signed, on-chain-verified paid call reported by crowdcode-mcp."""
+    raw = await request.body()
+    if len(raw) > 8192:
+        return _json_error("observation too large", status_code=413, error_code="invalid_observation")
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return _json_error("invalid JSON body", status_code=400, error_code="invalid_observation")
+    try:
+        outcome = await run_in_threadpool(submit_observation, body, lambda: connect())
+    except Exception:
+        return _unexpected_json_error("observations")
+    return JSONResponse(outcome.body, status_code=outcome.http_status)
+
+
 async def service_detail(request: Request) -> JSONResponse:
     service_id = request.path_params["service_id"]
     try:
@@ -1673,6 +1760,7 @@ def create_app() -> Starlette:
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),
+            Route("/api/observations", observations_route, methods=["POST"]),
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             Route("/api/internal/hosted-services/sync", hosted_services_sync, methods=["POST"]),

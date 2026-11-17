@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Paid-call observations (SRI-115 C5).** `POST /api/observations` takes one
+  signed record of a paid call from crowdcode-mcp:
+  `{observation: {endpoint, method, network, payment_reference, amount_atomic,
+  status, response_bytes, observed_at}, signature}` (EIP-191 over
+  `crowdcode.observations.observation_message`), plus `payer_wallet` and an
+  ed25519 `payer_signature` over the same message for Solana. Any other field
+  is refused, and so is an endpoint with a query string. The settlement must
+  be a USDC transfer from the signer (Base, Tempo) or the signing Solana payer,
+  to a payee the endpoint's service is registered with or its own 402
+  advertises (a cooled-down probe, no connection held). Stored once per
+  settlement as `index_observations.kind = 'observation'` with the amount
+  that actually settled; 200 per wallet per 24 h
+  (`CROWDCODE_OBSERVATION_LIMIT_PER_DAY`). A transaction the RPC cannot see
+  yet answers 503 `retryable`. Apply `supabase/observations-and-requests-v3.sql`
+  first.
+- **Service requests v2 fields (SRI-115 C6).** `request_service` takes `kind`
+  (`gap` or `leverage`), `builds_on`, `unlocks`, `frequency` and an optional
+  `capability`, stored on `service_requests`. "N/A" filler and a `builds_on`
+  that says nothing exists are rejected outright; then one call to the
+  proposals model (`crowdcode.request_screen`) rejects task restatements and
+  non-services before anything is stored. It fails open (`screen_verdict =
+  'unchecked'`) and holds no connection. `CROWDCODE_REQUESTS_V2_STRICT=0`
+  accepts, during the rollout only, a client that sends none of the new
+  fields. Proposals read the new fields, no longer mark human-ops or
+  multi-day services unrealistic when `builds_on` is plausible, and publish
+  `kind`, `builds_on`, `unlocks`, `frequency`, `capability` and the payload's
+  `listed_by_kind`.
+
 - CrowdCode's hosted services are kept in the index by CrowdCode itself
   (SRI-111). They used to enter it only when first reviewed, under whatever
   URL the reviewer used, so a service nobody had reviewed (`/s/crowdcode`) was
