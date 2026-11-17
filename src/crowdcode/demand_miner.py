@@ -3,12 +3,14 @@
 CrowdCode's reconciler reads the day's hosted run *summaries* (never
 transcripts) for owners who have not opted out, scrubs secrets from them, and
 posts them here in batches. Each batch gets one model call (the proposals
-model) that looks across the runs for services agents needed: leverage first
-(act, reach data, persist, verify), then gaps. Every candidate then has to pass
+model) that looks across the runs for services agents needed. A mined need has
+the same fields as an agent's request: input, output, problem, price_per_call,
+builds_on, frequency and capability. Every candidate then has to pass
 everything a request filed by an agent passes, and more:
 
-1. the same deterministic validation (`validate_request_fields`,
-   `validate_request_extras`);
+1. the same deterministic validation (`validate_request_fields`, and the
+   builds_on, frequency and capability rules, checked here so the miner does
+   not depend on the request_service signature);
 2. nothing traceable: no URL, domain, email, handle, id, address, file name or
    long number, and no redaction placeholder (a placeholder means the model
    wrote something that identified someone);
@@ -41,7 +43,14 @@ from datetime import datetime
 from typing import Any, Callable
 
 from crowdcode.capability_tree import NODES, Spend
-from crowdcode.demand import SourceIndex, validate_request_extras, validate_request_fields
+from crowdcode.demand import (
+    _NOTHING_EXISTS_RE,
+    FREQUENCIES,
+    TEXT_MIN_CHARS,
+    SourceIndex,
+    is_filler,
+    validate_request_fields,
+)
 from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_enabled
 from crowdcode.request_screen import ScreenResult, screen_request
@@ -55,6 +64,8 @@ MAX_RUNS_PER_BATCH = 60
 MAX_CANDIDATES = 8
 # A need seen in one run is an anecdote; the miner exists to find patterns.
 MIN_RUNS = 2
+# The longest builds_on agents may file (demand.EXTRA_MAX_CHARS).
+BUILDS_ON_CHARS = 400
 # The published proposals the miner is told about, so it proposes only needs
 # they do not cover (titles and problems are already public).
 MAX_PUBLISHED = 80
@@ -261,11 +272,9 @@ def miner_prompt(batch: Batch, published: list[dict[str, str]] | None = None) ->
             "Look for patterns across runs: a need several runs share, or a kind of task "
             "owners keep asking for, ranks above one run's problem. Rank by how often the "
             "need would come up times what the outcome is worth.",
-            "Prefer leverage services: ones that let an agent act (book, call, buy, file, "
-            "send, post), reach data it cannot (licensed, real-time, behind the user's own "
-            "login with consent), persist (monitor, schedule, retry over days) or verify (an "
-            "authoritative source or a human check). Also propose gap services: a step that "
-            "failed, was poor, slow or too costly, when a paid service would fix it.",
+            "A service qualifies when it would have fixed a step that failed, was poor, slow "
+            "or too costly, or given the agent something it lacked: an action in the world, "
+            "data it could not reach, persistence over days, or an authoritative check.",
             "Each proposal is one reusable service many agents could call, sold per call. "
             "Not one run's answer restated, not text generation the agent's own model can "
             "do, not a local computation, and not a fix to the agents' own platform, wallet, "
@@ -282,8 +291,6 @@ def miner_prompt(batch: Batch, published: list[dict[str, str]] | None = None) ->
             "builds_on: what a builder would assemble it from today (an official API, a "
             "licensed dataset, existing paid services, a human-ops team), at most 300 "
             "characters. It must name something that exists.",
-            "unlocks: what a calling agent could then do for its user that it cannot now, at "
-            "most 300 characters.",
             "frequency: one_off, per_task_like_this or recurring.",
             "price_per_call: a realistic USD price per call for the outcome's value (a booked "
             "trip can be worth dollars, a lookup cents).",
@@ -298,8 +305,7 @@ def miner_prompt(batch: Batch, published: list[dict[str, str]] | None = None) ->
             "list is a fine answer.",
         ],
         "schema": {"services": [{
-            "kind": "gap|leverage", "input": "string", "output": "string", "problem": "string",
-            "builds_on": "string", "unlocks": "string",
+            "input": "string", "output": "string", "problem": "string", "builds_on": "string",
             "frequency": "one_off|per_task_like_this|recurring", "price_per_call": "number",
             "capability": "string", "runs": ["integer"],
         }]},
@@ -346,22 +352,24 @@ def _candidate(raw: Any, batch: Batch, sources: SourceIndex, outcome: Outcome) -
         return None
     fields, _ = validate_request_fields(raw.get("input"), raw.get("output"), raw.get("problem"),
                                        raw.get("price_per_call"))
-    capability = raw.get("capability") if raw.get("capability") in CAPABILITIES else None
-    extras, _ = validate_request_extras(raw.get("kind"), raw.get("builds_on"), raw.get("unlocks"),
-                                        raw.get("frequency"), capability)
-    if fields is None or extras is None:
+    builds_on = _text(raw.get("builds_on"), BUILDS_ON_CHARS + 1) or ""
+    frequency = str(raw.get("frequency") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if (fields is None or frequency not in FREQUENCIES or len(builds_on) < TEXT_MIN_CHARS
+            or len(builds_on) > BUILDS_ON_CHARS or is_filler(builds_on)
+            or _NOTHING_EXISTS_RE.match(builds_on)):
         outcome.reject("invalid")
         return None
     texts = {"input": fields.input, "output": fields.output, "problem": fields.problem,
-             "builds_on": extras.builds_on, "unlocks": extras.unlocks}
+             "builds_on": builds_on}
     if any(traceable(text) for text in texts.values()):
         outcome.reject("traceable")
         return None
     if any(sources.copies(text) for text in texts.values()):
         outcome.reject("copies_run")
         return None
-    return {**texts, "kind": extras.kind, "frequency": extras.frequency,
-            "capability": extras.capability, "price_per_call": fields.price_per_call,
+    capability = raw.get("capability") if raw.get("capability") in CAPABILITIES else None
+    return {**texts, "frequency": frequency,
+            "capability": capability, "price_per_call": fields.price_per_call,
             "refs": refs}
 
 
@@ -397,16 +405,15 @@ def _store(conn: Any, item: dict[str, Any], now: datetime) -> int:
         insert into service_requests (
           request_input, request_output, request_problem, price_per_call_usd,
           fields_source, inference_confidence, requester_id, requester_wallet, redacted_at,
-          request_kind, builds_on, unlocks, frequency, capability,
+          builds_on, frequency, capability,
           screen_verdict, screened_at, source, miner_run_count, miner_run_refs
         )
-        values (%s, %s, %s, %s, 'miner', 'low', null, null, %s, %s, %s, %s, %s, %s,
+        values (%s, %s, %s, %s, 'miner', 'low', null, null, %s, %s, %s, %s,
                 'accept', %s, 'miner', %s, %s)
         returning id
         """,
         (item["input"], item["output"], item["problem"], item["price_per_call"],
-         now if redaction_enabled() else None, item["kind"], item["builds_on"], item["unlocks"],
-         item["frequency"], item["capability"], now, len(item["refs"]), item["refs"]),
+         now if redaction_enabled() else None, item["builds_on"], item["frequency"], item["capability"], now, len(item["refs"]), item["refs"]),
     ).fetchone()
     return int(row["id"])
 
@@ -476,8 +483,8 @@ def mine(body: Any, connect: Callable[[], Any], now: datetime, *,
     screened = []
     screen_payload_bytes = 3000  # the screen's own prompt, about 1k tokens
     for item in candidates:
-        fields = {key: item[key] for key in ("kind", "input", "output", "problem", "builds_on",
-                                             "unlocks", "frequency")}
+        fields = {key: item[key] for key in ("input", "output", "problem", "builds_on",
+                                             "frequency")}
         fields["price_per_call_usd"] = item["price_per_call"]
         if spend.estimate({"pad": "x" * screen_payload_bytes, **fields}, "",
                           SCREEN_OUTPUT_TOKENS) > spend.remaining_usd:
@@ -492,7 +499,7 @@ def mine(body: Any, connect: Callable[[], Any], now: datetime, *,
             continue
         screened.append(item)
 
-    keys = ("input", "output", "problem", "builds_on", "unlocks")
+    keys = ("input", "output", "problem", "builds_on")
     if screened:
         texts = [item[key] for item in screened for key in keys]
         redacted = redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)

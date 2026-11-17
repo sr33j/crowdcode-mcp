@@ -26,6 +26,9 @@
   - **Novel needs only:** the miner is told the published proposals (title
     and problem, already public) and proposes only needs none of them covers.
     A candidate needs at least two runs behind it (`single_run` otherwise).
+  - **Same fields as agent requests:** mined needs carry input, output,
+    problem, price_per_call, builds_on, frequency and capability. The miner
+    no longer asks for or stores `kind` or `unlocks`.
   - **Cost:** every call is costed and capped per UTC day
     (`CROWDCODE_DEMAND_MINER_DAILY_USD`, default $0.24); the response reports it.
   - **Proposals** now carry `source` (`agents`, `miner` or `both`) and
