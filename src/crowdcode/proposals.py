@@ -63,7 +63,7 @@ def fetch_requests(conn: Any) -> list[dict[str, Any]]:
         select id, created_at, requester_id, service_description, task_context,
                request_input, request_output, request_problem,
                price_per_call_usd, fields_source, inference_confidence,
-               request_kind, builds_on, unlocks, frequency, capability,
+               builds_on, frequency, capability,
                source, miner_run_count
         from service_requests
         where created_at > now() - make_interval(days => %s)
@@ -223,16 +223,9 @@ def propose_services(items: list[dict[str, Any]]) -> dict[str, Any]:
             "builds_on: what a builder would assemble it from today (an official API, a "
             "licensed dataset, existing paid services, a human-ops team), at most 160 "
             "characters.",
-            "unlocks: what a calling agent could then do for its user that it cannot now, "
-            "at most 160 characters.",
-            "Requests come in two kinds. gap: a step that failed or was poor, slow or "
-            "costly. leverage: a service that would let an agent act (book, call, buy, "
-            "file, send), reach data it cannot (licensed, real-time, behind the user's own "
-            "login with consent), persist (monitor, alert, retry over days) or verify (an "
-            "authoritative or human check). Judge leverage requests as products too, but "
-            "do not mark them unrealistic for being ambitious: a plausible builds_on and a "
-            "price that matches the outcome's value (a booked trip can be worth dollars) "
-            "make them realistic.",
+            "Each request names a concrete paid service that would have fixed a failure, "
+            "a poor result or excessive cost. A plausible builds_on is evidence of realism; "
+            "a request whose builds_on names nothing that exists is not.",
             "Put your product hat on and be strict. realism (1-5): would agents or "
             "their owners actually pay per call for this, at about the prices asked, "
             "instead of doing it locally or with a free tool? 5 = clearly, with "
@@ -262,7 +255,7 @@ def propose_services(items: list[dict[str, Any]]) -> dict[str, Any]:
         "schema": {
             "proposals": [{
                 "title": "string", "input": "string", "output": "string",
-                "problem": "string", "builds_on": "string", "unlocks": "string",
+                "problem": "string", "builds_on": "string",
                 "would_pay": "likely|maybe|unlikely",
                 "realism": "integer 1-5", "clarity": "integer 1-5",
                 "rationale": "string", "request_ids": ["integer"],
@@ -298,9 +291,7 @@ def _model_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             **({"source": "miner", "runs": int(row.get("miner_run_count") or 1)}
                if _is_miner(row) else {}),
             **{key: value for key, value in {
-                "kind": row.get("request_kind"),
                 "builds_on": _text(row.get("builds_on"), FIELD_CHARS),
-                "unlocks": _text(row.get("unlocks"), FIELD_CHARS),
                 "frequency": row.get("frequency"),
             }.items() if value},
         }
@@ -324,13 +315,10 @@ def _source_of(members: list[dict[str, Any]]) -> str:
 
 
 def _member_shape(members: list[dict[str, Any]]) -> dict[str, Any]:
-    """kind, frequency and capability come from the requests, never the model:
-    a proposal is `leverage` when most of the requests that stated a kind did."""
-    kinds = Counter(m.get("request_kind") for m in members if m.get("request_kind"))
+    """frequency and capability come from the requests, never the model."""
     frequency = Counter(m.get("frequency") for m in members if m.get("frequency"))
     capability = Counter(m.get("capability") for m in members if m.get("capability"))
     return {
-        "kind": ("leverage" if kinds["leverage"] > kinds["gap"] else "gap") if kinds else None,
         "frequency": dict(frequency),
         "capability": capability.most_common(1)[0][0] if capability else None,
     }
@@ -382,7 +370,6 @@ def build_payload(
             "problem": _text(raw.get("problem"), 240),
             "rationale": _text(raw.get("rationale"), 240),
             "builds_on": _text(raw.get("builds_on"), 240),
-            "unlocks": _text(raw.get("unlocks"), 240),
         }
         if not all(fields[key] for key in ("title", "input", "output", "problem")):
             hidden["vague"] += len(member_ids)
@@ -432,7 +419,6 @@ def build_payload(
             # What dropping this proposal later takes out of the payload's
             # counts (redact_payload); stripped before storage.
             "_tally": {
-                "kind": dict(Counter(m.get("request_kind") or "unstated" for m in members)),
                 "source": dict(Counter(m.get("source") or "agent" for m in members)),
             },
         })
@@ -462,7 +448,6 @@ def build_payload(
     ))
     listed = sum(p["demand"]["requests"] for p in proposals)
     published = [by_id[i] for p in proposals for i in p.pop("_member_ids")]
-    listed_by_kind = dict(Counter(m.get("request_kind") or "unstated" for m in published))
     listed_by_source = dict(Counter(m.get("source") or "agent" for m in published))
     return {
         "ok": True,
@@ -471,8 +456,6 @@ def build_payload(
         "generated_at": int(now.timestamp()),
         "source_request_count": len(rows),
         "listed_request_count": listed,
-        # Which kind of need the published demand is (C6): gap or leverage.
-        "listed_by_kind": listed_by_kind,
         # Who found the published demand: agents' requests or the miner (C8).
         "listed_by_source": listed_by_source,
         "hidden_request_count": len(rows) - listed,
@@ -491,7 +474,7 @@ def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     `[SURNAME_3]` means the generated copy named someone, or the redactor
     misread a word; either way it is not copy anyone should read. On
     2026-11-17 "Citation, source [SURNAME_3], ..." was published this way."""
-    keys = ("title", "input", "output", "problem", "rationale", "builds_on", "unlocks")
+    keys = ("title", "input", "output", "problem", "rationale", "builds_on")
     texts = [p.get(key) for p in payload["proposals"] for key in keys]
     redacted = (redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)
                 if texts else None)
@@ -507,7 +490,7 @@ def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
             payload["listed_request_count"] -= requests
             payload["hidden_request_count"] += requests
             payload["hidden_reasons"]["vague"] += requests
-            for field, counts in (("listed_by_kind", tally.get("kind")), ("listed_by_source", tally.get("source"))):
+            for field, counts in (("listed_by_source", tally.get("source")),):
                 for name, n in (counts or {}).items():
                     left = payload.get(field, {}).get(name, 0) - n
                     if left > 0:
@@ -524,7 +507,7 @@ def empty_payload(now: datetime, model: str | None = None) -> dict[str, Any]:
     return {
         "ok": True, "version": PAYLOAD_VERSION, "model": model,
         "generated_at": int(now.timestamp()), "source_request_count": 0,
-        "listed_request_count": 0, "listed_by_kind": {}, "listed_by_source": {},
+        "listed_request_count": 0, "listed_by_source": {},
         "hidden_request_count": 0,
         "hidden_reasons": {reason: 0 for reason in HIDDEN_REASONS}, "proposals": [],
     }
@@ -554,7 +537,7 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
                 rows = fetch_requests(conn)
 
     keys = ("service_description", "task_context", "request_input", "request_output",
-            "request_problem", "builds_on", "unlocks")
+            "request_problem", "builds_on")
     clean_rows = _redact_rows(rows, keys)
     usable = [row for row in clean_rows
               if row.get("request_input") and row.get("request_output") and row.get("request_problem")]

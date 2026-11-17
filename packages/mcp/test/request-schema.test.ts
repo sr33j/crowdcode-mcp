@@ -9,17 +9,15 @@ const good = {
   output: "the published post ID and URL, posted exactly once",
   problem: "agents publishing video to X fail on chunked uploads",
   price_per_call: 0.05,
-  kind: "gap",
   builds_on: "the X API v2 media upload endpoint with chunk retries",
-  unlocks: "post the owner's clip in one step and report the live URL",
   frequency: "per_task_like_this",
 };
 
 describe("request_service v2 schema", () => {
-  it("requires the concrete fields, the kind, builds_on, unlocks and frequency", () => {
+  it("requires the concrete fields, builds_on and frequency", () => {
     expect(schema.safeParse(good).success).toBe(true);
     expect(schema.safeParse({ ...good, capability: "social.post" }).success).toBe(true);
-    for (const field of ["input", "output", "problem", "price_per_call", "kind", "builds_on", "unlocks", "frequency"] as const) {
+    for (const field of ["input", "output", "problem", "price_per_call", "builds_on", "frequency"] as const) {
       const { [field]: _omitted, ...rest } = good;
       expect(schema.safeParse(rest).success).toBe(false);
     }
@@ -30,7 +28,6 @@ describe("request_service v2 schema", () => {
     expect(schema.safeParse({ ...good, price_per_call: 0 }).success).toBe(false);
     expect(schema.safeParse({ ...good, price_per_call: 500 }).success).toBe(false);
     expect(schema.safeParse({ ...good, price_per_call: "0.05" }).success).toBe(false);
-    expect(schema.safeParse({ ...good, kind: "wish" }).success).toBe(false);
     expect(schema.safeParse({ ...good, frequency: "sometimes" }).success).toBe(false);
     expect(schema.safeParse({ ...good, builds_on: "N/A" }).success).toBe(false);
   });
@@ -40,6 +37,12 @@ describe("request_service v2 schema", () => {
   });
 
   it("redacts every free-text field locally", () => {
-    expect(REDACTION_POLICY.request_service).toEqual(["input", "output", "problem", "builds_on", "unlocks"]);
+    expect(REDACTION_POLICY.request_service).toEqual(["input", "output", "problem", "builds_on"]);
+  });
+
+  it("strips an older client's kind and unlocks instead of rejecting the request", () => {
+    const parsed = schema.safeParse({ ...good, kind: "leverage", unlocks: "book it directly instead of listing options" });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && ("kind" in parsed.data || "unlocks" in parsed.data)).toBe(false);
   });
 });

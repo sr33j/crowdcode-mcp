@@ -33,13 +33,14 @@ describe("skill and plugin packaging", () => {
     expect(keys).toEqual(["name", "description"]);
     expect(match![1]).toMatch(/third-party paid APIs/);
     expect(match![1]).toMatch(/review poor or failed paid results/);
-    expect(match![1]).toMatch(/gap or leverage/);
+    expect(match![1]).not.toMatch(/leverage/);
     expect(match![1]).toMatch(/Do not use CrowdCode to gate trades/);
     expect(skill).toMatch(/Call `get_service_score`/);
     expect(skill).toMatch(/Reviewing is optional for you/);
     expect(skill).toMatch(/published as unweighted community evidence/);
     expect(skill).not.toMatch(/same history\s+and\s+score/);
     expect(skill).toMatch(/`builds_on`/);
+    expect(skill).not.toMatch(/leverage|`unlocks`|`kind`/);
     expect(skill).toMatch(/## Paid-call records/);
     expect(skill).toMatch(/signs automatically/);
   });

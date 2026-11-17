@@ -88,27 +88,21 @@ def validate_request_fields(
     return DemandFields(price_per_call=round(price, 6), **texts), None
 
 
-# --- requests v2 (C6): gap or leverage, and what it would be built from -----
+# --- requests v2 (C6): what it would be built from, and how often ----------
+#
+# `kind` (gap or leverage) and `unlocks` were dropped on 2026-11-17 (owner
+# decision). Clients that still send them are accepted; the fields are
+# ignored. Rows stored before then keep their values.
 
-REQUEST_KINDS = ("gap", "leverage")
 FREQUENCIES = ("one_off", "per_task_like_this", "recurring")
-EXTRA_MAX_CHARS = {"builds_on": 400, "unlocks": 400}
+BUILDS_ON_MAX_CHARS = 400
 CAPABILITY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:/-]{0,79}$")
 
 EXTRA_HINTS = {
-    "kind": (
-        "kind is 'gap' (a step that failed, was poor, slow or costly) or 'leverage' (a "
-        "service that would have let you act, reach data, persist or verify in a way you "
-        "could not)"
-    ),
     "builds_on": (
         "builds_on is what it could be built from today: an official API, a licensed "
         "dataset, existing paid services combined, or a human-ops team, for example "
-        "'the airline's NDC booking API plus a card-issuing API'"
-    ),
-    "unlocks": (
-        "unlocks is what you could then have done for the user, in one sentence, for "
-        "example 'book the cheapest refundable fare instead of only listing options'"
+        "'a layout-aware OCR API plus table reconstruction'"
     ),
     "frequency": (
         "frequency is 'one_off', 'per_task_like_this' or 'recurring' (daily or weekly)"
@@ -130,9 +124,7 @@ _NOTHING_EXISTS_RE = re.compile(
 
 @dataclass(frozen=True)
 class RequestExtras:
-    kind: str
     builds_on: str
-    unlocks: str
     frequency: str
     capability: str | None
 
@@ -142,27 +134,23 @@ def is_filler(text: Any) -> bool:
 
 
 def validate_request_extras(
-    kind: Any, builds_on: Any, unlocks: Any, frequency: Any, capability: Any = None
+    builds_on: Any, frequency: Any, capability: Any = None
 ) -> tuple[RequestExtras | None, str | None]:
-    """The C6 fields. builds_on is required: a request nobody could build is
-    not demand a builder can act on."""
-    kind_text = _clean_text(kind).lower()
-    if kind_text not in REQUEST_KINDS:
-        return None, f"kind is required: {EXTRA_HINTS['kind']}"
+    """The C6 fields. builds_on is required: it is the realism check, and a
+    request nobody could build is not demand a builder can act on."""
     frequency_text = _clean_text(frequency).lower().replace("-", "_").replace(" ", "_")
     if frequency_text not in FREQUENCIES:
         return None, f"frequency is required: {EXTRA_HINTS['frequency']}"
-    texts = {"builds_on": _clean_text(builds_on), "unlocks": _clean_text(unlocks)}
-    for field, text in texts.items():
-        if not text:
-            return None, f"{field} is required: {EXTRA_HINTS[field]}"
-        if is_filler(text):
-            return None, f"{field} cannot be N/A: {EXTRA_HINTS[field]}. If nothing qualifies, submit nothing."
-        if len(text) < TEXT_MIN_CHARS or len(_WORD_RE.findall(text.lower())) < TEXT_MIN_WORDS:
-            return None, f"{field} is too vague ({len(text)} characters): {EXTRA_HINTS[field]}"
-        if len(text) > EXTRA_MAX_CHARS[field]:
-            return None, f"{field} must be at most {EXTRA_MAX_CHARS[field]} characters"
-    if _NOTHING_EXISTS_RE.match(texts["builds_on"]):
+    text = _clean_text(builds_on)
+    if not text:
+        return None, f"builds_on is required: {EXTRA_HINTS['builds_on']}"
+    if is_filler(text):
+        return None, f"builds_on cannot be N/A: {EXTRA_HINTS['builds_on']}. If nothing qualifies, submit nothing."
+    if len(text) < TEXT_MIN_CHARS or len(_WORD_RE.findall(text.lower())) < TEXT_MIN_WORDS:
+        return None, f"builds_on is too vague ({len(text)} characters): {EXTRA_HINTS['builds_on']}"
+    if len(text) > BUILDS_ON_MAX_CHARS:
+        return None, f"builds_on must be at most {BUILDS_ON_MAX_CHARS} characters"
+    if _NOTHING_EXISTS_RE.match(text):
         return None, (
             "builds_on must name something that exists today; a service nothing could be "
             f"built from is not a request: {EXTRA_HINTS['builds_on']}"
@@ -170,8 +158,7 @@ def validate_request_extras(
     capability_text = _clean_text(capability).lower() or None
     if capability_text is not None and not CAPABILITY_RE.match(capability_text):
         capability_text = None  # an unknown node id is mapped by the backend instead
-    return RequestExtras(kind=kind_text, frequency=frequency_text,
-                         capability=capability_text, **texts), None
+    return RequestExtras(builds_on=text, frequency=frequency_text, capability=capability_text), None
 
 
 # --- privacy guard ---------------------------------------------------------

@@ -220,56 +220,47 @@ def request_service(
     output: str,
     problem: str,
     price_per_call: float,
-    kind: str | None = None,
     builds_on: str | None = None,
-    unlocks: str | None = None,
     frequency: str | None = None,
     capability: str | None = None,
     requester_wallet: str | None = None,
 ) -> dict[str, Any]:
-    """Record a reusable paid service that would have changed this task's outcome.
+    """Record a concrete paid service that would have fixed an observed failure,
+    a poor result, or excessive cost in a real task.
 
-    Call it before your final answer when a real task had either:
-    - a gap (kind="gap"): a step that failed, was poor, slow or too costly; or
-    - leverage (kind="leverage"): a service that, at a fair price, would have let
-      you deliver a much better result or something you could not do at all:
-      act (book, call, buy, file, send), reach data you could not (licensed,
-      real-time, behind the user's own login with consent), persist (monitor,
-      alert, retry over days) or verify (an authoritative or human check).
-    No purchase or spending authority is needed. Builders read these fields to
-    decide what to build:
-    - input: the clear input the user will give, e.g. "a public MP4 URL (up
-      to 60 s) and the post text".
-    - output: the exact output they want back, e.g. "the published post ID
-      and URL, posted exactly once".
-    - problem: the problem it solves, e.g. "agents publishing video to X fail
-      on chunked uploads and cannot tell whether the post went out".
+    Call it before your final answer when a reusable paid API call would have
+    fixed what went wrong. No purchase or spending authority is needed.
+    Builders read these fields to decide what to build:
+    - input: the clear input the user will give, e.g. "scanned annual-report
+      PDFs, up to 200 pages".
+    - output: the exact output they want back, e.g. "one CSV per financial
+      table with source-page citations and uncertain cells flagged".
+    - problem: what failed, was poor or cost too much, e.g. "ordinary OCR
+      drops columns and misaligns totals".
     - builds_on: what it could be built from today: an official API, a
       licensed dataset, existing paid services combined, or a human-ops team.
       Required; "nothing exists" is rejected.
-    - unlocks: what you could then have done for the user, in one sentence.
     - frequency: one_off, per_task_like_this or recurring (daily or weekly).
-    - price_per_call: what you would pay per call in USD. Price the outcome's
-      value: a booked trip can be worth $2.
+    - price_per_call: what you would pay per call in USD.
     - capability: optional capability tree node id; mapped when omitted.
     Describe a reusable service, not your task's answer: requests that restate
     the task, say "N/A" or lack builds_on are rejected. No names, URLs, IDs or
     private data. If nothing qualifies, submit nothing. Requests stay private:
     CrowdCode publishes only aggregated, generalized proposals.
-    requester_wallet is attached by the local client.
+    requester_wallet is attached by the local client. Older clients' `kind`
+    and `unlocks` are ignored.
     """
     fields, error = validate_request_fields(input, output, problem, price_per_call)
     if fields is None:
         return {"accepted": False, "error_code": "invalid_request_fields", "reason": error}
-    legacy = all(value is None for value in (kind, builds_on, unlocks, frequency))
+    legacy = builds_on is None and frequency is None
     if legacy and not _requests_v2_strict():
         # Rollout only: a client that predates C6 sends none of the new fields.
         # It is still screened below; once every client sends them, strict mode
         # (the default) rejects it for lacking builds_on.
-        extras = RequestExtras(kind=None, builds_on="", unlocks="", frequency=None,
-                               capability=None)
+        extras = RequestExtras(builds_on="", frequency=None, capability=None)
     else:
-        extras, error = validate_request_extras(kind, builds_on, unlocks, frequency, capability)
+        extras, error = validate_request_extras(builds_on, frequency, capability)
         if extras is None:
             return {"accepted": False, "error_code": "invalid_request_fields", "reason": error}
 
@@ -292,7 +283,7 @@ def request_service(
     # so raw PII/secrets from clients that bypass crowdcode-mcp never land
     # in the shared database. Wallet fields are structured identifiers and
     # never pass through redaction.
-    texts = [fields.input, fields.output, fields.problem, extras.builds_on, extras.unlocks]
+    texts = [fields.input, fields.output, fields.problem, extras.builds_on]
     try:
         redacted = redact_texts(texts, fail_closed=True)
     except RedactionUnavailable:
@@ -328,8 +319,8 @@ def request_service(
         )
 
     screen = screen_request({key: value for key, value in {
-        "kind": extras.kind, "input": texts[0], "output": texts[1], "problem": texts[2],
-        "builds_on": texts[3], "unlocks": texts[4], "frequency": extras.frequency,
+        "input": texts[0], "output": texts[1], "problem": texts[2],
+        "builds_on": texts[3], "frequency": extras.frequency,
         "price_per_call_usd": fields.price_per_call,
     }.items() if value})
     if screen.rejected:
@@ -357,10 +348,9 @@ def request_service(
             insert into service_requests (
               request_input, request_output, request_problem, price_per_call_usd,
               fields_source, requester_id, requester_wallet, redacted_at,
-              request_kind, builds_on, unlocks, frequency, capability,
-              screen_verdict, screened_at
+              builds_on, frequency, capability, screen_verdict, screened_at
             )
-            values (%s, %s, %s, %s, 'agent', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            values (%s, %s, %s, %s, 'agent', %s, %s, %s, %s, %s, %s, %s, %s)
             returning id
             """,
             (
@@ -369,9 +359,7 @@ def request_service(
                 requester_id,
                 wallet,
                 utc_now() if redaction_enabled() else None,
-                extras.kind,
                 texts[3] or None,
-                texts[4] or None,
                 extras.frequency,
                 extras.capability,
                 screen.verdict,
@@ -383,8 +371,8 @@ def request_service(
     return {
         "accepted": True,
         "request_id": row["id"],
-        "recorded": {"kind": extras.kind, "input": texts[0], "output": texts[1],
-                     "problem": texts[2], "builds_on": texts[3], "unlocks": texts[4],
+        "recorded": {"input": texts[0], "output": texts[1],
+                     "problem": texts[2], "builds_on": texts[3],
                      "frequency": extras.frequency, "price_per_call": fields.price_per_call,
                      "capability": extras.capability},
         "screen": screen.verdict,

@@ -81,12 +81,11 @@ def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = Non
             "formatting, a PDF or document conversion of content it has, running code or a "
             "Python package)? Then it is restates_task (if it is one task's answer) or "
             "not_a_service. Wrapping an LLM API around the task's answer is not a service.",
-            "2. Does the service need something the agent lacks: an action in the world (book, "
-            "buy, call, file, send, post), access (licensed, real-time, or account data with "
-            "consent), persistence (monitor or retry over days), verification (an "
-            "authoritative source or a human check), or specialised processing that general "
-            "tools do poorly (layout-aware OCR, transcription, media generation)? Only then "
-            "can it be accepted.",
+            "2. Is it a reusable paid service, sold per call by a provider, that would fix the "
+            "failure, poor result or excessive cost the problem describes, and that the "
+            "agent's own model and ordinary tools could not do well (for example layout-aware "
+            "OCR, transcription, media generation, a third-party API, or data it could not "
+            "get)? Only then can it be accepted.",
             "3. builds_on must name something that exists or can plausibly be assembled today.",
         ],
         "verdicts": {
@@ -106,15 +105,16 @@ def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = Non
              "verdict": "restates_task"},
             {"output": "the script's output after running it with more memory",
              "verdict": "not_a_service"},
-            {"output": "a booked refundable fare with the airline confirmation code",
-             "builds_on": "airline NDC booking APIs plus a card-issuing API", "verdict": "accept"},
-            {"output": "an alert when a product's price drops below a target, checked daily",
-             "builds_on": "retailer APIs plus a scheduler and SMS", "verdict": "accept"},
+            {"output": "the published post ID and URL for a video, posted exactly once",
+             "builds_on": "the X API v2 media upload endpoint with chunk retries",
+             "verdict": "accept"},
+            {"output": "a speaker-labelled transcript of a 60-minute call recording",
+             "builds_on": "a hosted speech-to-text API with diarization", "verdict": "accept"},
             {"output": "one CSV per table from scanned PDFs with page citations",
              "builds_on": "a layout-aware OCR API", "verdict": "accept"},
         ],
         "rules": [
-            "Do not reject for being expensive, ambitious or needing a human-ops team.",
+            "Do not reject for being expensive or needing a human-ops team.",
             "If builds_on is absent (an older client), judge the rest and never reject for it.",
         ],
         "schema": {"verdict": "accept|restates_task|not_a_service|not_buildable",

@@ -265,7 +265,7 @@ export function createToolHandlers(deps: ServerDeps) {
         }
       }
       return toToolResult({ ...payload, task_completion_reminder:
-        "Before your final answer, consider one gap (a step that failed or cost too much) or one leverage service (one that would have let you act, reach data, persist or verify) worth paying for, and file it with request_service including builds_on. Submit nothing if none qualifies. Respect CrowdCode off." });
+        "Before your final answer, if a concrete paid service would have fixed an observed failure, poor result or excessive cost, file it with request_service, including builds_on. Submit nothing if none qualifies. Respect CrowdCode off." });
     },
 
     get_review_signing_payload: async (
@@ -345,7 +345,7 @@ export function createToolHandlers(deps: ServerDeps) {
       if (unlinkedArgs !== null) {
         payload = await forwardPayload("review_service", unlinkedArgs);
       }
-      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for a gap or leverage service grounded in this task, with builds_on. Skip if nothing qualifies; do not duplicate earlier requests." });
+      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for a concrete paid service that would have fixed an observed failure, poor result or excessive cost, with builds_on. Skip if nothing qualifies; do not duplicate earlier requests." });
     },
   };
 }
@@ -391,14 +391,10 @@ const SERVER_INSTRUCTIONS = [
   "`crowdcode-mcp off` stops it.",
   "",
   "Before the final answer to a substantive task that bought something, hit a failure or",
-  "took many steps, reflect once on two kinds of service. gap: a step that failed, was poor,",
-  "slow or costly. leverage: a service that, at a fair price, would have let you deliver a",
-  "much better result or something you could not do at all: act (book, call, buy, file,",
-  "send), reach data you could not (licensed, real-time, behind the user's own login with",
-  "consent), persist (monitor, alert, retry over days) or verify (an authoritative or human",
-  "check). For each worthwhile one call request_service with kind, input, output, problem,",
-  "builds_on (what it could be built from today), unlocks (what you could then have done),",
-  "frequency and price_per_call (price the outcome's value). Describe a reusable service,",
+  "took many steps, reflect once: what concrete paid service would have fixed an observed",
+  "failure, a poor result or excessive cost? For each worthwhile one call request_service",
+  "with input, output, problem, builds_on (what it could be built from today), frequency",
+  "and price_per_call. Describe a reusable service,",
   "never the task's answer restated; requests that restate the task, say N/A or lack",
   "builds_on are rejected. If nothing qualifies, submit nothing. Never send secrets or",
   "private user data.",
@@ -417,7 +413,7 @@ const SERVER_INSTRUCTIONS = [
 
 export function buildServer(deps: ServerDeps): McpServer {
   const server = new McpServer(
-    { name: "crowdcode", version: "0.13.3" },
+    { name: "crowdcode", version: "0.13.4" },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const handlers = createToolHandlers(deps);
@@ -448,19 +444,15 @@ export function buildServer(deps: ServerDeps): McpServer {
     "request_service",
     {
       description:
-        "Record a reusable paid service that would have changed this task's outcome. kind " +
-        "is gap (a step failed, was poor, slow or costly) or leverage (a service that would " +
-        "have let you act: book, call, buy, file, send; reach data you could not: licensed, " +
-        "real-time, behind the user's own login with consent; persist: monitor, alert, retry " +
-        "over days; or verify: an authoritative or human check). Fill input (what the user " +
-        "gives), output (the exact deliverable), problem (what it solves), builds_on (what it " +
-        "could be built from today: an official API, licensed data, existing paid services, a " +
-        "human-ops team), unlocks (what you could then have done for the user), frequency " +
-        "(one_off, per_task_like_this, recurring) and price_per_call (USD; price the outcome's " +
-        "value, a booked trip can be worth $2). Example leverage: input \"a held itinerary and " +
-        "traveller profile\"; output \"a booked, refundable fare with confirmation code\"; " +
-        "builds_on \"airline NDC booking APIs plus a card-issuing API\"; unlocks \"book the " +
-        "trip instead of listing options\"; frequency per_task_like_this; price_per_call 2. " +
+        "Record a concrete paid service that would have fixed an observed failure, a poor " +
+        "result or excessive cost in this task. Fill input (what the user gives), output (the " +
+        "exact deliverable), problem (what failed, was poor or cost too much), builds_on (what " +
+        "it could be built from today: an official API, licensed data, existing paid services, " +
+        "a human-ops team), frequency (one_off, per_task_like_this, recurring) and " +
+        "price_per_call (USD). Example: input \"scanned annual-report PDFs, up to 200 pages\"; " +
+        "output \"one CSV per financial table with page citations\"; problem \"OCR drops " +
+        "columns and misaligns totals\"; builds_on \"a layout-aware OCR API plus table " +
+        "reconstruction\"; frequency per_task_like_this; price_per_call 0.5. " +
         "Requests that restate the task's answer, say N/A or lack builds_on are rejected. No " +
         "names, URLs or IDs. Submit nothing if nothing qualifies. Text is redacted locally; " +
         "requests stay private and only aggregated proposals are published.",
