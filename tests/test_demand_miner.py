@@ -35,21 +35,17 @@ def _body(night="2026-11-17"):
 
 
 LICENSED = {
-    "kind": "leverage",
     "input": "a publication name, a headline and an approximate date for a news article",
     "output": "the licensed full text of that article with its byline and publication date",
     "problem": "agents hit paywalls and cannot read the articles owners ask them to summarise",
     "builds_on": "news archive licensing APIs from major aggregators and publisher syndication feeds",
-    "unlocks": "summaries and fact checks grounded in the real article instead of search snippets",
     "frequency": "per_task_like_this", "price_per_call": 0.4, "capability": "search", "runs": [0, 1],
 }
 SCHEDULER = {
-    "kind": "leverage",
     "input": "post text, optional media and a recurring schedule for a social account",
     "output": "a confirmation of each scheduled post as it goes out, posted exactly once",
     "problem": "agents run once and cannot come back every morning to publish a recurring post",
     "builds_on": "official social platform posting APIs plus a hosted scheduler with retries",
-    "unlocks": "recurring social posting without the owner starting a run every day",
     "frequency": "recurring", "price_per_call": 0.05, "capability": "social", "runs": [1, 2],
 }
 
@@ -118,6 +114,11 @@ def test_a_batch_is_mined_into_miner_requests_with_salted_refs_only(miner):
     assert rows[0]["miner_run_count"] == 2 and rows[0]["miner_run_refs"] == REFS[:2]
     assert rows[0]["fields_source"] == "miner" and rows[0]["screen_verdict"] == "accept"
     assert rows[1]["frequency"] == "recurring" and rows[1]["capability"] == "social"
+    # Mined needs have the same fields as agent requests: no kind, no unlocks.
+    assert all(r["request_kind"] is None and r["unlocks"] is None for r in rows)
+    schema = chat.calls[0]["schema"]["services"][0]
+    assert "kind" not in schema and "unlocks" not in schema
+    assert not any("leverage" in rule or "unlocks" in rule for rule in chat.calls[0]["requirements"])
 
 
 def test_a_retried_batch_is_not_mined_twice(miner):
@@ -131,13 +132,14 @@ def test_a_retried_batch_is_not_mined_twice(miner):
 @pytest.mark.parametrize("change, reason", [
     ({"output": "the article text from https://news.example.com/story with its byline"}, "traceable"),
     ({"input": "an article id like 12345678 and a publication date"}, "traceable"),
-    ({"unlocks": "summaries for [PERSON_1] grounded in the real article text"}, "traceable"),
+    ({"builds_on": "news licensing APIs used by [PERSON_1] and syndication feeds"}, "traceable"),
     ({"problem": "Get me the full text of a magazine story the film was based on"}, "copies_run"),
     ({"builds_on": "N/A"}, "invalid"),
     ({"runs": [7]}, "no_runs"),
     ({"runs": [0]}, "single_run"),
     ({"runs": [0, 0, 9]}, "single_run"),
-    ({"capability": "made-up", "kind": "wish"}, "invalid"),
+    ({"frequency": "sometimes"}, "invalid"),
+    ({"builds_on": "nothing exists for this yet"}, "invalid"),
 ])
 def test_candidates_that_fail_a_check_are_not_stored(miner, change, reason):
     result = demand_miner.mine(_body(), miner, NOW, chat=_chat([{**LICENSED, **change}], miner),
@@ -312,3 +314,11 @@ def test_the_miner_is_told_what_is_already_published(miner):
     assert prompt["already_published"] == [
         {"title": "Social Post Publisher", "problem": "agents cannot post to social accounts reliably"}]
     assert any("already_published" in rule and "none of them covers" in rule for rule in prompt["requirements"])
+
+
+def test_an_unknown_capability_is_left_for_the_tree_to_map(miner):
+    result = demand_miner.mine(_body(), miner, NOW, chat=_chat([{**LICENSED, "capability": "made-up"}], miner),
+                               screen=_accept)
+    assert result["stored"] == 1
+    with miner() as conn:
+        assert conn.execute("select capability from service_requests").fetchone()["capability"] is None
