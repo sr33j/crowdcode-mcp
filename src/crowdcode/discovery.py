@@ -705,7 +705,8 @@ def find_in_index(index: offerings.OfferingIndex, query: str, networks: tuple[st
     used = used if used is not None else offerings.new_seed()
     leaf_similarity = index.leaf_similarity(index.query_vector(query, embedder))
     ranked, info = offerings.rank(matches, networks=networks, balances=balances, seed=used,
-                                  model_rows=model_rows or None, model=model, leaf_similarity=leaf_similarity)
+                                  model_rows=model_rows or None, model=model, leaf_similarity=leaf_similarity,
+                                  producers=index.producers)
     services = [offerings.describe(r, position, detail, info.get("capability"))
                 for position, r in enumerate(ranked[:size], start=1)]
     left_out = {k: v for k, v in info["left_out"].items() if v}
@@ -717,6 +718,7 @@ def find_in_index(index: offerings.OfferingIndex, query: str, networks: tuple[st
         **({"networks": list(networks)} if networks != DEFAULT_NETWORKS else {}),
         **({"balances_considered": True} if balances is not None else {}),
         **({"capability": info["capability"]} if info.get("capability") else {}),
+        **({"policy": info["policy"]} if info.get("policy") else {}),
         **({"model": model} if model else {}),
         "ranking": offerings.RANKING,
         "services": services,

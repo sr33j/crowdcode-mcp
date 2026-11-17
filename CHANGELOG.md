@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Search ranks media and models by quality first** (C13 amendment, 2026-11-17).
+  - **`quality_first`:** a query for video, image or audio generation or editing, or for an LLM, ranks models by quality: the leaderboard prior, then judged quality. Sellers come next by expected delivery, then by price, which breaks ties only within a ±0.25 quality band. Every seller of the artifact is a candidate, matched or not.
+    - Only offerings that return the artifact count: classified there, or selling a model of that modality.
+    - Prompt writers, scripts, drafts, metadata, and generators offered as editors do not.
+    - `explore` marks a top model's untried seller.
+  - **`value_first`:** search, data and utilities keep the value-per-dollar draw, but only over quality ≥ 3.
+  - **The response** names the `policy` it used. Multi-model sellers show the `model` their rank came from.
+  - **Examples:** "generate a short cinematic video" puts BlockRun (Seedance 2.5) and Seedance 2.5 sellers first, not a $0.01 480p clip. "llm inference" puts sellers of the top-rated models first.
+
 - **Capability tree: quality first where quality varies** (C13 as amended
   2026-11-17). Video, image and audio generation and editing, and llm, pick
   the best model by its leaderboard prior, then that model's most reliable
