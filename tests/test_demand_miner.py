@@ -275,3 +275,21 @@ def test_a_mined_proposal_that_names_something_traceable_is_not_published():
     parsed = {"proposals": [_proposal("Articles", [1], output="the article from nytimes.com")]}
     payload = proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "gpt-5.5")
     assert payload["proposals"] == [] and payload["hidden_reasons"]["vague"] == 1
+
+
+def test_a_proposal_the_redactor_changes_is_not_published(monkeypatch):
+    rows = [_row(1, source="miner", runs=4), _row(2), _row(3)]
+    parsed = {"proposals": [_proposal("Full text", [1, 2]), _proposal("DNS checks", [3])]}
+    payload = proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "gpt-5.5")
+    assert payload["listed_by_source"] == {"miner": 1, "agent": 2}
+
+    def redactor(texts, **_):
+        return [t.replace("a publication", "[SURNAME_3]") if t and "Full" not in t and i < 7 else t
+                for i, t in enumerate(texts)]
+
+    monkeypatch.setattr(proposals, "redact_texts", redactor)
+    out = proposals.redact_payload(payload)
+    assert [p["title"] for p in out["proposals"]] == ["DNS checks"]
+    assert "_tally" not in out["proposals"][0]
+    assert out["listed_request_count"] == 1 and out["hidden_reasons"]["vague"] == 2
+    assert out["listed_by_source"] == {"agent": 1}

@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -426,6 +427,12 @@ def build_payload(
             "inferred_requests": low,
             **_member_shape(members),
             "_member_ids": member_ids,
+            # What dropping this proposal later takes out of the payload's
+            # counts (redact_payload); stripped before storage.
+            "_tally": {
+                "kind": dict(Counter(m.get("request_kind") or "unstated" for m in members)),
+                "source": dict(Counter(m.get("source") or "agent" for m in members)),
+            },
         })
 
     for item in parsed.get("not_viable") or []:
@@ -472,18 +479,42 @@ def build_payload(
     }
 
 
+PLACEHOLDER_RE = re.compile(r"\[[A-Z][A-Z_]*_\d+\]")
+
+
 def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Re-redact generated text on its way to storage; fail closed."""
+    """Re-redact generated text on its way to storage; fail closed.
+
+    A proposal the redactor changed is not published. A placeholder such as
+    `[SURNAME_3]` means the generated copy named someone, or the redactor
+    misread a word; either way it is not copy anyone should read. On
+    2026-11-17 "Citation, source [SURNAME_3], ..." was published this way."""
     keys = ("title", "input", "output", "problem", "rationale", "builds_on", "unlocks")
     texts = [p.get(key) for p in payload["proposals"] for key in keys]
-    if not texts:
-        return payload
-    redacted = redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)
-    if redacted is None:  # redaction not configured (local development)
-        return payload
+    redacted = (redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)
+                if texts else None)
+    kept = []
     for index, proposal in enumerate(payload["proposals"]):
-        for offset, key in enumerate(keys):
-            proposal[key] = redacted[index * len(keys) + offset]
+        tally = proposal.pop("_tally", None) or {}
+        if redacted is not None:
+            for offset, key in enumerate(keys):
+                proposal[key] = redacted[index * len(keys) + offset]
+        if any(PLACEHOLDER_RE.search(str(proposal.get(key) or "")) for key in keys):
+            logger.warning("proposal dropped: the redactor found something in it")
+            requests = proposal["demand"]["requests"]
+            payload["listed_request_count"] -= requests
+            payload["hidden_request_count"] += requests
+            payload["hidden_reasons"]["vague"] += requests
+            for field, counts in (("listed_by_kind", tally.get("kind")), ("listed_by_source", tally.get("source"))):
+                for name, n in (counts or {}).items():
+                    left = payload.get(field, {}).get(name, 0) - n
+                    if left > 0:
+                        payload[field][name] = left
+                    else:
+                        payload.get(field, {}).pop(name, None)
+            continue
+        kept.append(proposal)
+    payload["proposals"] = kept
     return payload
 
 
