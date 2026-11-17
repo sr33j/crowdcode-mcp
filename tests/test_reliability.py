@@ -121,8 +121,10 @@ def test_popular_needs_a_strong_or_curated_prior_and_healthy_probes():
     r = evaluate(failing)
     assert r["tier"] == "new" and r["reasons"][0].startswith("new: 147 payers on the x402 Bazaar in 30 days, 90.6 "
                                                              "calls per payer, but its probes are not healthy")
-    unprobed = offering(endpoints=[endpoint(last_probes=[])])
-    assert tier(unprobed) == "new"
+    unprobed = evaluate(offering(endpoints=[endpoint(last_probes=[])]))
+    assert unprobed["tier"] == "new"
+    assert unprobed["reasons"][0].startswith("new: 147 payers on the x402 Bazaar in 30 days, 90.6 calls per payer, "
+                                             "but it has not been probed yet (probes run once a day)")
     rejected = probe(0.1, ok=False, error_code="probe_body_rejected", status=400)
     assert tier(offering(endpoints=[endpoint(last_probes=[rejected, probe(1.1)])])) == "popular"
 
@@ -463,8 +465,11 @@ def test_url_lookup_resolves_aliases_and_unknown_urls(db):
         assert (unknown["tier"], unknown["state"], unknown["service_id"]) == ("new", "unverified", None)
         assert unknown["reasons"][0] == "not in CrowdCode's index"
         assert unknown["posterior"]["prior"]["source"] == "no outside evidence"
+        # Listed but not tracked: evaluated from what the index knows (1 Bazaar payer: Beta(1,1)).
         quiet = reliability.for_url(conn, "https://quiet.example.com/q", "POST")
-        assert quiet["service_id"] is None and quiet["reasons"][0] == reliability.NOT_TRACKED
+        assert quiet["service_id"] is None and quiet["tier"] == "new" and quiet["resolved"]["resource_id"] == 3
+        assert reliability.NOT_TRACKED in quiet["reasons"]
+        assert quiet["posterior"]["prior"]["kind"] == "none"
 
 
 def test_blocking_forces_bad_with_the_note_and_is_audited(db, monkeypatch):
@@ -518,3 +523,27 @@ def test_the_directory_carries_the_tier_and_the_one_score_and_keeps_v31_as_score
     detail, status = server._service_detail_payload("svc_exa")
     assert status == 200 and detail["tier"] == "popular" and detail["reliability_score"] == exa["reliability_score"]
     assert rows["svc_new"]["tier"] == "new"
+
+
+def test_a_listed_untracked_video_offering_is_evaluated_from_its_payers_and_model(db):
+    with db() as conn:
+        _seed(conn, v2=True)
+        conn.execute(
+            """
+            insert into index_resources (id, resource_key, method, origin, route_template, probe_url, tracked,
+              bazaar_payers_30d, bazaar_calls_30d, sources)
+            values (5, 'POST https://clips.example.com/veo', 'POST', 'https://clips.example.com',
+              'https://clips.example.com/veo', 'https://clips.example.com/veo', false, 40, 120, '{bazaar}')
+            """)
+        conn.execute("insert into index_offering_models (resource_id, model, model_family, modality, source) "
+                     "values (5, 'veo-3.1', 'veo', 'video', 'route')")
+        conn.commit()
+    with db() as conn:
+        r = reliability.for_url(conn, "https://clips.example.com/veo", "POST")
+    assert (r["tier"], r["service_id"]) == ("new", None)
+    assert r["posterior"]["alpha"] == 8 and r["quality"] == pytest.approx(4.6)
+    assert r["score"] == pytest.approx(8 / 9 * 4.6, abs=1e-4)
+    assert r["reasons"][0] == ("new: 40 payers on the x402 Bazaar in 30 days, 3.0 calls per payer, but CrowdCode "
+                               "does not probe it yet; proven needs 5 judged purchases with a mean of 0.85 (0 so far)")
+    assert any("shrunk to 4.6 from veo-3.1 on Artificial Analysis video arena (2026-11-17)" in x for x in r["reasons"])
+    assert r["inputs"]["listed"]["models"][0]["model"] == "veo-3.1"
