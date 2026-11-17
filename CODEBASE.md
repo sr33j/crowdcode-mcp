@@ -123,6 +123,48 @@ an attested review recomputes its service in the background. Routes:
 `scripts/block_service.py` (audited in `service_block_audit`). Schema:
 `supabase/reliability.sql`.
 
+## `src/crowdcode/capability_tree.py`
+
+The capability tree (SRI-115 ticket 8; contract C7 in the parent repository's
+`design-docs/RELIABLE_SERVICES_BUILD.md`): when an agent should look for a
+paid service, and which reliable service to use for which situation.
+
+- **15 top nodes, written by hand** (`NODES`), each with `when_to_look` and
+  `when_not_to_buy`; `free-first` is the policy node. The text started from
+  opencrowd's bundled knowledge (`L0.md` and its categories).
+- **Classification:** every tracked index resource and every published
+  proposal gets one or two `(node, facet)` pairs from one batched model call
+  per 50 items (`OPENAI_MODEL`, minimal reasoning; `CROWDCODE_TREE_MODEL`
+  overrides). Only new or changed items are sent (a fingerprint of what was
+  sent). Every call is costed from its reported usage against a daily cap
+  (`CROWDCODE_TREE_DAILY_BUDGET_USD`, default $1); the ledger is the
+  `capability_tree_spend` row in `app_cache`.
+- **Leaves:** per node, a model call groups new facets into a few candidate
+  leaves (`capability_leaves`), keeping existing ones and their ids.
+- **The split rule:** a leaf is served on its own only when a different
+  reliable service wins it. Candidate leaves with the same winner merge; those
+  with none merge up into `<node>.other`; a node with at most one winner is a
+  single `<node>.all` leaf. `covers` keeps every candidate leaf id resolvable.
+- **Leaves hold** `picks` (reliable only, with price, delivered rate, payers
+  and a reason from C3), `candidates` (top unverified services by Bazaar
+  payers, for test purchases), `demand` (proposals) and `empty`.
+- **Reliability** (C3) is read from `service_reliability`, which
+  `run_reliability` writes earlier in the same cron run. If it cannot be read,
+  everything is unverified; a fresh version with picks is then kept rather
+  than replaced.
+- **Versions:** one row per build in `capability_tree_versions` (newest 14
+  kept). `publish()` is the seam W8's test gate calls; until then every build
+  is published (`CROWDCODE_TREE_AUTO_PUBLISH=0` turns that off).
+- **Cron:** `run_capability_tree`, last in the hourly run. It classifies what
+  is new (at most 40 batches a run) and builds when the last version is 20 h
+  old, or when classification or the reliability states changed.
+
+`GET /api/tree[?version=current|candidate|<n>]` returns the version, the top
+level and the L0 rendering (≤ 800 tokens, bounded as UTF-8 bytes / 3);
+`GET /api/tree/{node_or_leaf}` returns one node or leaf as text (the whole
+body ≤ 600 tokens). `&format=full` returns the structured tree, as
+crowdcode.app/tree shows it. Schema: `supabase/capability-tree.sql`.
+
 ## `src/crowdcode/search_eval.py`
 
 recall@3 and MRR for the evaluation set in `tests/search_eval/cases.json`,

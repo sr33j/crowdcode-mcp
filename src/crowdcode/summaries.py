@@ -51,7 +51,12 @@ def _chat_json(
     user_payload: dict[str, Any],
     timeout: float = DEFAULT_TIMEOUT,
     model: str | None = None,
+    usage: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """One JSON-mode chat completion. `extra` adds request fields (e.g.
+    reasoning_effort); `usage`, when given, is filled with the response's
+    token usage so callers can cost the call."""
     with httpx.Client(timeout=timeout) as client:
         response = client.post(
             f"{settings.openai_base_url.rstrip('/')}/chat/completions",
@@ -60,6 +65,7 @@ def _chat_json(
                 "Content-Type": "application/json",
             },
             json={
+                **(extra or {}),
                 "model": model or settings.openai_model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -70,6 +76,8 @@ def _chat_json(
         )
         response.raise_for_status()
     data = response.json()
+    if usage is not None and isinstance(data.get("usage"), dict):
+        usage.update(data["usage"])
     content = data["choices"][0]["message"]["content"]
     if content is None:
         raise ValueError("model returned empty content")

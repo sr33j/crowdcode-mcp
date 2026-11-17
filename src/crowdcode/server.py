@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from importlib.metadata import version
 from datetime import UTC, datetime
 from functools import wraps
@@ -1762,6 +1763,52 @@ async def reliability_lookup(request: Request) -> JSONResponse:
     return JSONResponse({"ok": False, "error_code": "invalid_request", "error": "pass url (and method) or state"},
                         status_code=400)
 
+def _tree_row(which: str | None) -> dict[str, Any] | None:
+    from crowdcode import capability_tree
+    with connect() as conn:
+        if which in (None, "", "current"):
+            return capability_tree.latest(conn, published_only=True)
+        if which == "candidate":
+            return capability_tree.latest(conn, published_only=False)
+        return capability_tree.get_version(conn, int(which))
+
+
+def _tree_payload(which: str | None, entry: str | None, full: bool) -> tuple[dict[str, Any], int]:
+    from crowdcode import capability_tree
+    row = _tree_row(which)
+    if row is None:
+        return {"ok": False, "error_code": "no_tree", "error": "no capability tree has been built yet"}, 404
+    if entry is None:
+        if full:
+            return {"ok": True, "version": row["version"], "published": row["published"],
+                    "l0": capability_tree.render_l0(row["tree"]), "tree": row["tree"]}, 200
+        return capability_tree.summary_payload(row), 200
+    payload = (capability_tree.full_entry if full else capability_tree.entry_payload)(row, entry)
+    if payload is None:
+        return {"ok": False, "error_code": "unknown_node",
+                "error": "no node or leaf with this id in this version"}, 404
+    return payload, 200
+
+
+async def capability_tree_route(request: Request) -> JSONResponse:
+    """C7. `GET /api/tree[?version=current|candidate|<n>][&format=full]` and
+    `GET /api/tree/{node_or_leaf}`: the version, the top level and the L0
+    rendering (<= 800 tokens), or one node or leaf (<= 600 tokens)."""
+    which = (request.query_params.get("version") or "").strip().lower() or None
+    if which not in (None, "current", "candidate") and not (which.isdigit() and len(which) < 9):
+        return _json_error("version must be current, candidate or a version number",
+                           status_code=400, error_code="invalid_request")
+    entry = request.path_params.get("entry")
+    if entry is not None and (len(entry) > 80 or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", entry.lower())):
+        return _json_error("unknown node or leaf id", status_code=404, error_code="unknown_node")
+    full = (request.query_params.get("format") or "").strip().lower() == "full"
+    try:
+        payload, status_code = await run_in_threadpool(_tree_payload, which, entry, full)
+    except Exception:
+        return _unexpected_json_error("capability_tree")
+    headers = {"Cache-Control": "public, max-age=300"} if status_code == 200 else None
+    return JSONResponse(payload, status_code=status_code, headers=headers)
+
 
 async def service_proposals(_: Request) -> JSONResponse:
     try:
@@ -1867,6 +1914,8 @@ def create_app() -> Starlette:
             Route("/api/cron/status", cron_status, methods=["GET"]),
             Route("/api/index/health", index_health, methods=["GET"]),
             Route("/api/index/resource", index_resource, methods=["GET"]),
+            Route("/api/tree", capability_tree_route, methods=["GET"]),
+            Route("/api/tree/{entry}", capability_tree_route, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),
