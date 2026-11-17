@@ -301,7 +301,7 @@ Change these in the Desktop Plugins page, or with
 ```bash
 cd plugins/hermes
 uv venv && uv pip install eth-account httpx pytest
-python dev/mock_server.py --port 8787     # a local Wallet API v1 that checks real signatures
+python ../../spec/mock/mock_server.py --port 8787   # the shared local mock of the owner API (checks real signatures)
 hermes config set plugins.entries.crowdcode.settings.base_url http://127.0.0.1:8787
 python -m pytest -q                       # runs against the mock; no network, no money
 hermes plugins validate . --install-deps
