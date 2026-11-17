@@ -21,6 +21,7 @@ one definition of "best-known" and "worth exploring".
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -175,3 +176,130 @@ def rank(offerings: Iterable[dict[str, Any]], *, seed: int, picks: int = 3, expl
     rest.sort(key=lambda i: (-wins[i], -upper[i], str(pool[i].get("offering_id"))))
     out.explore = [entry(i, "explore") for i in rest[:explore]]
     return out
+
+
+# --- C13 as amended (2026-11-17): quality first where quality varies ---------------
+
+QUALITY_FLOOR = 3.0  # value_first ranks only offerings of at least this quality (1-5)
+QUALITY_BAND = 0.25  # within this of the best model, price may break the tie
+NEUTRAL_RATING = 3.0  # an unrated model or an offering that names none (C9)
+
+
+def above_floor(offering: dict[str, Any]) -> bool:
+    return offering["estimate"].quality * 5 >= QUALITY_FLOOR - 1e-9
+
+
+def rank_value_first(offerings: Iterable[dict[str, Any]], *, seed: int, picks: int = 3,
+                     explore: int = 3) -> Ranked:
+    """C13 for value nodes: the Thompson value ranking, over quality ≥ 3.0 only."""
+    return rank([o for o in offerings if above_floor(o)], seed=seed, picks=picks, explore=explore)
+
+
+def _seller_order(offering: dict[str, Any]) -> tuple:
+    price = offering.get("price_usd")
+    return (-offering["estimate"].mean, price if price is not None else 1e9, str(offering.get("offering_id")))
+
+
+def _entry(offering: dict[str, Any], role: str, model: dict[str, Any] | None) -> dict[str, Any]:
+    e = offering["estimate"]
+    out = {**{k: v for k, v in offering.items() if k != "estimate"},
+           "tier": e.tier, "reason": e.reason, "alpha": round(e.alpha, 2), "beta": round(e.beta, 2),
+           "delivery_estimate": round(e.mean, 3), "judged": e.judged, "delivered": e.delivered, "role": role}
+    if model:
+        out["model"] = model["model"]
+        out["model_label"] = model["label"]
+        out["model_rating"] = model.get("rating")
+        if model.get("price_usd") is not None:
+            out["price_usd"] = model["price_usd"].get(offering["offering_id"], out.get("price_usd"))
+    return out
+
+
+def rank_quality_first(models: list[dict[str, Any]], *, picks: int = 3, explore: int = 3) -> Ranked:
+    """C13 (amended) for media and model nodes.
+
+    `models`: [{model, label, rating (1-5 or None), offerings: [offering], price_usd: {offering id: usd}?}].
+    Offerings that name no model come as one group with `rating` None.
+
+    1. Models rank by quality (the leaderboard prior; unrated counts as 3.0).
+    2. A seller is eligible when it is not `bad` and meets the media minimums
+       (`meets_minimums` on the offering). Sellers of one model rank by
+       expected delivery, then price.
+    3. The top band is every model within QUALITY_BAND of the best model that
+       has an eligible seller; inside it, price breaks the tie (the cheapest
+       best seller first). Picks are each band model's best seller.
+    4. Exploration: the other eligible sellers of the band's models, then the
+       best seller of the next-rated models within twice the band. Never a
+       cheaper model further down for its price.
+    """
+    rated = []
+    for m in models:
+        sellers = sorted((o for o in m["offerings"] if o["estimate"].tier != "bad" and o.get("meets_minimums", True)),
+                         key=_seller_order)
+        if sellers:
+            rating = m.get("rating")
+            rated.append({**m, "rating_used": float(rating) if rating is not None else NEUTRAL_RATING,
+                          "sellers": sellers})
+    out = Ranked(eligible=sum(len(m["sellers"]) for m in rated))
+    if not rated:
+        return out
+    rated.sort(key=lambda m: (-m["rating_used"], m.get("rating") is None, _seller_order(m["sellers"][0])))
+    best = rated[0]["rating_used"]
+
+    def price(m: dict[str, Any], o: dict[str, Any]) -> float:
+        p = (m.get("price_usd") or {}).get(o["offering_id"], o.get("price_usd"))
+        return p if p is not None else 1e9
+
+    band = [m for m in rated if m["rating_used"] >= best - QUALITY_BAND]
+    band.sort(key=lambda m: (-m["sellers"][0]["estimate"].mean, price(m, m["sellers"][0]), -m["rating_used"]))
+    out.picks = [_entry(m["sellers"][0], "pick", m) for m in band[:picks]]
+    taken = {(p["offering_id"], p.get("model")) for p in out.picks}
+    more: list[dict[str, Any]] = []
+    for m in band:
+        more.extend(_entry(o, "explore", m) for o in m["sellers"][1:])
+    near = [m for m in rated if best - 2 * QUALITY_BAND <= m["rating_used"] < best - QUALITY_BAND]
+    more.extend(_entry(m["sellers"][0], "explore", m) for m in near)
+    for m in band[picks:]:
+        more.insert(0, _entry(m["sellers"][0], "explore", m))
+    seen = set(taken)
+    for e in more:
+        key = (e["offering_id"], e.get("model"))
+        if key not in seen and len(out.explore) < explore:
+            seen.add(key)
+            out.explore.append(e)
+    return out
+
+
+# Media minimums (C13): unless the owner asks otherwise, a video is at least
+# 720p and 4 seconds, an image at least 1024 px on the long side. An offering
+# fails only when its own words cap it below; saying nothing passes.
+_RES = re.compile(r"(?<![\d.])(\d{3,4})p\b", re.IGNORECASE)
+_SECONDS = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:s|sec|secs|second|seconds)\b", re.IGNORECASE)
+_WORD_SECONDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "eight": 8, "ten": 10}
+_PIXELS = re.compile(r"(?<![\d.])(\d{3,4})\s*(?:x|×)\s*(\d{3,4})|(?<![\d.])(\d{3,4})\s*px\b|(?<![\w.])([124])k\b",
+                     re.IGNORECASE)
+
+
+def meets_minimums(text: str, modality: str) -> tuple[bool, str | None]:
+    """(passes, why not) for one offering's own words (route, name, description)."""
+    if modality == "video":
+        resolutions = [int(r) for r in _RES.findall(text)]
+        if re.search(r"\b[248]k\b", text, re.IGNORECASE):
+            resolutions.append(2160)
+        if resolutions and max(resolutions) < 720:
+            return False, f"at most {max(resolutions)}p (video needs 720p)"
+        seconds = [float(s) for s in _SECONDS.findall(text)]
+        seconds += [v for w, v in _WORD_SECONDS.items() if re.search(rf"\b{w}[- ]second", text, re.IGNORECASE)]
+        if seconds and max(seconds) < 4:
+            return False, f"at most {max(seconds):g} s (video needs 4 s)"
+    if modality == "image":
+        sides = []
+        for a, b, px, k in _PIXELS.findall(text):
+            if a and b:
+                sides.append(max(int(a), int(b)))
+            elif px:
+                sides.append(int(px))
+            elif k:
+                sides.append(1024 * int(k))
+        if sides and max(sides) < 1024:
+            return False, f"at most {max(sides)} px (images need 1024 px)"
+    return True, None

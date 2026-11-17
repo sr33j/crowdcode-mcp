@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Capability tree: quality first where quality varies** (C13 as amended
+  2026-11-17). Video, image and audio generation and editing, and llm, pick
+  the best model by its leaderboard prior, then that model's most reliable
+  and cheapest seller; price only breaks ties within 0.25. Exploration is
+  other sellers of the top models, never a cheaper low-rated model. Media
+  minimums (video 720p and 4 s, images 1024 px) leave out offerings whose own
+  words say less. `*.generate` leaves hold only endpoints that return the
+  artifact; existing media assignments are re-checked once under that rule.
+  Value nodes keep the Thompson value ranking over quality ≥ 3.0. A build is
+  only published by W8's gate unless `CROWDCODE_TREE_AUTO_PUBLISH=1`.
 - **Leaderboard priors are 3–5, not 1–5.** The old mapping, 1 + 4 ×
   percentile, gave the last-ranked arena model 1.0. On the judge's scale that
   means a failed purchase, so veo-3.1 (16th of 21) scored worse before any
