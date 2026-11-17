@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from importlib.metadata import version
+from datetime import UTC, datetime
 from functools import wraps
 from typing import Any
 from uuid import uuid4
@@ -1534,6 +1535,55 @@ async def project_ideas(_: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+def cron_status_summary(payload: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
+    """What `/api/cron/status` says: the last runs and how healthy they are.
+
+    `consecutive_failures` counts failed runs since the last good one; the
+    reconciler opens an incident at 2, or when no run has finished for 3 hours.
+    Only job names, outcomes, durations and error classes are stored, so the
+    whole thing is public.
+    """
+    runs = [run for run in (payload or {}).get("runs", []) if isinstance(run, dict)]
+    consecutive = 0
+    for run in runs:
+        if run.get("ok"):
+            break
+        consecutive += 1
+    last_success = next((run.get("finished_at") for run in runs if run.get("ok")), None)
+    last_finished = runs[0].get("finished_at") if runs else None
+    age = None
+    if last_finished:
+        try:
+            age = round((now - datetime.fromisoformat(last_finished)).total_seconds() / 60, 1)
+        except ValueError:
+            age = None
+    return {
+        "ok": bool(runs) and bool(runs[0].get("ok")),
+        "last_finished_at": last_finished,
+        "last_success_at": last_success,
+        "minutes_since_last_run": age,
+        "consecutive_failures": consecutive,
+        "runs": runs[:24],
+    }
+
+
+def _cron_status_payload() -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute(
+            "select payload from app_cache where key = 'cron_status'"
+        ).fetchone()
+    payload = row["payload"] if row and isinstance(row["payload"], dict) else None
+    return cron_status_summary(payload, datetime.now(UTC))
+
+
+async def cron_status(_: Request) -> JSONResponse:
+    try:
+        payload = await run_in_threadpool(_cron_status_payload)
+    except Exception:
+        return _unexpected_json_error("cron_status")
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
 async def service_proposals(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_service_proposals_payload)
@@ -1619,6 +1669,7 @@ def create_app() -> Starlette:
             Route("/api/receipt-keys", receipt_keys, methods=["GET"]),
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/service-proposals", service_proposals, methods=["GET"]),
+            Route("/api/cron/status", cron_status, methods=["GET"]),
             Route("/api/services", all_services, methods=["GET"]),
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),
