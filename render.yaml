@@ -78,6 +78,10 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-5-mini
+      # The capability tree (src/crowdcode/capability_tree.py) classifies new
+      # index resources with OPENAI_MODEL, capped at this much a day.
+      - key: CROWDCODE_TREE_DAILY_BUDGET_USD
+        value: "1"
       # Service proposals ask a product question over every request at once;
       # they get a more capable model than the per-service summaries.
       - key: CROWDCODE_PROPOSAL_MODEL

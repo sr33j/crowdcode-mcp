@@ -591,6 +591,14 @@ def run_reliability(now: datetime) -> None:
     """reliability-v1 (C3) over every tracked service, after the hour's probes and purchases."""
     reliability.run(connect, utc_now())
 
+def run_capability_tree(now: datetime) -> None:
+    """Classify new or changed resources and proposals, then build a tree version
+    nightly or when the reliability states or the classification changed (C7)."""
+    from crowdcode import capability_tree
+
+    report = capability_tree.run(connect, now)
+    print(f"capability tree: {json.dumps(report, default=str)}")
+
 
 def jobs() -> tuple:
     return (
@@ -605,6 +613,8 @@ def jobs() -> tuple:
         run_consistency_sweep,
         run_service_summaries,
         run_service_proposals,
+        # Last: it reads the index and the proposals the jobs above refreshed.
+        run_capability_tree,
     )
 
 

@@ -25,6 +25,18 @@
     registry's aliases; an unknown endpoint is `unverified`, "not in
     CrowdCode's index"), and `GET /api/reliability?state=reliable`.
   - **Schema:** apply `supabase/reliability.sql` before deploying.
+
+- **The capability tree** (SRI-115 ticket 8, contract C7). The backend now
+  builds, every night and after reliability changes, a tree of what agents
+  buy: 15 hand-written top nodes (with when to look and when not to buy), and
+  leaves proposed by a model from the index's descriptions and schemas. A leaf
+  is kept separate only when a different reliable service wins it. Each leaf
+  lists its reliable picks with reasons, the unverified candidates worth
+  testing next, and the proposals that match it. `GET /api/tree` serves the
+  version, the top level and an 800-token summary for agents;
+  `GET /api/tree/{node}` serves one node in 600 tokens. Classification runs
+  only on new or changed resources and is capped at $1 a day. Apply
+  `supabase/capability-tree.sql` before deploying.
 - **The services index** (SRI-115 tickets 1 and 2, contract C1). The backend
   now keeps its own index of the x402 and MPP services that matter, and
   checks each of them once a day.
