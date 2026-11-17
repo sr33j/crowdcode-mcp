@@ -110,7 +110,17 @@ class Node:
     # What belongs here, for the classifier. None: nothing is classified here.
     hint: str | None
     kind: str = "capability"
+    # A rule the agent must follow whenever it works in this node (C14).
+    hard_rule: str | None = None
 
+
+# The standing media rule (C14): a requested video, image or audio is a real
+# file from a model. Shown on the media nodes and in every L0 rendering.
+MEDIA_RULE = (
+    "When the owner asks for a video, image or audio, deliver a real file from a model. Never substitute "
+    "SVG, HTML, CSS or canvas animation, or a slideshow, unless the owner asks for one."
+)
+MEDIA_NODES = ("image", "video", "audio")
 
 NODES: tuple[Node, ...] = (
     Node(
@@ -143,18 +153,21 @@ NODES: tuple[Node, ...] = (
         "Generating, editing or upscaling an image the task asks for.",
         "Reuse existing assets; SVG, Pillow or ImageMagick for diagrams, crops and simple edits.",
         "image generation, image editing, upscaling, background removal, image understanding",
+        hard_rule=MEDIA_RULE,
     ),
     Node(
         "video", "Video",
         "Generating, editing, rendering or transcribing a video the task asks for.",
         "Metadata only: oEmbed or page metadata. Local ffmpeg for cuts and conversions.",
         "text or image to video, avatars, video editing and rendering, video download or transcription",
+        hard_rule=MEDIA_RULE,
     ),
     Node(
         "audio", "Audio and speech",
         "Text to speech, transcription, music or sound generation.",
         "Local TTS or ffmpeg when studio quality is not required.",
         "text to speech, speech to text, voice cloning, music and sound effects generation, audio processing",
+        hard_rule=MEDIA_RULE,
     ),
     Node(
         "email", "Email",
@@ -800,6 +813,7 @@ def assemble(
             "id": node.id, "label": node.label, "kind": node.kind,
             "when_to_look": node.when_to_look, "when_not_to_buy": node.when_not_to_buy,
             "leaves": served, "best_pick": best, "empty": best is None,
+            **({"hard_rule": node.hard_rule} if node.hard_rule else {}),
             "services": len(merged([c["services"] for c in candidates_leaves] + [extra_services])),
             "candidate_leaves": len(candidates_leaves),
         })
@@ -821,6 +835,7 @@ def assemble(
             "error": reliability.error,
         },
         "policy": FREE_FIRST_POLICY,
+        "hard_rules": [MEDIA_RULE],
         "nodes": nodes_out,
         "stats": {
             "resources": len(resources),
@@ -861,7 +876,8 @@ def _pick_line(pick: dict[str, Any], *, with_endpoint: bool) -> str:
 def render_l0(tree: dict[str, Any], budget: int = L0_TOKENS) -> str:
     """The free-first policy, then one line per node: when to look and the best pick."""
     header = [f"CrowdCode capability tree v{tree.get('version') or '?'} ({str(tree.get('built_at'))[:10]}).",
-              tree.get("policy") or FREE_FIRST_POLICY]
+              tree.get("policy") or FREE_FIRST_POLICY,
+              *(f"Hard rule: {rule}" for rule in hard_rules(tree))]
     if not (tree.get("reliability") or {}).get("available"):
         header.append("Reliability data is unavailable: treat every service as unverified.")
     lines = []
@@ -882,6 +898,19 @@ def render_l0(tree: dict[str, Any], budget: int = L0_TOKENS) -> str:
     lines = [re.sub(r": [^→]*→", ": →", line) for line in lines]
     text = "\n".join([*header, *lines, footer])
     return text if token_bound(text) <= budget else _truncate(text, budget)
+
+
+def hard_rules(tree: dict[str, Any]) -> list[str]:
+    """The tree's standing rules. A version stored before they existed gets the
+    media rule, so it applies to whatever version is served."""
+    rules = tree.get("hard_rules")
+    return [str(r) for r in rules if str(r).strip()] if isinstance(rules, list) else [MEDIA_RULE]
+
+
+def node_hard_rule(tree: dict[str, Any], node: dict[str, Any]) -> str | None:
+    if "hard_rule" in node:
+        return node["hard_rule"] or None
+    return MEDIA_RULE if node.get("id") in MEDIA_NODES and "hard_rules" not in tree else None
 
 
 def find_entry(tree: dict[str, Any], entry_id: str) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
@@ -927,6 +956,9 @@ def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS
     node, leaf = found
     head = [f"# {node['id']} — {node['label']} (tree v{tree.get('version') or '?'})",
             f"When to look: {node['when_to_look']}", f"When not to buy: {node['when_not_to_buy']}"]
+    rule = node_hard_rule(tree, node)
+    if rule:
+        head.append(f"Hard rule: {rule}")
     if node["kind"] == "policy":
         return "\n".join([*head, node.get("policy") or FREE_FIRST_POLICY])
     leaves = [leaf] if leaf else node["leaves"]
@@ -1443,12 +1475,14 @@ def summary_payload(row: dict[str, Any]) -> dict[str, Any]:
         "nodes": [{
             "id": node["id"], "label": node["label"], "kind": node["kind"],
             "when_to_look": node["when_to_look"], "when_not_to_buy": node["when_not_to_buy"],
+            **({"hard_rule": rule} if (rule := node_hard_rule(tree, node)) else {}),
             "leaves": [leaf["id"] for leaf in node["leaves"]],
             "best_pick": ({k: node["best_pick"][k] for k in ("service_id", "name", "endpoint", "method", "price_usd",
                                                              "delivered_rate", "payers")}
                           if node.get("best_pick") else None),
             "empty": node["empty"],
         } for node in tree["nodes"]],
+        "hard_rules": hard_rules(tree),
         "l0": render_l0(tree),
     }
 
