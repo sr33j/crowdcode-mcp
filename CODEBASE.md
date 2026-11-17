@@ -105,6 +105,24 @@ jobs:
 sweep ages. `GET /api/index/resource?url=&method=` returns one resource with
 its probes and changes. Schema: `supabase/services-index.sql`.
 
+## `src/crowdcode/reliability.py`
+
+`reliability-v1` (SRI-115 ticket 6; contract C3): one state per tracked
+service, `reliable`, `unverified` or `unreliable`, with plain-sentence reasons.
+The thresholds are constants at the top of the module and nowhere else.
+`evaluate(inputs)` is pure and reads only the published `inputs` document, so
+a state can be recomputed from what the API returns. `gather` reads the
+evidence (`index_resource_signals`, `index_changes`, `index_observations`,
+attested reviews, `service_identifiers` payees, `service_blocks`);
+`recompute` stores the answers in `service_reliability`, writing a row only
+when it changed. The cron job `reliability` runs it hourly after the probes;
+an attested review recomputes its service in the background. Routes:
+`GET /api/services/{id}/reliability`, `GET /api/reliability?url=&method=`
+(index identity first, then the registry's endpoint aliases) and
+`GET /api/reliability?state=`. Operators block and unblock with
+`scripts/block_service.py` (audited in `service_block_audit`). Schema:
+`supabase/reliability.sql`.
+
 ## `src/crowdcode/search_eval.py`
 
 recall@3 and MRR for the evaluation set in `tests/search_eval/cases.json`,

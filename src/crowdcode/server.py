@@ -27,6 +27,7 @@ from crowdcode.db import connect
 from crowdcode.hosted_services import SyncError, parse_services, sync_hosted_services
 from crowdcode.demand import RequestExtras, validate_request_extras, validate_request_fields
 from crowdcode.observations import submit_observation
+from crowdcode import reliability
 from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
 from crowdcode.discovery import find_services, warm_search
 from crowdcode.listing_metadata import fill_in_background
@@ -1135,6 +1136,10 @@ def review_service(
         # A review names an endpoint, not what it does: read that from the
         # service's own 402, OpenAPI or landing page, off the request path.
         fill_in_background([service["id"]])
+    if attested is not None:
+        # A judged purchase is delivery evidence (C3): refresh the service's
+        # reliability now rather than at the next hourly recompute.
+        reliability.recompute_in_background(connect, service["id"])
     return _review_accepted(service["id"], row["id"], verification, service_created,
                             weight_exclusion, attested is not None)
 
@@ -1697,6 +1702,67 @@ async def index_resource(request: Request) -> JSONResponse:
     return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
 
 
+_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+
+def _service_reliability_payload(service_id: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        return reliability.for_service(conn, service_id)
+
+
+async def service_reliability(request: Request) -> JSONResponse:
+    """`GET /api/services/{service_id}/reliability`: reliability-v1's state, reasons and inputs (C3)."""
+    service_id = request.path_params["service_id"]
+    try:
+        payload = await run_in_threadpool(_service_reliability_payload, service_id)
+    except Exception:
+        return _unexpected_json_error("service_reliability")
+    if payload is None:
+        return JSONResponse({"ok": False, "error_code": "not_found", "error": "no such service"}, status_code=404)
+    return JSONResponse({"ok": True, **payload}, headers={"Cache-Control": "public, max-age=60"})
+
+
+def _reliability_by_state_payload(state: str, limit: int, offset: int) -> dict[str, Any]:
+    with connect() as conn:
+        return reliability.by_state(conn, state, limit, offset)
+
+
+async def reliability_lookup(request: Request) -> JSONResponse:
+    """`GET /api/reliability?url=<endpoint>&method=<M>` (what the gateway asks before paying), or
+    `GET /api/reliability?state=reliable[&limit=&offset=]` (the bulk list) (C3)."""
+    params = request.query_params
+    url = (params.get("url") or "").strip()
+    state = (params.get("state") or "").strip().lower()
+    method = (params.get("method") or "").strip().upper() or None
+    if url:
+        if len(url) > 2000 or (method and method not in _HTTP_METHODS):
+            return JSONResponse({"ok": False, "error_code": "invalid_request",
+                                 "error": "url must be at most 2000 characters; method must be an HTTP method"},
+                                status_code=400)
+        try:
+            payload = await run_in_threadpool(reliability.cached_for_url, connect, url, method)
+        except Exception:
+            return _unexpected_json_error("reliability_lookup")
+        return JSONResponse({"ok": True, **payload}, headers={"Cache-Control": "public, max-age=30"})
+    if state:
+        if state not in reliability.STATES:
+            return JSONResponse({"ok": False, "error_code": "invalid_request",
+                                 "error": "state must be reliable, unverified or unreliable"}, status_code=400)
+        try:
+            limit = min(max(int(params.get("limit") or 500), 1), 1000)
+            offset = max(int(params.get("offset") or 0), 0)
+        except ValueError:
+            return JSONResponse({"ok": False, "error_code": "invalid_request",
+                                 "error": "limit and offset must be integers"}, status_code=400)
+        try:
+            payload = await run_in_threadpool(_reliability_by_state_payload, state, limit, offset)
+        except Exception:
+            return _unexpected_json_error("reliability_list")
+        return JSONResponse(payload, headers={"Cache-Control": "public, max-age=60"})
+    return JSONResponse({"ok": False, "error_code": "invalid_request", "error": "pass url (and method) or state"},
+                        status_code=400)
+
+
 async def service_proposals(_: Request) -> JSONResponse:
     try:
         payload = await run_in_threadpool(_service_proposals_payload)
@@ -1805,6 +1871,8 @@ def create_app() -> Starlette:
             Route("/api/services/top", top_services, methods=["GET"]),
             Route("/api/services/find", find_services_route, methods=["POST"]),
             Route("/api/observations", observations_route, methods=["POST"]),
+            Route("/api/reliability", reliability_lookup, methods=["GET"]),
+            Route("/api/services/{service_id}/reliability", service_reliability, methods=["GET"]),
             Route("/api/services/{service_id}", service_detail, methods=["GET"]),
             Route("/api/knowledge/evidence", knowledge_evidence, methods=["GET"]),
             Route("/api/internal/hosted-services/sync", hosted_services_sync, methods=["POST"]),
