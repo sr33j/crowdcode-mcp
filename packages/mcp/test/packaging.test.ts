@@ -61,3 +61,30 @@ describe("skill and plugin packaging", () => {
     });
   });
 });
+
+describe("installing crowdcode-mcp never depends on a native download", () => {
+  // On 2026-11-17 onnxruntime-node 1.21.0's install script started failing
+  // on Linux x64 (its CUDA asset answers 404), and `npm i crowdcode-mcp`
+  // failed with it. The model stack is optional: if its install fails, npm
+  // drops it and the engine redacts with the deterministic layers only.
+  it("keeps the PII model stack optional and the redaction engine bundled", async () => {
+    const pkg = JSON.parse(await text("packages/mcp/package.json"));
+    expect(pkg.dependencies).not.toHaveProperty("@huggingface/transformers");
+    expect(pkg.dependencies).not.toHaveProperty("@crowdcode/redaction");
+    expect(pkg.optionalDependencies).toHaveProperty("@huggingface/transformers");
+    expect(pkg.dependencies).toHaveProperty("@nationaldesignstudio/rampart");
+    const redaction = JSON.parse(await text("packages/redaction/package.json"));
+    expect(redaction.dependencies).not.toHaveProperty("@huggingface/transformers");
+    expect(redaction.optionalDependencies).toHaveProperty("@huggingface/transformers");
+  });
+
+  it("imports transformers at runtime instead of bundling it", async () => {
+    const { readdir } = await import("node:fs/promises");
+    const dist = resolve(packageRoot, "dist");
+    const files = (await readdir(dist)).filter((name) => name.endsWith(".js"));
+    const code = (await Promise.all(files.map((name) => readFile(resolve(dist, name), "utf8")))).join("\n");
+    expect(code).not.toMatch(/from "@crowdcode\/redaction"|import\("@crowdcode\/redaction"\)/);
+    expect(files.some((name) => name.includes("transformers"))).toBe(false);
+    expect(code).toContain("RedactionEngine");
+  });
+});

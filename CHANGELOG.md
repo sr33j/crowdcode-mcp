@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`@crowdcode/redaction` 0.1.1 (in the repository, not published):** `@huggingface/transformers` is an optional dependency, `^4.3.2` (`onnxruntime-node` 1.30.0), and stays external in its build. The redactor service builds from the workspace; on Render it also sets `ONNXRUNTIME_NODE_INSTALL_CUDA=skip`, because from 2026-11-17 its builds failed on `onnxruntime-node` 1.21.0's CUDA download (a GitHub 404).
+
 - **Search ranks media and models by quality first** (C13 amendment, 2026-11-17).
   - **`quality_first`:** a query for video, image or audio generation or editing, or for an LLM, ranks models by quality: the leaderboard prior, then judged quality. Sellers come next by expected delivery, then by price, which breaks ties only within a ±0.25 quality band. Every seller of the artifact is a candidate, matched or not.
     - Only offerings that return the artifact count: classified there, or selling a model of that modality.
