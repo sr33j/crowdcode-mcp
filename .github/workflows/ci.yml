@@ -90,6 +90,6 @@ jobs:
       - run: npm ci
       - run: npm run build -w @crowdcode/redaction
       - name: crowdcode-mcp tests with the conformance session
-        run: npm test -w crowdcode-mcp
+        run: npm test
         env:
           CROWDCODE_MOCK_PYTHON: ${{ runner.temp }}/mock-venv/bin/python

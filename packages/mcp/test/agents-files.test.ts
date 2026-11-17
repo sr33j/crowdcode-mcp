@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OwnerApi } from "../src/agents/client.js";
 import { ApiError } from "../src/agents/client.js";
@@ -126,9 +126,11 @@ describe("download limits and failures", () => {
 
 describe("destination folder", () => {
   it("defaults to ./crowdcode-files/<agent>/ and resolves dest against the working directory", () => {
-    expect(planDest("", "../My Agent", "/work")).toBe("/work/crowdcode-files/My Agent");
-    expect(planDest("", "", "/work")).toBe("/work/crowdcode-files/agent");
-    expect(planDest("out/files", "scout", "/work")).toBe("/work/out/files");
-    expect(planDest("/tmp/elsewhere", "scout", "/work")).toBe("/tmp/elsewhere");
+    // path.resolve, so the expectations hold on Windows too (where "/work" becomes "D:\\work").
+    const work = resolve("/work");
+    expect(planDest("", "../My Agent", work)).toBe(resolve(work, "crowdcode-files", "My Agent"));
+    expect(planDest("", "", work)).toBe(resolve(work, "crowdcode-files", "agent"));
+    expect(planDest("out/files", "scout", work)).toBe(resolve(work, "out", "files"));
+    expect(planDest(resolve("/tmp/elsewhere"), "scout", work)).toBe(resolve("/tmp/elsewhere"));
   });
 });
