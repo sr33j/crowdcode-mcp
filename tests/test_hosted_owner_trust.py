@@ -85,7 +85,7 @@ def test_community_reviews_never_earn_trust_or_move_a_score(db):
     replay_scores(conn, NOW)
     row = conn.execute("select score, n_eff from services where id=%s", (svc,)).fetchone()
     assert row["n_eff"] == 1.0
-    assert abs(row["score"] - (5 + 2 * 3.0) / 3) < 1e-9
+    assert abs(row["score"] - 3.75) < 1e-9
     assert load_trust_map(conn).get(OTHER_OWNER) is None
 
 
@@ -124,10 +124,11 @@ def test_a_pre_cutover_score_survives_the_sweep(db):
     row = conn.execute(
         "select score, n_eff, n_eff_legacy, n_eff_hosted from services where id=%s", (svc,)
     ).fetchone()
-    # seed 1.0 x onchain 2.0, shrunk by the kappa=2 prior: v2's exact number.
+    # seed 1.0 x onchain 2.0: v2's exact shrunk mean, 4.0, survives as the
+    # posterior mean; v4 publishes P(>3) of Beta(3, 1), 0.875, as 4.375.
     assert row["n_eff_legacy"] == 2.0
     assert row["n_eff_hosted"] == 0.0
-    assert abs(row["score"] - 4.0) < 1e-9
+    assert abs(row["score"] - 4.375) < 1e-9
 
 
 def test_the_frozen_wallet_snapshot_is_never_written_again(db):
@@ -184,7 +185,7 @@ def test_a_post_cutover_review_can_never_claim_the_legacy_rules(db):
     replay_scores(conn, NOW)
     row = conn.execute("select score, n_eff from services where id=%s", (svc,)).fetchone()
     assert row["n_eff"] == 0.0
-    assert row["score"] == 3.0
+    assert row["score"] == 2.5
     assert conn.execute(
         "select count(*) as n from reviews where weight_basis='legacy'"
     ).fetchone()["n"] == 0

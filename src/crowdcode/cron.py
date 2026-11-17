@@ -48,9 +48,13 @@ from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_en
 from crowdcode.reputation import (
     ensure_owner,
     ensure_user,
+    load_failures,
     load_legacy_trust,
+    load_wallet_trust,
     recompute_service_score,
+    store_score,
     sync_seed_owners,
+    wallet_owners,
 )
 from crowdcode.scoring import (
     ReviewRow,
@@ -219,6 +223,13 @@ def replay_scores(conn: Any, now: datetime) -> None:
     # The frozen pre-cutover wallet trust. The sweep reads it and never writes
     # it: legacy scores have to reproduce, so the snapshot cannot move.
     legacy_trust = load_legacy_trust(conn)
+    # On-chain votes (v4): which hosted owner each paying wallet belongs to,
+    # and the frozen wallet trust that can only remove their weight.
+    payer_owners = wallet_owners(conn)
+    wallet_trust = load_wallet_trust(conn, {
+        row["reviewer_wallet"] for row in rows
+        if row.get("weight_basis") == "onchain" and row["reviewer_wallet"]
+    })
 
     owners = conn.execute(
         "select owner_ref, raw_trust, is_seed, slashed_at from review_owners"
@@ -258,8 +269,10 @@ def replay_scores(conn: Any, now: datetime) -> None:
             owner_ref=row.get("owner_ref"),
             weight_exclusion=row.get("weight_exclusion"),
             weight_basis=row.get("weight_basis") or "none",
+            payer_owner_ref=payer_owners.get((row["reviewer_wallet"] or "").lower())
+            if row.get("weight_basis") == "onchain" else None,
         )
-        # Legacy rows and unweighted rows alike belong to the service's stored
+        # Legacy, on-chain and unweighted rows alike belong to the service's stored
         # history but create no trust event. Legacy rows still carry their
         # frozen weight into every score computed below; unweighted ones carry
         # nothing.
@@ -285,9 +298,10 @@ def replay_scores(conn: Any, now: datetime) -> None:
                 event_at,
                 exclude_owner=owner_ref,
                 legacy_trust=legacy_trust,
+                wallet_trust=wallet_trust,
             )
             raw[owner_ref] = updated_raw_trust(
-                raw[owner_ref], loo.score, bucket.rating
+                raw[owner_ref], loo.mean, bucket.rating
             )
             trust[owner_ref] = TrustRow(raw_trust=raw[owner_ref])
         per_service.setdefault(service_id, []).extend(event_reviews)
@@ -310,11 +324,13 @@ def replay_scores(conn: Any, now: datetime) -> None:
     # Recompute every service's stored score with decay at `now` — this is
     # also what keeps decay staleness bounded between reviews.
     services = conn.execute("select id, score, n_eff from services").fetchall()
+    failures = load_failures(conn)
     for service in services:
         result = compute_score(
-            per_service.get(service["id"], []), trust, now, legacy_trust=legacy_trust
+            per_service.get(service["id"], []), trust, now, legacy_trust=legacy_trust,
+            wallet_trust=wallet_trust, failures=failures.get(service["id"], []),
         )
-        if (service["id"] not in per_service and result.n_eff == 0
+        if (service["id"] not in per_service and service["id"] not in failures and result.n_eff == 0
                 and float(service["n_eff"]) == 0 and float(service["score"]) == result.score):
             # Never reviewed and already at the prior: thousands of these are
             # rows the services index created (crowdcode.index), and an hourly
@@ -325,16 +341,7 @@ def replay_scores(conn: Any, now: datetime) -> None:
                 f"sweep: score drift service={service['id']} "
                 f"stored={float(service['score']):.4f} recomputed={result.score:.4f}"
             )
-        conn.execute(
-            """
-            update services
-            set score = %s, n_eff = %s, n_eff_legacy = %s, n_eff_hosted = %s,
-                score_updated_at = %s
-            where id = %s
-            """,
-            (result.score, result.n_eff, result.n_eff_legacy, result.n_eff_hosted,
-             now, service["id"]),
-        )
+        store_score(conn, service["id"], result, now)
 
 
 def _summary_input_reviews(
@@ -378,6 +385,9 @@ def _summary_input_reviews(
             weight_exclusion=row.get("weight_exclusion"),
             weight_basis=row.get("weight_basis") or "none",
         )
+        if review.onchain:
+            # A paid on-chain vote that passed the write-path guards (v4).
+            return True
         holder = (
             (legacy_trust or {}).get(review.wallet)
             if review.legacy

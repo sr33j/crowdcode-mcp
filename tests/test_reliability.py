@@ -191,6 +191,26 @@ def test_the_one_score_is_delivery_times_quality():
             "Artificial Analysis video arena (2026-11-17)") in r["reasons"]
 
 
+def test_with_v4_inputs_the_one_score_is_the_review_score_not_a_product():
+    # The owner's question (SRI-118): one verified 5-star review showed as
+    # 2.25, delivery 0.75 (a Beta(3, 1) Bazaar prior) x quality 3.0. Outside
+    # popularity and delivery decide the tier, never the score.
+    r = evaluate(offering(
+        outside={"bazaar_payers_30d": 5, "bazaar_calls_30d": 6, "curated": False},
+        endpoints=[endpoint(bazaar_payers_30d=5, bazaar_calls_30d=6)],
+        quality={"v31_score": 11 / 3, "n_eff": 1, "prior_rating": 3, "prior_source": "the default prior",
+                 "review_score": 3.75, "avg_rating_weighted": 5.0, "p_above_3": 0.75}))
+    assert r["score"] == pytest.approx(3.75)
+    assert r["posterior"]["mean"] == pytest.approx(0.75)
+    assert ("score 3.75 = the lower of the weighted average rating 5.00 and 5 × P(better than a 3) = 5 × 0.75; "
+            "the delivery estimate decides the tier only") in r["reasons"]
+    unrated = evaluate(offering(quality={"v31_score": 3.0, "n_eff": 0, "prior_rating": 3,
+                                         "prior_source": "the default prior", "review_score": 2.5,
+                                         "avg_rating_weighted": None, "p_above_3": 0.5}))
+    assert unrated["score"] == pytest.approx(2.5)
+    assert any(reason.startswith("unrated:") for reason in unrated["reasons"])
+
+
 # --- bad ---------------------------------------------------------------------------------
 
 

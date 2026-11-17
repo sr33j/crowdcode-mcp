@@ -135,6 +135,91 @@ def load_trust_map(
     }
 
 
+def wallet_owners(conn: psycopg.Connection, wallets: Iterable[str] | None = None) -> dict[str, str]:
+    """Hosted owners known for wallets: an agent wallet that bought through
+    the gateway is named, with its owner, by its verified receipts. Keyed by
+    lowercase address. This is how an on-chain vote from a hosted agent's
+    wallet is recognized as its owner's (docs/SCORING.md §3.2)."""
+    sql = """
+        select lower(reviewer_wallet) as wallet, min(owner_ref) as owner_ref
+        from reviews
+        where verified_source = 'hosted_receipt' and owner_ref is not null
+          and reviewer_wallet is not null
+    """
+    params: tuple[Any, ...] = ()
+    if wallets is not None:
+        wanted = sorted({w.lower() for w in wallets if w})
+        if not wanted:
+            return {}
+        sql += " and lower(reviewer_wallet) = any(%s)"
+        params = (wanted,)
+    sql += " group by 1"
+    return {row["wallet"]: row["owner_ref"] for row in conn.execute(sql, params).fetchall()}
+
+
+def payee_owner(conn: psycopg.Connection, payee: str | None) -> str | None:
+    """The hosted owner a payee belongs to, when CrowdCode knows it: named as
+    payee_owner_ref by a gateway receipt, or the payee is itself an agent
+    wallet that bought through the gateway."""
+    if not payee:
+        return None
+    row = conn.execute(
+        """
+        select payee_owner_ref as owner_ref from reviews
+        where payee_owner_ref is not null and lower(payment_target_ref) = lower(%s)
+        limit 1
+        """,
+        (payee,),
+    ).fetchone()
+    if row is not None:
+        return row["owner_ref"]
+    return wallet_owners(conn, [payee]).get(payee.lower())
+
+
+def onchain_weight_exclusion(
+    conn: psycopg.Connection,
+    *,
+    wallet: str,
+    payee: str | None,
+    amount: int | None,
+    min_amount_atomic: int,
+) -> str | None:
+    """Why a paid review verified on chain carries no weight, or None
+    (docs/SCORING.md §3.2). The payer must not be the payee, nor a wallet of
+    the hosted account that owns the payee, and must have paid at least
+    `min_amount_atomic`. One vote per wallet is applied by the score itself."""
+    if amount is None or amount < min_amount_atomic:
+        return "dust_payment"
+    if not payee:
+        return "community"
+    if wallet.lower() == payee.lower():
+        return "self_dealing"
+    payer = wallet_owners(conn, [wallet]).get(wallet.lower())
+    if payer is not None and payer == payee_owner(conn, payee):
+        return "self_dealing"
+    return None
+
+
+def load_wallet_trust(conn: psycopg.Connection, wallets: set[str]) -> dict[str, TrustRow]:
+    """Frozen wallet trust (wallet_users) keyed by lowercase address, for the
+    on-chain votes it can only remove weight from."""
+    if not wallets:
+        return {}
+    rows = conn.execute(
+        """select lower(wallet_address) as wallet, raw_trust, is_seed, slashed_at
+           from wallet_users where lower(wallet_address) = any(%s)""",
+        (sorted({w.lower() for w in wallets}),),
+    ).fetchall()
+    return {
+        row["wallet"]: TrustRow(
+            raw_trust=float(row["raw_trust"]),
+            is_seed=bool(row["is_seed"]),
+            slashed=row["slashed_at"] is not None,
+        )
+        for row in rows
+    }
+
+
 def load_service_reviews(
     conn: psycopg.Connection, service_id: str
 ) -> list[ReviewRow]:
@@ -148,6 +233,9 @@ def load_service_reviews(
         """,
         (service_id,),
     ).fetchall()
+    owners = wallet_owners(
+        conn, {r["reviewer_wallet"] for r in rows if r.get("weight_basis") == "onchain" and r["reviewer_wallet"]}
+    )
     return [
         ReviewRow(
             wallet=row["reviewer_wallet"],
@@ -159,9 +247,66 @@ def load_service_reviews(
             owner_ref=row.get("owner_ref"),
             weight_exclusion=row.get("weight_exclusion"),
             weight_basis=row.get("weight_basis") or "none",
+            payer_owner_ref=owners.get((row["reviewer_wallet"] or "").lower()),
         )
         for row in rows
     ]
+
+
+# Signed failed purchases that count against a service (crowdcode.reliability
+# SELLER_FAILURES, kept in step): each is a 1-star observation (v4).
+FAILURE_DETAILS = ("seller_error", "seller_rejected", "no_receipt", "authorization_expired")
+
+
+def load_failures(conn: psycopg.Connection, service_ids: list[str] | None = None) -> dict[str, list[datetime]]:
+    """Times of signed failed purchases, by service. Empty when the services
+    index is not installed (an older schema)."""
+    sql = """
+        select r.service_id, o.at
+        from index_observations o
+        join index_resources r on r.id = o.resource_id
+        where o.kind = 'purchase' and not o.ok and o.detail = any(%s)
+          and r.service_id is not null
+    """
+    params: list[Any] = [list(FAILURE_DETAILS)]
+    if service_ids is not None:
+        sql += " and r.service_id = any(%s)"
+        params.append(service_ids)
+    out: dict[str, list[datetime]] = {}
+    installed = conn.execute(
+        "select to_regclass('index_observations') is not null and to_regclass('index_resources') is not null as ok"
+    ).fetchone()
+    if not installed or not installed.get("ok"):
+        return out
+    for row in conn.execute(sql, params).fetchall():
+        out.setdefault(row["service_id"], []).append(row["at"])
+    return out
+
+
+def _score_inputs(conn: psycopg.Connection, reviews: list[ReviewRow], extra_owners: set[str] = set()):
+    owners = {r.owner_ref for r in reviews if r.weighted and r.owner_ref}
+    owners |= {r.payer_owner_ref for r in reviews if r.onchain and r.payer_owner_ref}
+    trust_map = load_trust_map(conn, owners | extra_owners)
+    legacy_trust = load_legacy_trust(conn, {r.wallet for r in reviews if r.legacy and r.wallet})
+    wallet_trust = load_wallet_trust(conn, {r.wallet for r in reviews if r.onchain and r.wallet})
+    return trust_map, legacy_trust, wallet_trust
+
+
+def store_score(conn: psycopg.Connection, service_id: str, result: ScoreResult, now: datetime) -> None:
+    conn.execute(
+        """
+        update services
+        set score = %s, score_mean = %s, n_eff = %s, n_eff_legacy = %s,
+            n_eff_hosted = %s, n_eff_onchain = %s, n_eff_failures = %s,
+            p_above_3 = %s, avg_rating_weighted = %s, score_alpha = %s,
+            score_beta = %s, score_updated_at = %s
+        where id = %s
+        """,
+        (result.score, result.mean, result.n_eff, result.n_eff_legacy,
+         result.n_eff_hosted, result.n_eff_onchain, result.n_eff_failures,
+         result.p_above_3, result.avg_rating_weighted, result.alpha, result.beta,
+         now, service_id),
+    )
 
 
 def recompute_service_score(
@@ -169,23 +314,11 @@ def recompute_service_score(
 ) -> ScoreResult:
     """Recompute and store the canonical (score, n_eff) for one service."""
     reviews = load_service_reviews(conn, service_id)
-    trust_map = load_trust_map(
-        conn, {r.owner_ref for r in reviews if r.weighted and r.owner_ref}
-    )
-    legacy_trust = load_legacy_trust(
-        conn, {r.wallet for r in reviews if r.legacy and r.wallet}
-    )
-    result = compute_score(reviews, trust_map, now, legacy_trust=legacy_trust)
-    conn.execute(
-        """
-        update services
-        set score = %s, n_eff = %s, n_eff_legacy = %s, n_eff_hosted = %s,
-            score_updated_at = %s
-        where id = %s
-        """,
-        (result.score, result.n_eff, result.n_eff_legacy, result.n_eff_hosted,
-         now, service_id),
-    )
+    trust_map, legacy_trust, wallet_trust = _score_inputs(conn, reviews)
+    result = compute_score(reviews, trust_map, now, legacy_trust=legacy_trust,
+                           wallet_trust=wallet_trust,
+                           failures=load_failures(conn, [service_id]).get(service_id, []))
+    store_score(conn, service_id, result, now)
     return result
 
 
@@ -215,16 +348,12 @@ def apply_review_trust_update(
         return None
 
     reviews = load_service_reviews(conn, service_id)
-    trust_map = load_trust_map(
-        conn, {r.owner_ref for r in reviews if r.weighted and r.owner_ref} | {owner_ref}
-    )
-    legacy_trust = load_legacy_trust(
-        conn, {r.wallet for r in reviews if r.legacy and r.wallet}
-    )
+    trust_map, legacy_trust, wallet_trust = _score_inputs(conn, reviews, {owner_ref})
     loo = compute_trust_consensus(
-        reviews, trust_map, now, exclude_owner=owner_ref, legacy_trust=legacy_trust
+        reviews, trust_map, now, exclude_owner=owner_ref, legacy_trust=legacy_trust,
+        wallet_trust=wallet_trust,
     )
-    new_raw = updated_raw_trust(float(owner["raw_trust"]), loo.score, rating)
+    new_raw = updated_raw_trust(float(owner["raw_trust"]), loo.mean, rating)
     if new_raw != float(owner["raw_trust"]):
         conn.execute(
             "update review_owners set raw_trust = %s, trust_updated_at = %s where owner_ref = %s",
