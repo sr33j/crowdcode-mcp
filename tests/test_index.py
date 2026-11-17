@@ -152,6 +152,23 @@ def test_probe_bodies_are_never_empty():
         assert request_body(method, None, None)
 
 
+def test_synthesized_bodies_use_the_sellers_own_hints():
+    # BlockRun's Bazaar listing: no example body, descriptions in info.bodyFields.
+    blockrun = {
+        "info": {"method": "POST", "bodyFields": {
+            "model": {"type": "string", "description": "AI model ID (e.g., gpt-4o-mini, claude-haiku-4.5)"},
+            "messages": {"type": "array", "description": "Array of chat messages with role and content"}}},
+        "schema": {"properties": {"body": {"type": "object", "required": ["model", "messages"],
+                                           "properties": {"model": {"type": "string"}, "messages": {"type": "array"}}}}},
+    }
+    assert json.loads(request_body("POST", None, blockrun)) == {
+        "model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello"}]}
+    nested = {"schema": {"properties": {"body": {"required": ["items"], "properties": {"items": {
+        "type": "array", "items": {"type": "object", "required": ["url"], "properties": {"url": {"type": "string",
+        "example": "https://example.com"}}}}}}}}}
+    assert json.loads(request_body("POST", None, nested)) == {"items": [{"url": "https://example.com"}]}
+
+
 def x402_body(amount="10000", payee=PAYEE_A):
     return {"x402Version": 2, "accepts": [
         {"scheme": "exact", "network": "eip155:8453", "amount": amount, "asset": USDC_BASE, "payTo": payee}]}
@@ -169,6 +186,8 @@ def test_challenges_are_read_from_body_header_or_mpp():
     mpp = read_challenge(402, httpx.Headers({"www-authenticate": f'Payment id="1", method="tempo", intent="charge", request="{request}"'}), b"")
     assert mpp.ok and mpp.network == TEMPO and mpp.payee == PAYEE_B and mpp.protocol == "mpp"
     assert read_challenge(404, httpx.Headers({}), b"").error_code == "http_404"
+    assert read_challenge(400, httpx.Headers({}), b"{}").error_code == "probe_body_rejected"
+    assert read_challenge(422, httpx.Headers({}), b"{}").error_code == "probe_body_rejected"
     assert read_challenge(200, httpx.Headers({}), b"{}").error_code == "no_challenge"
     redirect = read_challenge(301, httpx.Headers({"location": "https://new.example/x"}), b"")
     assert redirect.error_code == "redirect" and redirect.detail == "https://new.example/x"
