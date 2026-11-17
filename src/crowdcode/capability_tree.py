@@ -1076,7 +1076,8 @@ def _pick_line(pick: dict[str, Any], *, with_endpoint: bool, with_reason: bool =
     if with_endpoint:
         line += f" — {pick['method']} {pick['endpoint']}"
     if with_reason:
-        line += f". Why: {pick['reason']}"
+        # The deciding clause; the rest of the reason is in format=full and on /reliability.
+        line += f". Why: {str(pick['reason']).split(';')[0]}"
     return line
 
 
@@ -1164,15 +1165,34 @@ def _prior_text(prior: dict[str, Any] | None) -> str:
     return f"rated {prior['rating']:.1f}/5, #{prior.get('rank')} on {board} ({prior.get('as_of')})"
 
 
+def _host(endpoint: str) -> str:
+    host = re.sub(r"^https?://", "", endpoint or "").split("/", 1)[0]
+    return host.removeprefix("www.")
+
+
+def _more_line(models: list[dict[str, Any]], limit: int = 170) -> str:
+    """The models that did not fit, by name, as many as `limit` characters allow."""
+    names, used = [], 0
+    for m in models:
+        if used + len(m["label"]) + 2 > limit:
+            break
+        names.append(m["label"])
+        used += len(m["label"]) + 2
+    rest = len(models) - len(names)
+    return f"- {len(models)} more: {', '.join(names)}" + (f" and {rest} others" if rest else "")
+
+
 def _model_line(model: dict[str, Any]) -> str:
+    """One line per model: rating, sellers, prices, and the seller to use (by host)."""
     price = model.get("price_range_usd")
     spread = (f"{_money(price[0])}" if price and price[0] == price[1] else
               f"{_money(price[0])}–{_money(price[1])}" if price else "price ?")
     head = model["picks"][0] if model["picks"] else (model["explore"][0] if model["explore"] else None)
-    who = (f"{'best' if model['picks'] else 'try'}: {head['name']} {_money(head.get('price_usd'))} {head['tier']}"
-           if head else "no seller meets the minimums")
-    rated = f", {model['quality_prior']['rating']:.1f}/5" if model.get("quality_prior") else ""
-    return f"- {model['label']} ({model['sellers']} seller{'s' if model['sellers'] != 1 else ''}, {spread}{rated}) {who}"
+    rated = f"{model['quality_prior']['rating']:.1f}/5" if model.get("quality_prior") else "unrated"
+    who = (f"{'best' if model['picks'] else 'try'} {_host(head['endpoint'])} {_money(head.get('price_usd'))} {head['tier']}"
+           if head else "no eligible seller")
+    n = model["sellers"]
+    return f"- {model['label']} ({rated}; {n} seller{'s' if n != 1 else ''}, {spread}): {who}"
 
 
 def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: int, endpoints: bool,
@@ -1194,24 +1214,35 @@ def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: in
         for e in model_view["explore"][:max(candidates, 1)]:
             lines.append(f"Explore: {_explore_line(e, endpoints=endpoints)}. Why: {e['reason']}")
         return lines
-    if leaf.get("models") and models:
+    def model_list() -> list[str]:
+        if not (leaf.get("models") and models):
+            return []
         rated = any(m.get("quality_prior") for m in leaf["models"])
-        lines.append(f"Models ({len(leaf['models'])}; {'best-rated first' if rated else 'no quality priors yet'}; "
-                     f"browse {leaf['id']}.<model> for its sellers):")
-        if leaf.get("ranking") == "quality_first":
-            lines.append("Quality first: use the best model; price only decides between models within 0.25 of it, "
-                         "or under the owner's budget.")
-        lines.extend(_model_line(m) for m in leaf["models"][:models])
+        shown = leaf["models"][:models]
+        more = len(leaf["models"]) - len(shown)
+        return [f"Models ({len(leaf['models'])}; {'best-rated first' if rated else 'no quality priors yet'}; "
+                f"browse {leaf['id']}.<model> for its sellers):",
+                *(_model_line(m) for m in shown),
+                *([_more_line(leaf["models"][len(shown):])] if more > 0 else [])]
+
+    quality = leaf.get("ranking") == "quality_first"
+    if quality:
+        lines.append("Quality first: use the best model; price only decides between models within 0.25 of it, "
+                     "or under the owner's budget.")
+    else:
+        lines.extend(model_list())
     if leaf["picks"]:
         for p in leaf["picks"][:picks]:
             lines.append(f"Pick: {_pick_line(p, with_endpoint=endpoints, with_reason=True)}")
-    elif leaf.get("ranking") == "quality_first":
+    elif quality:
         lines.append("Nothing eligible yet (refused, below the media minimums, or not a generator): "
                      "file request_service rather than substitute.")
     else:
         lines.append("No proven or popular offering yet: explore within the allowance (C12) or file request_service.")
     for e in leaf["explore"][:candidates]:
-        lines.append(f"Explore: {_explore_line(e, endpoints=endpoints)}")
+        lines.append(f"Explore: {_explore_line(e, endpoints=False)}")
+    if quality:
+        lines.extend(model_list())
     if demand and leaf["demand"]:
         names = [f"{d['title']} ({d['requests']} requests)" for d in leaf["demand"][:demand]]
         lines.append(f"Demand ({leaf['demand_count']}): " + "; ".join(names))
@@ -1226,8 +1257,9 @@ def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS
     if not found:
         return None
     node, leaf = found
+    # A leaf view keeps the node's when-not-to-buy and hard rule; the leaf says when to look.
     head = [f"# {node['id']} — {node['label']} (tree v{tree.get('version') or '?'})",
-            f"When to look: {node['when_to_look']}", f"When not to buy: {node['when_not_to_buy']}"]
+            *([] if leaf else [f"When to look: {node['when_to_look']}"]), f"When not to buy: {node['when_not_to_buy']}"]
     rule = node_hard_rule(tree, node)
     if rule:
         head.append(f"Hard rule: {rule}")
@@ -1235,8 +1267,11 @@ def render_entry(tree: dict[str, Any], entry_id: str, budget: int = ENTRY_TOKENS
         return "\n".join([*head, node.get("policy") or FREE_FIRST_POLICY])
     leaves = [leaf] if leaf else node["leaves"]
     # Trim in steps until it fits: fewer exploration lines, demand, picks, endpoints, models.
-    steps = ((3, 3, 3, True, 12), (3, 3, 2, False, 12), (2, 2, 1, False, 10), (1, 2, 1, False, 8),
-             (1, 1, 1, False, 6), (1, 1, 0, False, 4), (1, 0, 0, False, 2))
+    # (picks, exploration, demand, endpoints, models): the pick keeps its endpoint
+    # longest; the model list shrinks a line at a time before it goes.
+    steps = [(3, 3, 3, True, 24), (3, 3, 2, True, 16), (2, 2, 1, True, 14)]
+    steps += [(1, explore, 1, True, n) for n in range(14, 7, -1) for explore in (1,)]
+    steps += [(1, 1, 0, True, n) for n in range(10, 3, -1)] + [(1, 0, 0, False, 4), (1, 0, 0, False, 2)]
     for picks, explore, demand, endpoints, models in steps:
         body = [line for item in leaves
                 for line in _leaf_block(item, picks=picks, candidates=explore, demand=demand,
@@ -2029,7 +2064,9 @@ def entry_payload(row: dict[str, Any], entry_id: str) -> dict[str, Any] | None:
         "text": "",
     }
     envelope = token_bound(json.dumps(payload, ensure_ascii=False)) + 2
-    text = render_entry(tree, (leaf or node)["id"], budget=ENTRY_TOKENS - envelope) or ""
+    # JSON doubles each newline and quote: leave room so the text is trimmed by
+    # the renderer (whole lines) and not cut mid-line below.
+    text = render_entry(tree, (leaf or node)["id"], budget=ENTRY_TOKENS - envelope - 25) or ""
     # JSON escapes newlines and quotes: budget the escaped form.
     while token_bound(json.dumps(text, ensure_ascii=False)) > ENTRY_TOKENS - envelope:
         text = _truncate(text, max(1, token_bound(text) - 20))
