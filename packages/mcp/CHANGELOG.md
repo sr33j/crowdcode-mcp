@@ -33,6 +33,8 @@
 
 ## 0.12.1 — 2026-11-17
 
+(Not published on its own; these changes ship in 0.13.0.)
+
 - **Paid-call records (on by default).** `install` adds a PostToolUse hook for
   Claude Code (`~/.claude/settings.json`) and Codex (`$CODEX_HOME/hooks.json`).
   When any MCP tool's output carries an x402 `payment-response` or MPP
