@@ -195,8 +195,8 @@ class Handler(BaseHTTPRequestHandler):
             me = {"address": f"eip155:8453:{owner}", "agents": mine}
             if self.bearer:
                 me["connection"] = {"client": "hermes", "scopes": ["read", "tasks", "transfers", "withdraw_to_main", "services", "files"],
-                                    "agents": "all", "daily_cap_usd": "5.000000", "spent_today_usd": "0.000000",
-                                    "expires_at": "2026-12-13T00:00:00.000Z"}
+                                    "agents": "all", "daily_cap_usd": None, "spent_today_usd": "0.000000",
+                                    "expires_at": None}
             return self._send(200, me)
         if parts == ["connection", "revoke"] and method == "POST":
             if not self.bearer:

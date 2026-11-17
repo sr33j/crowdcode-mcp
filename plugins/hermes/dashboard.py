@@ -122,8 +122,10 @@ class Dashboard:
             agents = c.get("agents")
             lines = [f"Account  signed in through Hermes; main wallet {str(data.get('main_wallet') or 'not set up yet').split(':')[-1]}",
                      f"         allows {' '.join(c.get('scopes') or [])}; agents {'all' if agents == 'all' else len(agents or [])}; "
-                     f"CrowdCode cap {_usd(c.get('daily_cap_usd'))}/day, {_usd(c.get('spent_today_usd'))} used; "
-                     f"until {str(c.get('expires_at') or '')[:10]}"]
+                     # null = no cap / until disconnected (the default for new connections)
+                     + (f"no daily cap, {_usd(c.get('spent_today_usd'))} spent today; " if c.get('daily_cap_usd') is None
+                        else f"CrowdCode cap {_usd(c.get('daily_cap_usd'))}/day, {_usd(c.get('spent_today_usd'))} used; ")
+                     + ("until you disconnect it" if not c.get('expires_at') else f"until {str(c.get('expires_at'))[:10]}")]
             lines.append(f"Today    {_usd(data['spent_today_usd'])} of {_usd(data['daily_cap_usd'])} local cap used; "
                          + ("asks before every money move" if not data['approve_above_usd'] else f"asks at {_usd(data['approve_above_usd'])} or more"))
             return lines

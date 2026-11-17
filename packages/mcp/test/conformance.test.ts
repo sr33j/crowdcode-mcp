@@ -219,6 +219,7 @@ describe.skipIf(!PYTHON || !existsSync(PYTHON))("spec/conformance.json against t
     await login({ baseUrl: mock.url, home: env.CROWDCODE_HOME!, openBrowser: browser, log: () => undefined });
     const account = await dashboard.run([]);
     expect(account.text).toContain("Account  signed in with crowdcode-mcp; main wallet 0x37A1E4ef2fE11b6ec9DA1f2b2d7A55aE0f9A7B31");
+    expect(account.text).toContain("no daily cap, $0.00 spent today; until you disconnect it");
     expect(account.text).toContain("scout");
     expect(account.text).toContain("scout/scout-svc");
     const files = await dashboard.run(["files", "scout"]);

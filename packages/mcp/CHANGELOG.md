@@ -1,5 +1,11 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.3 — 2026-11-17
+
+- Connections made on crowdcode.app no longer have a daily cap or an expiry
+  unless one was asked for. They last until you disconnect them. The
+  dashboard now says "no daily cap" and "until you disconnect it" in that case.
+
 ## 0.13.2 — 2026-11-17
 
 - `logout` revokes the sign-in even after the hour-long access token has
