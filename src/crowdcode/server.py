@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hmac
 import json
 import logging
@@ -22,7 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from crowdcode.advertised import learn_advertised_payee
+from crowdcode.advertised import Offer, learn_advertised_payee
 from crowdcode.agent_listings import agent_service_slug, refresh_in_background
 from crowdcode.db import connect
 from crowdcode.hosted_services import SyncError, parse_services, sync_hosted_services
@@ -33,12 +34,15 @@ from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_requ
 from crowdcode.discovery import find_services, warm_search
 from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
+    MACHINE_PAYMENT_PROVIDERS,
     ServiceIdentity,
     build_identity,
     create_service_from_identity,
+    register_advertised_payees,
     register_machine_payment_alias,
     resolve_service,
 )
+from crowdcode.payee_hints import PayeeHint, payee_hint
 from crowdcode.payments import (
     LEVEL_RESPONSE_ATTESTED,
     REASON_HASH_RE,
@@ -788,9 +792,11 @@ def review_service(
     Review text is private: CrowdCode publishes only counts, scores and a
     generated summary (pros, cons, things to watch out for), never the text.
 
-    When claiming payment, use the actual settlement reference and payee.
-    x402 Base/Monad USDC and mppx Tempo claims require a verified on-chain transfer
-    from reviewer_wallet to the service payee. x402 Solana USDC is referenced as
+    When claiming payment, use the actual settlement reference and, when you
+    know it, the payee. x402 Base/Monad USDC and mppx Tempo claims require a
+    verified on-chain transfer from reviewer_wallet to the service payee. If
+    payment_target_ref is omitted, the payee is the service's registered one
+    or one CrowdCode's index or the endpoint's own 402 shows it collects at. x402 Solana USDC is referenced as
     x402:solana:<base58 signature> with the Solana payee as payment_target_ref;
     it counts as verified only with payer_signature, the Solana payer's base58
     ed25519 signature over the payer link message (spec/CANONICAL_PAYLOAD.md),
@@ -832,6 +838,10 @@ def review_service(
         return {"accepted": False, "reason": "reason is required"}
 
     _learn_payees(identity)
+    # A paid review that names no payee is checked against the payees
+    # CrowdCode itself knows for the service (SRI-118). Looked up before the
+    # connection below, because it may ask the endpoint's own 402.
+    hint = _payee_hint(identity) if payment_reference is not None else None
     with connect() as conn:
         resolved = resolve_service(conn, identity)
         if resolved.error:
@@ -843,6 +853,10 @@ def review_service(
         if service is not None:
             assert resolved.identity is not None
             effective_identity = resolved.identity
+        if hint is not None and hint.service_id is not None and (
+            service is None or hint.service_id != service["id"]
+        ):
+            hint = None  # resolution changed between the two lookups
 
         verification = verify_review_payment(
             identity=effective_identity,
@@ -857,8 +871,18 @@ def review_service(
             signature_scheme=signature_scheme,
             payer_signature=payer_signature,
             payer_wallet=payer_wallet,
+            extra_payees=hint.payees if hint else (),
+            fallback_provider=hint.provider if hint else None,
         )
         if not verification.ok:
+            logger.info(json.dumps({
+                "event": "review_rejected",
+                "error_code": verification.error_code or "payment_rejected",
+                "service_id": service["id"] if service else None,
+                "api_endpoint": effective_identity.api_endpoint,
+                "payee_named": identity.payment_target_ref is not None,
+                "payees_known": len(hint.payees) if hint else 0,
+            }))
             status = (
                 "unavailable"
                 if verification.retryable
@@ -876,6 +900,17 @@ def review_service(
             }
             if verification.expected_payer_message:
                 failure["expected_payer_message"] = verification.expected_payer_message
+            if verification.checked_payees:
+                failure["checked_payees"] = list(verification.checked_payees)
+            if verification.error_code == "payment_payee_unknown":
+                failure["next_step"] = _next_step(
+                    "name_payee",
+                    "Retry review_service with payment_target_ref set to the payee "
+                    "you paid (x402 accepts[].payTo, or the MPP recipient), and "
+                    "payment_provider x402 or mppx.",
+                    retry={"tool": "review_service", "after_seconds": 0,
+                           "with": {"payment_target_ref": "<payTo of the offer you paid>"}},
+                )
             if verification.missing_wallet:
                 failure["next_step"] = _next_step(
                     "install_wallet",
@@ -914,6 +949,20 @@ def review_service(
                     },
                 )
             return failure
+
+        # The payee the chain proved. A review that named none is stored, and
+        # its service registered, under the payee it actually paid; a second
+        # payee the service's own 402 advertises joins the service's set.
+        learned_payee = None
+        if verification.payee and verification.payment_verified and not _same_payee(
+            verification.payee, effective_identity.payment_target_ref
+        ):
+            learned_payee = verification.payee
+            effective_identity = replace(
+                effective_identity,
+                payment_provider=verification.provider or effective_identity.payment_provider,
+                payment_target_ref=verification.payee,
+            )
 
         # The hosted gateway attestation decides ranking weight. It is checked
         # after the payment claim and before anything is reserved: a forged or
@@ -1017,7 +1066,7 @@ def review_service(
 
         if service is None:
             created = create_service_from_identity(
-                conn, identity, payment_verified=stored_reference is not None
+                conn, effective_identity, payment_verified=stored_reference is not None
             )
             if created.error:
                 return {"accepted": False, "reason": created.error}
@@ -1095,6 +1144,8 @@ def review_service(
             # a registered rail for this service (mppx and x402 can share one
             # payee), so future pair-only lookups resolve directly.
             if not service_created and verification.payment_verified:
+                if learned_payee is not None and hint is not None:
+                    _register_hinted_payee(conn, service["id"], hint, effective_identity)
                 register_machine_payment_alias(
                     conn, service["id"], effective_identity
                 )
@@ -1135,6 +1186,41 @@ def review_service(
         reliability.recompute_in_background(connect, service["id"])
     return _review_accepted(service["id"], row["id"], verification, service_created,
                             weight_exclusion, attested is not None)
+
+
+def _payee_hint(identity: ServiceIdentity) -> PayeeHint | None:
+    try:
+        return payee_hint(connect, identity)
+    except Exception:
+        logger.exception("looking up a review's payee failed")
+        return None
+
+
+def _same_payee(left: str | None, right: str | None) -> bool:
+    if left is None or right is None:
+        return left is right
+    if left.startswith("0x") and right.startswith("0x"):
+        return left.lower() == right.lower()
+    return left == right
+
+
+def _register_hinted_payee(conn: Any, service_id: str, hint: PayeeHint,
+                           identity: ServiceIdentity) -> None:
+    """Add a payee CrowdCode found for the service (and the chain just proved
+    the reviewer paid) to the service's payee set, with its evidence. The
+    first payee of a service with none is registered by
+    register_machine_payment_alias as before; this covers a second one."""
+    payee = identity.payment_target_ref
+    provider = identity.payment_provider
+    if payee is None or provider not in MACHINE_PAYMENT_PROVIDERS or hint.endpoint is None:
+        return
+    source = next((s for p, s in hint.sources.items() if _same_payee(p, payee)), None)
+    if source is None:
+        return
+    register_advertised_payees(
+        conn, service_id, hint.endpoint, [Offer(provider, payee, None)],
+        f"{source}: payee of a verified payment named by no review field",
+    )
 
 
 def _attestation_record(raw: Any) -> dict[str, Any]:
