@@ -57,36 +57,71 @@ class ProbeResult:
     detail: str | None = None
 
 
-def _placeholder(schema: Any) -> Any:
-    kind = schema.get("type") if isinstance(schema, dict) else None
+# "AI model ID (e.g., gpt-4o-mini, claude-haiku-4.5)": the seller's own example.
+_EXAMPLE_IN_TEXT = re.compile(r"\b(?:e\.g\.|eg\.|for example|example)[:,]?\s*[\"'`]?([A-Za-z0-9][\w.\-/:@]*)", re.I)
+# The chat-completions shape most model sellers share; an empty list is refused.
+_MESSAGES = [{"role": "user", "content": "Hello"}]
+
+
+def _placeholder(schema: Any, name: str | None = None, depth: int = 0) -> Any:
+    """A value for one field: its documented example, else something of its type."""
+    if not isinstance(schema, dict):
+        schema = {}
+    for key in ("example", "default", "const"):
+        if key in schema:
+            return schema[key]
+    for key in ("enum", "examples"):
+        if isinstance(schema.get(key), list) and schema[key]:
+            return schema[key][0]
+    kind = schema.get("type")
     if isinstance(kind, list):
         kind = next((k for k in kind if k != "null"), None)
-    if isinstance(schema, dict):
-        for key in ("example", "default", "const"):
-            if key in schema:
-                return schema[key]
-        if isinstance(schema.get("enum"), list) and schema["enum"]:
-            return schema["enum"][0]
-        if isinstance(schema.get("examples"), list) and schema["examples"]:
-            return schema["examples"][0]
-    return {"string": "test", "integer": 1, "number": 1, "boolean": True, "array": [],
-            "object": {}}.get(kind, "test")
+    if name == "messages" and kind in (None, "array"):
+        return _MESSAGES
+    if kind in (None, "string"):
+        match = _EXAMPLE_IN_TEXT.search(str(schema.get("description") or ""))
+        if match:
+            return match.group(1).rstrip(".,;:)")
+        return "test"
+    if kind in ("integer", "number"):
+        minimum = schema.get("minimum")
+        return minimum if isinstance(minimum, (int, float)) and minimum > 1 else 1
+    if kind == "boolean":
+        return False
+    if kind == "array":
+        items = schema.get("items")
+        return [_placeholder(items, depth=depth + 1)] if isinstance(items, dict) and depth < 3 else []
+    if kind == "object":
+        return body_from_schema(schema, depth + 1) if depth < 3 else {}
+    return "test"
 
 
 def minimal_body(input_schema: Any) -> dict[str, Any]:
-    """The required fields of the documented body (a Bazaar input schema), with placeholder values."""
+    """The required fields of the documented body (a Bazaar input schema), with placeholder values.
+
+    Some listings describe their fields in ``info.bodyFields`` rather than in the
+    schema; those descriptions (and their examples) are used too.
+    """
     schema = (input_schema or {}).get("schema") if isinstance(input_schema, dict) else None
     body = ((schema or {}).get("properties") or {}).get("body") if isinstance(schema, dict) else None
+    info = (input_schema or {}).get("info") if isinstance(input_schema, dict) else None
+    fields = (info or {}).get("bodyFields") if isinstance(info, dict) else None
+    if isinstance(fields, dict) and isinstance(body, dict):
+        properties = dict(body.get("properties") or {}) if isinstance(body.get("properties"), dict) else {}
+        for key, field in fields.items():
+            if isinstance(field, dict):
+                properties[key] = {**field, **(properties.get(key) or {})} if isinstance(properties.get(key), dict) else field
+        body = {**body, "properties": properties}
     return body_from_schema(body)
 
 
-def body_from_schema(body: Any) -> dict[str, Any]:
+def body_from_schema(body: Any, depth: int = 0) -> dict[str, Any]:
     """A JSON body schema's required fields, each set to its example (or a placeholder)."""
     if not isinstance(body, dict):
         return {}
     properties = body.get("properties") if isinstance(body.get("properties"), dict) else {}
     required = [k for k in body.get("required") or [] if isinstance(k, str)]
-    return {key: _placeholder(properties.get(key)) for key in required[:20]}
+    return {key: _placeholder(properties.get(key), key, depth) for key in required[:20]}
 
 
 def request_body(method: str, probe_body: Any, input_schema: Any) -> bytes | None:
@@ -144,6 +179,10 @@ def read_challenge(status: int, headers: httpx.Headers, body: bytes) -> ProbeRes
     if 300 <= status < 400:
         return ProbeResult(False, status, "redirect", detail=(headers.get("location") or "")[:300] or None)
     if status != 402:
+        if status in (400, 422):
+            # The service is up and parsed the request, but refused the body we
+            # could build for it before quoting. Not the same as being down.
+            return ProbeResult(False, status, "probe_body_rejected")
         return ProbeResult(False, status, "no_challenge" if status < 400 else f"http_{status}")
     payload: Any = None
     try:
