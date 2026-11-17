@@ -5,6 +5,13 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  # onnxruntime-node (through @huggingface/transformers in @crowdcode/redaction)
+  # downloads its CUDA build on Linux x64 at install time, and the v1.21.0 GPU
+  # asset now answers 404, which fails `npm ci`. Nothing here uses the CUDA
+  # provider; the CPU runtime ships in the package.
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   codex-plugin:
     runs-on: ubuntu-latest
