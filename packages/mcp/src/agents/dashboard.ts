@@ -218,8 +218,10 @@ export class Dashboard {
       return [
         `Account  signed in with crowdcode-mcp; main wallet ${main}`,
         `         allows ${((c.scopes ?? []) as string[]).join(" ")}; agents ${agents === "all" ? "all" : (agents ?? []).length}; ` +
-          `CrowdCode cap ${usd(c.daily_cap_usd)}/day, ${usd(c.spent_today_usd)} used; ` +
-          `until ${String(c.expires_at ?? "").slice(0, 10)}`,
+          // A connection has no cap and lasts until disconnected unless one was asked for (null = none).
+          (c.daily_cap_usd == null ? `no daily cap, ${usd(c.spent_today_usd)} spent today; `
+            : `CrowdCode cap ${usd(c.daily_cap_usd)}/day, ${usd(c.spent_today_usd)} used; `) +
+          (c.expires_at == null ? "until you disconnect it" : `until ${String(c.expires_at).slice(0, 10)}`),
       ];
     }
     const balance = typeof data.usdc_base === "number" ? usd(data.usdc_base) : data.usdc_base;
