@@ -534,6 +534,9 @@ def test_a_fixture_is_worse_advice_on_the_same_shape_and_is_never_published(db, 
         assert ct.latest(conn, published_only=False)["version"] == fixture
         assert ct.publish_gated(conn, fixture, by="gate", evidence={}, now=NOW) == "fixture"
         assert ct.latest(conn, published_only=True) is None
+    dropped = ct.degrade(base["tree"], "drop_free_first")
+    assert "free-first" not in [n["id"] for n in dropped["nodes"]]
+    assert "Free first" not in ct.render_l0(dropped) and len(dropped["nodes"]) == len(base["tree"]["nodes"]) - 1
     with pytest.raises(ValueError, match="unknown fixture"):
         ct.degrade({"nodes": []}, "nonsense")
 
