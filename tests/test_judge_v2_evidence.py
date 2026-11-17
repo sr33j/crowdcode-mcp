@@ -100,7 +100,8 @@ def connect():
     with psycopg.connect(url, autocommit=True) as admin:
         admin.execute(f"create schema {schema}")
         admin.execute(f"set search_path to {schema}")
-        for name in ("schema.sql", "hosted-only-reviews.sql", "services-index.sql", "judge-v2-evidence.sql", "judge-v2-evidence.sql"):
+        for name in ("schema.sql", "hosted-only-reviews.sql", "services-index.sql", "reliability.sql",
+                     "judge-v2-evidence.sql", "judge-v2-evidence.sql"):
             admin.execute((ROOT / "supabase" / name).read_text())
 
     @contextmanager
@@ -161,3 +162,29 @@ def test_partials_are_reread_once_beside_the_signed_attestation(connect):
     assert (rows[1]["delivery_reread"], rows[2]["delivery_reread"], rows[3]["delivery_reread"]) == ("delivered", "not_delivered", None)
     # The signed attestation is never rewritten.
     assert rows[1]["signed"] == "partial"
+
+
+def test_reliability_v2_counts_both(connect):
+    """W4's rule reads what this writes: a failure is beta+1, a re-read partial is resolved."""
+    from crowdcode import reliability
+
+    url = "https://seller.example/api/run"
+    with connect() as c:
+        c.execute("insert into services (id, name, canonical_endpoint) values ('svc_x', 'Seller', %s)", (url,))
+        c.execute(
+            """insert into index_resources (id, resource_key, method, origin, route_template, probe_url, tracked, service_id, sources)
+               values (1, %s, 'POST', 'https://seller.example', %s, %s, true, 'svc_x', array['bazaar'])""",
+            (f"POST {url}", url, url),
+        )
+        c.execute("insert into index_resource_urls (source, method, url, resource_id) values ('bazaar', 'POST', %s, 1)", (url,))
+        c.execute(
+            "insert into reviews (service_id, rating, reason, receipt_key_id, gateway_attestation, created_at) values ('svc_x', 3, %s, %s, %s, %s)",
+            (SHORT_OF_THE_TASK[1462], KID, psycopg.types.json.Jsonb({"review": {"delivery": "partial"}}), NOW - timedelta(days=1)),
+        )
+        c.commit()
+    assert purchase_failures.submit_failure(signed(failure(endpoint=url)), connect, keys=KEYS, now=NOW).body["accepted"]
+    purchase_failures.reread_partials(connect)
+    with connect() as c:
+        inputs = reliability.gather(c, NOW, ["svc_x"])["svc_x"]
+    assert inputs["failures_30d"] == {"total": 1, "test": 1, "by": {"seller_error": 1}}
+    assert inputs["judged_30d"]["delivered"] == 1 and inputs["judged_30d"]["reread"] == 1 and inputs["judged_30d"]["unresolved"] == 0
