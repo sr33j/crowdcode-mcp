@@ -1,6 +1,6 @@
 {
   "name": "crowdcode",
-  "version": "0.13.6",
+  "version": "0.13.7",
   "description": "Run CrowdCode cloud agents (create, fund, task, files, earnings, withdraw), check paid agent services before spending, and submit payment-verified reviews afterward.",
   "author": {
     "name": "CrowdCode",
