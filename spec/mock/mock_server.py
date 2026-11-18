@@ -169,9 +169,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/service-proposals" and method == "GET":
             return self._send(200, {"ok": True, "proposals": [
                 {"id": "p1", "title": "Bill Table Extractor", "problem": "OCR misses columns", "input": "PDF",
-                 "output": "spreadsheet", "price": {"median": 0.75}, "demand": {"requesters": 3}, "would_pay": "likely"},
+                 "output": "spreadsheet", "price": {"median": 0.75}, "demand": {"requesters": 3}},
                 {"id": "p2", "title": "Word Count", "problem": "count words", "input": "text", "output": "number",
-                 "price": {"median": 0.01}, "demand": {"requesters": 1}, "would_pay": "maybe"}]})
+                 "price": {"median": 0.01}, "demand": {"requesters": 1}}]})
         if path == "/s/crowdcode/agents" and method == "POST":
             return self._create(body)
         if path == "/connect" and method == "GET":

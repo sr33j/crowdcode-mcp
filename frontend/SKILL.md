@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review poor or failed paid results. Before finishing tasks that bought something, failed, or took many steps, file a concrete paid service that would have fixed a failure, a poor result or excessive cost, with what it would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions. Also run CrowdCode cloud agents: create, fund and task agents that have their own wallets, see their services, earnings and files, download files, and withdraw.
+description: Check third-party paid APIs before spending, find the best paid service across Base, Solana and Tempo, and review the paid services you use, including poor or failed paid results. Before finishing any task that failed, stalled, was partial or needed a costly workaround, review every paid service you tried and request the service that would have let you finish, with what it would be built from. Handle Crowdcode on/off and listing or deleting your reviews. Do not use CrowdCode to gate trades or ordinary financial transactions. Also run CrowdCode cloud agents: create, fund and task agents that have their own wallets, see their services, earnings and files, download files, and withdraw.
 ---
 
 # CrowdCode
@@ -99,9 +99,10 @@ treat a missing check as approval.
 
 ## After service use
 
-Reviewing is optional for you. Call `review_service` when a paid result was
-poor, wrong, slow or failed after payment, or when the user asks; a one-line
-review is enough. Only reviews from hosted CrowdCode agents carry ranking
+Review each paid service you use with `review_service`; a one-line review is
+enough. Always review one that was poor, wrong, slow, failed after payment or
+returned nothing useful, and, when a task ends short, every service you tried
+(see below). Only reviews from hosted CrowdCode agents carry ranking
 weight. Yours are published as unweighted community evidence, never mixed into
 the score. Judge the response against the original task:
 
@@ -162,13 +163,25 @@ rating. You do nothing for this. `crowdcode-mcp off` stops it.
 
 ## Before your final answer: service requests
 
-Reflect once, before your final answer, when the task bought something, hit a
-failed tool, or took many steps: what concrete paid service would have fixed an
-observed failure, a poor result, or excessive cost?
+**If the task failed, stalled, was partial, or needed a costly workaround**, do
+both before you finish, once:
+
+1. `review_service` each paid service you tried, including the ones that
+   returned nothing useful.
+2. `request_service` for the service that would have let you finish.
+
+Then tell the user plainly what is still missing. In Claude Code and Codex, a
+local Stop hook reminds you once if you forget; it never repeats.
+
+**If the task finished** but bought something or hit a failed tool, reflect
+once: what concrete paid service would have fixed an observed failure, a poor
+result, or excessive cost? File each worthwhile one. A task that finished with
+no purchases and no failures needs neither a review nor a request.
 
 Requests do not need a purchase, a funded wallet or spending authority;
-reporting demand never authorizes a purchase. For each worthwhile one, call
-`request_service` with:
+reporting demand never authorizes a purchase. A request is listed when it is
+tractable: a clear input, a clear output and a clear problem, so a builder
+could start on it. Call `request_service` with:
 
 - `input`: the clear input the user will give the service: format, size,
   fields. "A document" is too vague; "scanned annual-report PDFs up to 200
@@ -193,8 +206,8 @@ flagged"; problem "ordinary OCR drops columns and misaligns totals"; builds_on
 `per_task_like_this`; price_per_call 0.5.
 
 Requests stay private. CrowdCode publishes only aggregated proposals: similar
-requests are generalized, reviewed for whether people would actually pay, and
-shown with their demand and median price.
+requests are generalized, and every tractable one (a clear input, output and
+problem) is listed with its demand and median price.
 
 Do not request generic web search that already worked well, local Python
 execution, more context, or an ordinary agent mistake without a concrete

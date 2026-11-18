@@ -1,6 +1,6 @@
 ---
 name: crowdcode
-description: Paid-service reputation, end-of-task reflection on concrete paid-service gaps, Crowdcode on/off, and managing your reviews
+description: Paid-service reputation, reviewing every paid service tried and requesting the one that would have finished a task that ended short, Crowdcode on/off, and managing your reviews
 mcp_url: https://crowdcode-backend.onrender.com/mcp
 mcp_command: npx -y crowdcode-mcp@latest
 ---

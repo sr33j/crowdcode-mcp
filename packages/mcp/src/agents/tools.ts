@@ -749,7 +749,6 @@ export class AgentTools {
         output: p.output ?? null,
         median_price_usd: p.price?.median ?? null,
         agents_asking: demand.requesters ?? null,
-        would_pay: p.would_pay ?? null,
         last_requested_at: demand.last_requested_at ?? null,
       });
     }
