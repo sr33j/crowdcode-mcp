@@ -408,3 +408,51 @@ def test_rollout_mode_accepts_a_pre_c6_client_but_still_screens_it(hosted, monke
     # A client that sends some of the new fields is validated in full.
     partial = server_mod.request_service(**GOOD, builds_on=EXTRAS["builds_on"], requester_wallet=WALLET)
     assert partial["accepted"] is False and "frequency is required" in partial["reason"]
+
+
+def _gpu_payload():
+    rows = [_row(202, 2.5, requester="solo"), _row(203, 0.1, requester="b")]
+    parsed = {"proposals": [
+        _proposal("GPU Training Runner", [202], input="A container image, a dataset and a GPU type",
+                  output="A run handle that resolves to trained weights"),
+        _proposal("DNS propagation check", [203]),
+    ]}
+    return proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "m")
+
+
+def _surname_redactor(texts, **_):
+    """The production redactor read "Runner" in a product name as a surname (2026-11-18)."""
+    return [t.replace("Runner", "[SURNAME_3]") if t else t for t in texts]
+
+
+def test_a_proposal_the_redactor_misreads_is_reworded_and_listed(monkeypatch):
+    monkeypatch.setattr(proposals, "redact_texts", _surname_redactor)
+    seen = []
+
+    def reword(flagged):
+        seen.extend(p["title"] for p in flagged)
+        return {p["id"]: {"title": "GPU Training Jobs", "input": p["input"], "output": p["output"],
+                          "problem": p["problem"], "builds_on": None} for p in flagged}
+
+    out = proposals.redact_payload(_gpu_payload(), SourceIndex([]), reword)
+    # Only the flagged proposal is reworded, from its redacted text.
+    assert seen == ["GPU Training [SURNAME_3]"]
+    titles = [p["title"] for p in out["proposals"]]
+    assert titles == ["GPU Training Jobs", "DNS propagation check"]
+    gpu = out["proposals"][0]
+    assert out["_triage"][202] == {"listed": True, "reason": None, "note": None,
+                                   "proposal_id": gpu["id"], "proposal_title": "GPU Training Jobs"}
+    assert out["listed_request_count"] == 2 and out["hidden_reasons"]["private"] == 0
+
+
+def test_a_rewording_still_flagged_stays_hidden(monkeypatch):
+    monkeypatch.setattr(proposals, "redact_texts", _surname_redactor)
+    reword = lambda flagged: {p["id"]: {**{k: p[k] for k in proposals.PUBLIC_KEYS}, "title": "Runner"}  # noqa: E731
+                              for p in flagged}
+    out = proposals.redact_payload(_gpu_payload(), SourceIndex([]), reword)
+    assert [p["title"] for p in out["proposals"]] == ["DNS propagation check"]
+    assert out["_triage"][202]["reason"] == "private"
+    assert out["_triage"][202]["proposal_title"] == "GPU Training [SURNAME_3]"
+    # A failed or missing rewrite hides it too.
+    out = proposals.redact_payload(_gpu_payload(), SourceIndex([]), lambda flagged: {})
+    assert out["hidden_reasons"]["private"] == 1

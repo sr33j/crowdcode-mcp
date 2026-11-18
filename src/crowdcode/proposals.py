@@ -462,26 +462,112 @@ PLACEHOLDER_RE = re.compile(r"\[[A-Z][A-Z_]*_\d+\]")
 PUBLIC_KEYS = ("title", "input", "output", "problem", "builds_on")
 
 
-def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+REWORD_SYSTEM = (
+    "You edit public copy for service proposals. A privacy filter replaced words it "
+    "mistook for a person's name or an identifier with placeholders such as "
+    "[SURNAME_3]. Respond with valid JSON only."
+)
+LIMITS = {"title": 70, "input": 200, "output": 200, "problem": 240, "builds_on": 240}
+
+
+def _flagged(proposal: dict[str, Any]) -> bool:
+    return any(PLACEHOLDER_RE.search(str(proposal.get(key) or "")) for key in PUBLIC_KEYS)
+
+
+def reword_flagged(flagged: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """One model call: rewrite flagged proposals in plain, generic words.
+
+    The model sees only the already-redacted public fields, never a request.
+    On 2026-11-18 "GPU Training Runner" lost its listing because the redactor
+    read "Runner" as a surname; a product name must not cost a listing."""
+    settings = get_settings()
+    if not flagged or not settings.openai_api_key:
+        return {}
+    prompt = {
+        "task": "Rewrite each proposal so no field contains a placeholder or any word that "
+                "could be read as a person's name, a company or product brand, or an ID.",
+        "requirements": [
+            "Change only the words that need changing; keep everything else as it is. "
+            "Keep `n` exactly as given. Use plain, generic words "
+            "(\"GPU Training Jobs\", not a name-like or brand word).",
+            "Never reproduce or guess what a placeholder stood for.",
+            "Same limits as before: title at most 50 characters, input and output at most "
+            "120, problem and builds_on at most 160.",
+        ],
+        # `n`, not the proposal id: told to drop IDs, the model blanked an `id` field.
+        "schema": {"proposals": [{"n": "integer", **{key: "string" for key in PUBLIC_KEYS}}]},
+        "proposals": [{"n": n, **{key: p.get(key) for key in PUBLIC_KEYS}} for n, p in enumerate(flagged)],
+    }
+    try:
+        parsed = _chat_json(settings, REWORD_SYSTEM, prompt, timeout=BATCH_TIMEOUT,
+                            model=settings.proposal_model)
+    except Exception as exc:  # the flagged proposals stay hidden, the rest publish
+        logger.warning("rewording flagged proposals failed: %s", exc)
+        return {}
+    out = {}
+    for item in parsed.get("proposals") or []:
+        try:
+            n = int(item.get("n")) if isinstance(item, dict) else -1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= n < len(flagged):
+            out[flagged[n]["id"]] = {key: _text(item.get(key), LIMITS[key]) for key in PUBLIC_KEYS}
+    return out
+
+
+def redact_payload(payload: dict[str, Any], sources: SourceIndex | None = None,
+                   reword: Any = None) -> dict[str, Any]:
     """Re-redact generated text on its way to storage; fail closed.
 
-    A proposal the redactor changed is not published. A placeholder such as
-    `[SURNAME_3]` means the generated copy named someone, or the redactor
-    misread a word; either way it is not copy anyone should read. On
-    2026-11-17 "Citation, source [SURNAME_3], ..." was published this way."""
+    A proposal the redactor changed is not published as it is. A placeholder
+    such as `[SURNAME_3]` means the generated copy named someone, or the
+    redactor misread a word; either way it is not copy anyone should read. On
+    2026-11-17 "Citation, source [SURNAME_3], ..." was published this way.
+    `reword`, when given, gets one chance to rewrite the flagged proposals from
+    their redacted text; the rewrite passes the same copy, traceability and
+    redaction checks, and a proposal still flagged after it is hidden."""
     keys = PUBLIC_KEYS
     texts = [p.get(key) for p in payload["proposals"] for key in keys]
     redacted = (redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)
                 if texts else None)
     triage = payload.setdefault("_triage", {})
-    kept = []
-    for index, proposal in enumerate(payload["proposals"]):
-        tally = proposal.pop("_tally", None) or {}
-        member_ids = proposal.pop("_member_ids", None) or []
-        if redacted is not None:
+    if redacted is not None:
+        for index, proposal in enumerate(payload["proposals"]):
             for offset, key in enumerate(keys):
                 proposal[key] = redacted[index * len(keys) + offset]
-        if any(PLACEHOLDER_RE.search(str(proposal.get(key) or "")) for key in keys):
+
+    flagged = [p for p in payload["proposals"] if _flagged(p)]
+    rewrites = reword(flagged) if reword and flagged else {}
+    candidates = []
+    for proposal in flagged:
+        fields = rewrites.get(proposal["id"])
+        if not fields or not all(fields.get(key) for key in ("title", "input", "output", "problem")):
+            continue
+        if sources is not None and any(sources.copies(v) for v in fields.values() if v):
+            continue
+        if (proposal.get("_tally") or {}).get("source", {}).get("miner") and any(
+                demand_miner.traceable(v) for v in fields.values() if v):
+            continue
+        candidates.append((proposal, fields))
+    if candidates:
+        texts = [fields.get(key) for _, fields in candidates for key in keys]
+        again = redact_texts(texts, fail_closed=True, timeout=REDACTION_BATCH_TIMEOUT)
+        for index, (proposal, fields) in enumerate(candidates):
+            clean = {key: again[index * len(keys) + offset] for offset, key in enumerate(keys)}
+            if any(PLACEHOLDER_RE.search(str(v or "")) for v in clean.values()):
+                continue
+            logger.warning("proposal reworded after the redactor flagged it")
+            proposal.update(clean)
+            proposal["id"] = "p_" + hashlib.sha256(clean["title"].lower().encode()).hexdigest()[:12]
+            for request_id in proposal.get("_member_ids") or []:
+                triage[request_id] = {"listed": True, "reason": None, "note": None,
+                                      "proposal_id": proposal["id"], "proposal_title": clean["title"]}
+
+    kept = []
+    for proposal in payload["proposals"]:
+        tally = proposal.pop("_tally", None) or {}
+        member_ids = proposal.pop("_member_ids", None) or []
+        if _flagged(proposal):
             logger.warning("proposal dropped: the redactor found something in it")
             requests = proposal["demand"]["requests"]
             payload["listed_request_count"] -= requests
@@ -491,7 +577,7 @@ def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 triage[request_id] = {
                     "listed": False, "reason": "private",
                     "note": "The redactor found a name or identifier in the proposal's wording.",
-                    "proposal_id": None, "proposal_title": None}
+                    "proposal_id": None, "proposal_title": _text(proposal.get("title"), 70)}
             for field, counts in (("listed_by_source", tally.get("source")),):
                 for name, n in (counts or {}).items():
                     left = payload.get(field, {}).get(name, 0) - n
@@ -564,7 +650,7 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
     payload["hidden_request_count"] += len(unusable)
     payload["hidden_reasons"]["not_a_service"] += len(unusable)
     payload["_triage"].update(unusable)
-    return redact_payload(payload)
+    return redact_payload(payload, sources, reword_flagged)
 
 
 def store_triage(conn: Any, triage: dict[int, dict[str, Any]], now: datetime) -> None:
