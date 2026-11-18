@@ -1,5 +1,11 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.8 — 2026-11-18
+
+- **Proactive about reviewing and requesting when a task ends short (SRI-122).** Before finishing any task that failed, stalled, was partial or needed a costly workaround, the agent now reviews each paid service it tried, including the ones that returned nothing useful, and calls `request_service` once for the service that would have let it finish. Successful paid calls are still reviewed. The server instructions, the `review_service` and `request_service` descriptions, every SKILL.md copy and the Hermes shim say this directly.
+- **The Claude Code and Codex Stop hook** decides from the current turn. A turn that ended short (its answer says it could not finish, is partial or no service did the job, or a paid call returned an error or an empty body) is asked for exactly what is missing: the reviews, the request, or both. A finished turn with an unrated paid call is asked for its rating. A turn with no paid call and no failure is not prompted; the old "8 or more tool calls" trigger is gone. One nudge only: never when the host sets `stop_hook_active` or the nudge is already in the turn. Cursor has no Stop hook and gets the instructions only.
+- **`crowdcode_demand` no longer returns `would_pay`:** CrowdCode lists every tractable request (a clear input, output and problem) and does not judge whether anyone would pay.
+
 ## 0.13.7 — 2026-11-18
 
 - **`crowdcode_task_status` keeps what the API says about the run (SRI-119):** `state`, `detail` (why a failed task failed), `created_at` and `finished_at` were dropped; they are passed through now, in both crowdcode-mcp and the Hermes plugin. Purchases come from the wallet API as `{ service, listing_id, method, url, amount_usd, network, tx, at }`: the URL and method actually paid and CrowdCode's name for the service (else its host), instead of a listing hash and `url: null`.
