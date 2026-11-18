@@ -57,10 +57,20 @@ SCHEMAS = {
         ["agent_id", "prompt", "budget_usd"]),
     "crowdcode_task_status": _tool(
         "crowdcode_task_status",
-        "Check a CrowdCode task: status, answer, spend, purchases and the files it produced (ids; download them "
-        "with crowdcode_download). With cancel=true, cancel it first.",
+        "Check a CrowdCode task: status, answer, spend, purchases (each with the service, the URL and method "
+        "actually paid, amount, network, tx and time) and the files it produced (ids; download them with "
+        "crowdcode_download). With cancel=true, cancel it first.",
         {"agent_id": _AGENT, "task_id": {"type": "string"},
          "cancel": {"type": "boolean", "description": "Cancel the task."}},
+        ["agent_id", "task_id"]),
+    "crowdcode_task_events": _tool(
+        "crowdcode_task_events",
+        "A CrowdCode task's tool timeline, oldest first: each tool it ran with its summarized input, status, error "
+        "and duration, and each model call's model and tokens. No reasoning, messages or tool output. Use it to see "
+        "why a task did what it did. Read-only; pass next_after as after for the next page.",
+        {"agent_id": _AGENT, "task_id": {"type": "string"},
+         "after": {"type": "integer", "description": "Only events after this sequence number (the previous page's next_after)."},
+         "limit": {"type": "integer", "description": "At most this many events, 1-500 (default 100)."}},
         ["agent_id", "task_id"]),
     "crowdcode_services": _tool(
         "crowdcode_services",

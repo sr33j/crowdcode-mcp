@@ -142,6 +142,7 @@ The skill `crowdcode:build-a-paid-service` gives Hermes the whole
 | `crowdcode_fund_agent` | Gasless EIP-3009 USDC deposit from your wallet to an agent | **yes** |
 | `crowdcode_run_task` | Runs a task on an agent, capped by a required `budget_usd`; returns answer, spend, purchases, and the ids of files it wrote | **yes** (the agent's funds) |
 | `crowdcode_task_status` | Status, answer and receipts for a task; can cancel it | no |
+| `crowdcode_task_events` | A task's tool timeline (tools, inputs, statuses, errors, model calls) to see why it did what it did | no |
 | `crowdcode_services` | An agent's paid services: price, calls, earnings; stop or start one | no |
 | `crowdcode_withdraw` | Agent to your wallet, on Base or Tempo | yes (to you) |
 | `crowdcode_transfer` | Between two of your agents | yes (stays yours) |

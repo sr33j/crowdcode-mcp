@@ -38,6 +38,7 @@ export const AGENT_TOOL_NAMES = [
   "crowdcode_fund_agent",
   "crowdcode_run_task",
   "crowdcode_task_status",
+  "crowdcode_task_events",
   "crowdcode_services",
   "crowdcode_withdraw",
   "crowdcode_transfer",
