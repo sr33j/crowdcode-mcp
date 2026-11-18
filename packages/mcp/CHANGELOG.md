@@ -1,6 +1,6 @@
 # crowdcode-mcp (npm) changelog
 
-## Unreleased
+## 0.13.7 — 2026-11-18
 
 - **`crowdcode_task_status` keeps what the API says about the run (SRI-119):** `state`, `detail` (why a failed task failed), `created_at` and `finished_at` were dropped; they are passed through now, in both crowdcode-mcp and the Hermes plugin. Purchases come from the wallet API as `{ service, listing_id, method, url, amount_usd, network, tx, at }`: the URL and method actually paid and CrowdCode's name for the service (else its host), instead of a listing hash and `url: null`.
 - **New tool `crowdcode_task_events`:** a task's tool timeline from `GET /agents/:id/tasks/:task_id/events`, oldest first: each tool with its summarized input, status, error and duration, and each model call's model and tokens. No reasoning, messages or tool output. `after` and `limit` page through it. Added to `spec/agent-tools.json`, the mock and the conformance session.
