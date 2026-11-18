@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Service proposals list anything tractable (SRI-122).** Backend only; apply `supabase/request-triage.sql` (idempotent) before deploying.
+  - The realism and would-pay gates are gone: `MIN_REALISM`, `PLAUSIBLE_REALISM`, `PLAUSIBLE_MIN_REQUESTERS`, `MIN_CLARITY`, the `unrealistic` hidden reason, and the `would_pay`, `realism`, `clarity` and `rationale` fields of each proposal. The model is told not to judge whether anything is realistic or whether anyone would pay; the only test is a clear input, output and problem.
+  - `internal` is only for a fix to the requester's own tools that nobody else could sell as a service.
+  - Each request's outcome is stored in `service_request_triage`: listed (and in which proposal) or hidden with its reason and the model's one-line note. New hidden reasons `private` (the proposal's wording repeated a private request or named something traceable; was counted as `vague`) and `unplaced` (the model left it out; was `vague`).
+
 - **Deploys no longer switch traffic to an instance that is still loading search.**
   - Render's health check was `/health` (live as soon as uvicorn listens). Search then loaded its model and ~48k-offering index on the new instance for minutes, while it already served traffic: search, reliability lookups and `/api/tree` stalled after every deploy.
   - **New `GET /startup`** (Render's health check; `render.yaml` and the service setting) answers 503 until the model, the offering index and the directory are loaded. It logs each stage's time (`search warm-up: …`), has no outside dependency, and counts as done after 10 minutes whatever happened (`CROWDCODE_WARMUP_MAX_SECONDS`).

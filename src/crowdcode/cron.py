@@ -523,7 +523,10 @@ def run_service_proposals(now: datetime) -> None:
     if payload is None:
         print("proposals: skipped; keeping the last payload")
         return
+    triage = payload.pop("_triage", {})
     with connect() as conn:
+        # Each request's outcome and the model's reason, for /admin (SRI-122).
+        proposals.store_triage(conn, triage, now)
         conn.execute(
             """
             insert into app_cache (key, payload, generated_at)

@@ -251,8 +251,7 @@ def _proposal(title, ids, **fields):
             "output": fields.get("output", "the licensed full text of the article"),
             "problem": "agents hit paywalls on articles owners ask about",
             "builds_on": "news licensing APIs", "unlocks": "grounded summaries",
-            "rationale": "Research agents need this weekly.", "would_pay": "likely",
-            "realism": 4, "clarity": 5, "request_ids": ids}
+            "request_ids": ids}
 
 
 def test_proposals_say_who_found_the_demand_and_in_how_many_runs():
@@ -280,7 +279,7 @@ def test_a_mined_proposal_that_names_something_traceable_is_not_published():
     rows = [_row(1, source="miner", runs=2)]
     parsed = {"proposals": [_proposal("Articles", [1], output="the article from nytimes.com")]}
     payload = proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "gpt-5.5")
-    assert payload["proposals"] == [] and payload["hidden_reasons"]["vague"] == 1
+    assert payload["proposals"] == [] and payload["hidden_reasons"]["private"] == 1
 
 
 def test_a_proposal_the_redactor_changes_is_not_published(monkeypatch):
@@ -290,14 +289,15 @@ def test_a_proposal_the_redactor_changes_is_not_published(monkeypatch):
     assert payload["listed_by_source"] == {"miner": 1, "agent": 2}
 
     def redactor(texts, **_):
-        return [t.replace("a publication", "[SURNAME_3]") if t and "Full" not in t and i < 7 else t
+        return [t.replace("a publication", "[SURNAME_3]") if t and "Full" not in t and i < len(proposals.PUBLIC_KEYS) else t
                 for i, t in enumerate(texts)]
 
     monkeypatch.setattr(proposals, "redact_texts", redactor)
     out = proposals.redact_payload(payload)
     assert [p["title"] for p in out["proposals"]] == ["DNS checks"]
-    assert "_tally" not in out["proposals"][0]
-    assert out["listed_request_count"] == 1 and out["hidden_reasons"]["vague"] == 2
+    assert "_tally" not in out["proposals"][0] and "_member_ids" not in out["proposals"][0]
+    assert out["listed_request_count"] == 1 and out["hidden_reasons"]["private"] == 2
+    assert {out["_triage"][i]["reason"] for i in (1, 2)} == {"private"} and out["_triage"][3]["listed"]
     assert out["listed_by_source"] == {"agent": 1}
 
 

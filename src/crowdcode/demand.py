@@ -136,8 +136,8 @@ def is_filler(text: Any) -> bool:
 def validate_request_extras(
     builds_on: Any, frequency: Any, capability: Any = None
 ) -> tuple[RequestExtras | None, str | None]:
-    """The C6 fields. builds_on is required: it is the realism check, and a
-    request nobody could build is not demand a builder can act on."""
+    """The C6 fields. builds_on is required: it says where a builder would
+    start, and a request nobody could start on is not demand a builder can act on."""
     frequency_text = _clean_text(frequency).lower().replace("-", "_").replace(" ", "_")
     if frequency_text not in FREQUENCIES:
         return None, f"frequency is required: {EXTRA_HINTS['frequency']}"

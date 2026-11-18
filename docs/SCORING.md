@@ -651,10 +651,15 @@ canonical scoring function in `src/crowdcode/scoring.py`.
 3. **Service proposals** (LLM, `crowdcode.proposals`) — requests filed before
    request_service v2 are mapped once into its four fields and marked
    `inferred`; then every request in the last 180 days is grouped into
-   generalized proposals, each reviewed as a product for realism and clarity.
-   Only proposals that pass are published at `/api/service-proposals`, with
-   demand and the willingness-to-pay distribution computed from the rows.
-   Raw request text is never published.
+   generalized proposals. The only gate is tractability: a clear input, a
+   clear output and a clear problem a builder could start on. Nothing judges
+   whether a service is realistic or whether anyone would pay (SRI-122).
+   Every tractable proposal is published at `/api/service-proposals`, with
+   demand and the stated price distribution computed from the rows. A
+   request that is not listed (`vague`, `internal`, `not_a_service`,
+   `private` or `unplaced`) keeps its reason and the model's one-line note in
+   `service_request_triage` (`supabase/request-triage.sql`), which only the
+   operator's `/admin` reads. Raw request text is never published.
 
 ### 8.3 Schema changes
 

@@ -470,3 +470,19 @@ alter table reviews drop constraint if exists reviews_weight_basis_check;
 alter table reviews
   add constraint reviews_weight_basis_check
   check (weight_basis in ('legacy', 'hosted', 'onchain', 'none'));
+
+-- What the proposals pass did with each request (supabase/request-triage.sql,
+-- SRI-122): listed in a proposal, or hidden with its reason and the model's
+-- note. Private; /admin reads it through a reporting view.
+create table if not exists service_request_triage (
+  request_id bigint primary key references service_requests (id) on delete cascade,
+  listed boolean not null,
+  reason text check (reason in ('vague', 'internal', 'not_a_service', 'private', 'unplaced')),
+  note text check (char_length(note) <= 160),
+  proposal_id text,
+  proposal_title text check (char_length(proposal_title) <= 70),
+  triaged_at timestamptz not null default now(),
+  check (listed = (reason is null))
+);
+
+alter table service_request_triage enable row level security;
