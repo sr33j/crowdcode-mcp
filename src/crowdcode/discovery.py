@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import bisect
 import functools
+import os
 import math
 import re
 import threading
@@ -824,30 +825,79 @@ def find_live(query: str, payer_networks: tuple[str, ...], payer_balances: dict[
     }
 
 
-def warm_search(embedder: semantic.Embedder | None = None) -> threading.Thread | None:
-    """Load the model, the offering index and every listing in the background, so no search waits for them."""
-    if embedder is None and not semantic.enabled():
-        return None
-    embedder = embedder or semantic.EMBEDDER
+class Warmup:
+    """Whether this process has loaded what search serves: the model, the offering index, the directory.
+
+    `/startup` (Render's health check) and `/ready` answer 503 until it has, so a deploy keeps the old
+    instance serving while the new one loads, instead of switching traffic to an instance busy loading.
+    After MAX_SECONDS it counts as done whatever happened: an instance that cannot load the model (search
+    then ranks by words) must still come up rather than be held unhealthy forever.
+    """
+
+    MAX_SECONDS = float(os.environ.get("CROWDCODE_WARMUP_MAX_SECONDS") or 600)
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.done = threading.Event()
+        self.stages: dict[str, float] = {}
+        self.error: str | None = None
+
+    def mark(self, stage: str) -> None:
+        self.stages[stage] = round(time.monotonic() - self.started, 1)
+        print(f"search warm-up: {stage} at {self.stages[stage]} s", flush=True)
+
+    def state(self) -> dict[str, Any]:
+        elapsed = time.monotonic() - self.started
+        ready = self.done.is_set() or elapsed >= self.MAX_SECONDS
+        return {"ready": ready, "elapsed_s": round(elapsed, 1), "stages": dict(self.stages),
+                **({"error": self.error} if self.error else {}),
+                **({"overran": True} if ready and not self.done.is_set() else {})}
+
+
+WARMUP = Warmup()
+
+
+def warm_search(embedder: semantic.Embedder | None = None) -> threading.Thread:
+    """Load the model, the offering index and every listing in the background, so no search waits for them;
+    WARMUP says when it is done."""
+    use_model = embedder is not None or semantic.enabled()
+    embedder = (embedder or semantic.EMBEDDER) if use_model else None
 
     def run() -> None:
         from crowdcode.db import connect
 
         try:
-            embedder.warm(wait=True)
-            if not embedder.ready():
-                return
+            if embedder is not None:
+                embedder.warm(wait=True)
+                WARMUP.mark("model" if embedder.ready() else "model unavailable")
             # The whole index first (C13): searches answer from it as soon as it is in.
-            offerings.SHARED.refresh(connect, embedder)
-            with connect() as conn:
-                rows = directory_rows(conn)
-            embedder.encode([listing_document(row) for row in rows])
-        except Exception:
+            offerings.SHARED.refresh(connect, embedder if embedder is not None and embedder.ready() else None)
+            index = offerings.SHARED.get()
+            WARMUP.mark(f"index ({len(index) if index is not None else 0} offerings)")
+            embed_directory(embedder)
+            WARMUP.mark("directory")
+        except Exception as exc:
+            WARMUP.error = type(exc).__name__
             traceback.print_exc()
+        finally:
+            WARMUP.done.set()
+            WARMUP.mark("ready")
 
     thread = threading.Thread(target=run, name="search-warmup", daemon=True)
     thread.start()
     return thread
+
+
+def embed_directory(embedder: semantic.Embedder | None = None) -> None:
+    """Embed every directory listing (a few hundred) for the live fallback; a no-op without the model."""
+    from crowdcode.db import connect
+
+    embedder = embedder if embedder is not None else (semantic.EMBEDDER if semantic.enabled() else None)
+    if embedder is None or not embedder.ready():
+        return
+    with connect() as conn:
+        rows = directory_rows(conn)
+    embedder.encode([listing_document(row) for row in rows])
 
 
 def _service_networks(conn: Any) -> dict[str, dict[str, Any]]:

@@ -31,7 +31,7 @@ from crowdcode.demand import RequestExtras, validate_request_extras, validate_re
 from crowdcode.observations import submit_observation
 from crowdcode import demand_miner, reliability
 from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
-from crowdcode.discovery import find_services, warm_search
+from crowdcode.discovery import WARMUP, embed_directory, find_services, warm_search
 from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
     MACHINE_PAYMENT_PROVIDERS,
@@ -1836,7 +1836,17 @@ async def health(_: Request) -> JSONResponse:
                          "commit": os.environ.get("RENDER_GIT_COMMIT")})
 
 
+async def startup(_: Request) -> JSONResponse:
+    """Render's health check: 200 once this instance has loaded what search serves (model, offering
+    index, directory). No outside dependency, so an outage elsewhere never makes Render restart it."""
+    state = WARMUP.state()
+    return JSONResponse({"ok": state["ready"], **state}, status_code=200 if state["ready"] else 503)
+
+
 async def ready(_: Request) -> JSONResponse:
+    state = WARMUP.state()
+    if not state["ready"]:
+        return _json_error("search is still loading", status_code=503, error_code="warming_up", retryable=True)
     try:
         with connect() as conn:
             conn.execute("select 1").fetchone()
@@ -2354,12 +2364,14 @@ def create_app() -> Starlette:
     # first search needs them; then describe listings never looked at
     # (the cron revisits the rest) and embed what that changed.
     warm_search()
-    fill_in_background(then=warm_search)
+    # Only the directory needs embedding again after its descriptions are filled, not the whole index.
+    fill_in_background(then=embed_directory)
     mcp_app = mcp.streamable_http_app()
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/ready", ready, methods=["GET"]),
+            Route("/startup", startup, methods=["GET"]),
             Route("/api/receipt-keys", receipt_keys, methods=["GET"]),
             Route("/api/project-ideas", project_ideas, methods=["GET"]),
             Route("/api/service-proposals", service_proposals, methods=["GET"]),

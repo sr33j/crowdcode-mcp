@@ -5,12 +5,22 @@ services:
     plan: starter
     buildCommand: pip install -e .
     startCommand: crowdcode-mcp
-    healthCheckPath: /ready
+    # 200 once this instance has loaded what search serves (model, ~48k-offering index, directory), so a
+    # deploy keeps the old instance serving through warm-up. No outside dependency: an outage elsewhere
+    # never makes Render restart the backend (/ready adds the database and redaction checks for monitors).
+    healthCheckPath: /startup
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: MCP_TRANSPORT
         value: streamable-http
+      # Half a CPU: one thread for BLAS and the tokenizer (crowdcode/__init__.py sets the same defaults).
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: TOKENIZERS_PARALLELISM
+        value: "false"
       - key: HOST
         value: 0.0.0.0
       - key: MCP_ALLOWED_HOSTS
