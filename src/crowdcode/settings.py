@@ -36,8 +36,8 @@ class Settings:
     request_rate_limit_per_day: int = 5
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
-    # The service-proposal job asks a product question (would anyone pay for
-    # this?) over every request at once, so it gets a more capable model.
+    # The service-proposal job groups every request at once into general
+    # services, so it gets a more capable model.
     proposal_model: str = "gpt-5.5"
     openai_base_url: str = "https://api.openai.com/v1"
     # Owner references pinned at trust 1.0 (docs/SCORING.md §3.5): the root of

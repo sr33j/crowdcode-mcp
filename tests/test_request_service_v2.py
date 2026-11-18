@@ -126,12 +126,11 @@ def _row(request_id, price, *, source="agent", confidence=None, requester="r1", 
     }
 
 
-def _proposal(title, ids, *, would_pay="likely", realism=4, clarity=5, **fields):
+def _proposal(title, ids, **fields):
     return {"title": title, "input": fields.get("input", "a hostname and a DNS record type"),
             "output": fields.get("output", "answers, errors and latency from each resolver"),
             "problem": fields.get("problem", "agents cannot tell whether DNS changes propagated"),
-            "rationale": "Ops agents check this often and pay cents for it.",
-            "would_pay": would_pay, "realism": realism, "clarity": clarity, "request_ids": ids}
+            "request_ids": ids}
 
 
 def test_build_payload_computes_demand_and_price_from_rows():
@@ -140,11 +139,12 @@ def test_build_payload_computes_demand_and_price_from_rows():
     parsed = {
         "proposals": [
             _proposal("DNS propagation check", [1, 2, 3, 3, 99]),  # dup and unknown ids ignored
-            _proposal("Receipt lookup for my own purchases", [4], clarity=2),
-            _proposal("Make everything reliable", [5], would_pay="maybe", realism=2),
+            _proposal("No output", [4], output=""),
             _proposal("Guess-priced idea", [7]),
         ],
-        "not_viable": [{"request_id": 6, "reason": "internal"}, {"request_id": 1, "reason": "vague"}],
+        "not_listed": [{"request_id": 6, "reason": "internal", "note": "Fixes its own wallet."},
+                       {"request_id": 5, "reason": "unrealistic", "note": "Nobody would pay."},
+                       {"request_id": 1, "reason": "vague"}],
     }
     payload = proposals.build_payload(parsed, rows, SourceIndex([]), NOW, "m")
     assert [p["title"] for p in payload["proposals"]] == ["DNS propagation check", "Guess-priced idea"]
@@ -153,8 +153,41 @@ def test_build_payload_computes_demand_and_price_from_rows():
     assert dns["price"]["median"] == 0.05
     assert dns["confidence"] == "high"
     assert guess["confidence"] == "low" and guess["price"] is None
-    assert payload["hidden_reasons"] == {"vague": 1, "unrealistic": 1, "internal": 1, "not_a_service": 0}
+    # A reason the model is no longer asked for (realism) counts as vague, never "unrealistic".
+    assert payload["hidden_reasons"] == {"vague": 2, "internal": 1, "not_a_service": 0,
+                                         "private": 0, "unplaced": 0}
     assert payload["listed_request_count"] == 4 and payload["hidden_request_count"] == 3
+    triage = payload["_triage"]
+    assert triage[1] == {"listed": True, "reason": None, "note": None,
+                         "proposal_id": dns["id"], "proposal_title": "DNS propagation check"}
+    assert triage[6]["reason"] == "internal" and triage[6]["note"] == "Fixes its own wallet."
+    assert triage[4]["reason"] == "vague" and triage[4]["proposal_title"] == "No output"
+    assert set(triage) == {1, 2, 3, 4, 5, 6, 7}
+
+
+def test_no_judgement_of_whether_anyone_would_pay():
+    """SRI-122: one requester, a big price, an ambitious service: listed. The
+    prompt asks only for tractability and the payload carries no pay score."""
+    rows = [_row(202, 2.5, requester="solo")]
+    gpu = _proposal("GPU Training Jobs", [202], input="A container image, a dataset URL and a GPU type",
+                    output="A job ID with live logs, per-second billing and the trained weights",
+                    problem="Agents have no GPUs to fine-tune or train models")
+    payload = proposals.build_payload({"proposals": [gpu]}, rows, SourceIndex([]), NOW, "m")
+    [listed] = payload["proposals"]
+    assert listed["title"] == "GPU Training Jobs" and payload["hidden_request_count"] == 0
+    for key in ("would_pay", "realism", "clarity", "rationale"):
+        assert key not in listed
+    assert "unrealistic" not in payload["hidden_reasons"]
+    captured = {}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("DATABASE_URL", "postgresql://unused")
+        mp.setattr(proposals, "_chat_json", lambda settings, system, prompt, **_: captured.update(
+            system=system, prompt=prompt) or {})
+        proposals.propose_services([])
+    text = json.dumps(captured).lower()
+    assert "tractab" in text
+    for banned in ("would_pay", "realism", "unrealistic", "skeptical"):
+        assert banned not in text
 
 
 def test_build_payload_drops_a_proposal_that_repeats_a_request():
@@ -164,11 +197,14 @@ def test_build_payload_drops_a_proposal_that_repeats_a_request():
     payload = proposals.build_payload(parsed, rows, SourceIndex([private]), NOW, "m")
     assert payload["proposals"] == []
     assert payload["hidden_request_count"] == 1
+    assert payload["hidden_reasons"]["private"] == 1
+    assert payload["_triage"][1]["reason"] == "private"
 
 
-def test_unassigned_requests_are_hidden_as_vague():
+def test_unassigned_requests_are_hidden_as_unplaced():
     payload = proposals.build_payload({"proposals": []}, [_row(1, 0.1)], SourceIndex([]), NOW, "m")
-    assert payload["hidden_reasons"]["vague"] == 1
+    assert payload["hidden_reasons"]["unplaced"] == 1
+    assert payload["_triage"][1]["reason"] == "unplaced"
 
 
 LEGACY_TEXT = ("Upload of the Q3 board deck for Zyxwv Holdings to X failed at finalize; "
@@ -202,8 +238,7 @@ def test_cron_maps_legacy_rows_and_publishes_only_proposals(hosted, monkeypatch)
             "input": "A video file and the post text for a connected X account",
             "output": "The post ID and URL, published exactly once",
             "problem": "Chunked video uploads to X fail midway and leave agents unsure whether it posted",
-            "rationale": "Social agents post daily and would pay a few cents per verified post.",
-            "would_pay": "likely", "realism": 5, "clarity": 5, "request_ids": ids}]}
+            "request_ids": ids}]}
 
     monkeypatch.setattr(proposals, "_chat_json", fake_model)
     cron.run_service_proposals(NOW)
@@ -228,6 +263,10 @@ def test_cron_maps_legacy_rows_and_publishes_only_proposals(hosted, monkeypatch)
     for secret in ("Zyxwv", "Priya Raman", "board deck", GOOD["problem"]):
         assert secret not in public
     assert conn.execute("select count(*) as n from app_cache where key = 'project_ideas'").fetchone()["n"] == 0
+    # Each request's outcome is stored privately, never in the public payload (SRI-122).
+    assert "_triage" not in payload
+    triage = conn.execute("select listed, reason, proposal_title from service_request_triage").fetchall()
+    assert [dict(t) for t in triage] == [{"listed": True, "reason": None, "proposal_title": proposal["title"]}] * 2
 
 
 def test_no_requests_publishes_an_empty_payload(hosted, monkeypatch):  # noqa: F811
@@ -337,7 +376,7 @@ def test_proposals_take_frequency_and_capability_from_the_requests():
     assert "kind" not in ocr and "unlocks" not in ocr and ocr["capability"] == "docs.ocr"
     assert ocr["frequency"] == {"recurring": 1, "per_task_like_this": 1}
     assert ocr["builds_on"] == "a layout-aware OCR API with table reconstruction"
-    assert "_member_ids" not in ocr and "listed_by_kind" not in payload
+    assert "listed_by_kind" not in payload
     items = proposals._model_items(rows)
     assert items[0]["builds_on"] and "kind" not in items[0] and "unlocks" not in items[0]
     assert "builds_on" not in items[2]
