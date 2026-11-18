@@ -100,6 +100,10 @@ def group(services: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "n_eff": row.get("n_eff"),
                     "num_reviews": row.get("num_reviews"),
                     "num_weighted_reviews": row.get("num_weighted_reviews"),
+                    # Paid ratings behind the endpoint's average: weighted
+                    # plus archived. Endpoint rows show avg_rating_weighted
+                    # and this; the provider's score handles uncertainty.
+                    "num_weighted": int(row.get("num_weighted_reviews") or 0) + int(row.get("num_legacy_reviews") or 0),
                 }
                 for row in rows
             ),
@@ -123,3 +127,41 @@ def group(services: list[dict[str, Any]]) -> list[dict[str, Any]]:
     providers.sort(key=lambda p: (-p["score"], -p["n_eff"], -p["num_reviews"], p["name"].lower()))
     return providers
 
+
+
+def provider_summary(conn: Any, endpoint: str | None, origin: str | None = None) -> dict[str, Any] | None:
+    """The provider an endpoint belongs to, pooled exactly as the rankings
+    pool it: its score, P(better than a 3), weighted average and counts.
+
+    An endpoint's own page shows its plain average rating; the uncertainty is
+    handled once, here, over all of the provider's paid ratings (owner,
+    2026-11-18)."""
+    from crowdcode.review_sql import directory_listed, review_counts
+
+    key = provider_key(endpoint, origin)
+    if key is None:
+        return None
+    host_origin = origin or (f"https://{key.split('/', 1)[0]}")
+    rows = conn.execute(
+        f"""
+        select s.id as service_id, s.name, s.canonical_endpoint, s.canonical_origin, s.score,
+               s.avg_rating_weighted, s.p_above_3, s.score_alpha, s.score_beta, s.n_eff,
+               {review_counts('r')}
+        from services s
+        left join reviews r on r.service_id = s.id
+        where s.canonical_origin in (%s, %s)
+          and coalesce(s.metadata->>'hosted_status', '') <> 'deleted'
+          and {directory_listed('s')}
+        group by s.id
+        """,
+        (host_origin, host_origin.replace("https://", "https://www.", 1)),
+    ).fetchall()
+    rows = [dict(row, rated=row["avg_rating_weighted"] is not None,
+                 provider_key=provider_key(row["canonical_endpoint"], row["canonical_origin"]))
+            for row in rows]
+    rows = [row for row in rows if row["provider_key"] == key]
+    if not rows:
+        return None
+    [provider] = group(rows)
+    endpoints = provider.pop("endpoints")
+    return {**provider, "endpoint_ids": [e["service_id"] for e in endpoints]}

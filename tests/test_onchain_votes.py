@@ -110,3 +110,19 @@ def test_a_wallet_of_the_payees_own_account_is_no_vote(indexed, monkeypatch):
     result = _review(conn, monkeypatch, seed="66")
     assert result["accepted"], result
     assert result["weight_exclusion"] == "self_dealing"
+
+
+def test_an_endpoint_reports_its_average_and_its_providers_pooled_score(indexed, monkeypatch):
+    conn, _ = indexed
+    assert _review(conn, monkeypatch, seed="71", rating=5)["accepted"]
+    assert _review(conn, monkeypatch, seed="72", rating=4)["accepted"]
+    score = server_mod.get_service_score(service_id=SERVICE_ID)
+    assert score["endpoint_avg_rating"] == pytest.approx(4.5, abs=0.01)
+    provider = score["provider"]
+    assert provider["provider_key"] == "api.financialdatasets.example"
+    assert provider["num_endpoints"] == 1 and provider["endpoint_ids"] == [SERVICE_ID]
+    assert provider["score"] == pytest.approx(score["score"])
+    payload, status = server_mod._service_detail_payload(SERVICE_ID)
+    assert status == 200
+    assert payload["endpoint_avg_rating"] == pytest.approx(4.5, abs=0.01)
+    assert payload["provider"]["score"] == pytest.approx(provider["score"])

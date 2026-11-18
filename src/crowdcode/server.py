@@ -43,7 +43,7 @@ from crowdcode.identity import (
     resolve_service,
 )
 from crowdcode.payee_hints import PayeeHint, payee_hint
-from crowdcode.providers import group as group_providers, provider_key
+from crowdcode.providers import group as group_providers, provider_key, provider_summary
 from crowdcode.payments import (
     LEVEL_ONCHAIN_VERIFIED,
     LEVEL_RESPONSE_ATTESTED,
@@ -523,6 +523,7 @@ def get_service_score(
             f"select {SCORE_COLUMNS}, review_summary from services where id = %s",
             (service["id"],),
         ).fetchone()
+        provider = _provider_summary(conn, service.get("canonical_endpoint"), service.get("canonical_origin"))
 
     canonical_score = as_float(stored["score"]) if stored else None
     return {
@@ -542,6 +543,10 @@ def get_service_score(
         "found": True,
         **_score_fields(stored),
         "score_algorithm": SCORE_ALGORITHM,
+        # This endpoint's plain weighted average, and the provider it belongs
+        # to with the pooled score that handles the uncertainty (2026-11-18).
+        "endpoint_avg_rating": as_float(stored["avg_rating_weighted"]) if stored else None,
+        "provider": provider,
         "avg_rating": as_float(score["avg_rating"]),
         "num_reviews": score["num_reviews"],
         "num_verified_reviews": score["num_verified_reviews"],
@@ -1242,6 +1247,17 @@ def review_service(
                             weight_exclusion, attested is not None)
 
 
+def _provider_summary(conn: Any, endpoint: str | None, origin: str | None) -> dict[str, Any] | None:
+    """The endpoint's provider with its pooled score; None if it cannot be read
+    (never fails the score lookup it decorates)."""
+    try:
+        with conn.transaction():
+            return provider_summary(conn, endpoint, origin)
+    except Exception:
+        logger.exception("provider summary failed")
+        return None
+
+
 def _weight_basis(attested: bool, weight_exclusion: str | None) -> str:
     if weight_exclusion is not None:
         return "none"
@@ -1509,7 +1525,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
     with connect() as conn:
         service = conn.execute(
             f"""
-            select id, name, directory_slug, canonical_endpoint,
+            select id, name, directory_slug, canonical_endpoint, canonical_origin,
                    payment_provider, {SCORE_COLUMNS},
                    review_summary, metadata->>'description' as description,
                    metadata->>'crowdcode_service_id' as crowdcode_service_id
@@ -1541,6 +1557,7 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
             """,
             (service_id,),
         ).fetchone()
+        provider = _provider_summary(conn, service.get("canonical_endpoint"), service.get("canonical_origin"))
         histogram_rows = conn.execute(
             f"""
             select rating, count(*)::int as n
@@ -1583,6 +1600,8 @@ def _service_detail_payload(service_id: str) -> tuple[dict[str, Any], int]:
         **networks,
         **_score_fields(service),
         "score_algorithm": SCORE_ALGORITHM,
+        "endpoint_avg_rating": as_float(service.get("avg_rating_weighted")),
+        "provider": provider,
         "tier": service.get("tier") or "new",
         "reliability_score": as_float(service.get("reliability_score")),
         "reliability_state": service.get("reliability_state") or "unverified",
