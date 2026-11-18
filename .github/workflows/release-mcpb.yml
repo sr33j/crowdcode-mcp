@@ -22,6 +22,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run build -w @crowdcode/redaction
       - run: npm run build:plugin -w crowdcode-mcp
       - uses: actions/upload-artifact@v4
         with:
@@ -42,6 +43,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run build -w @crowdcode/redaction
       - run: npm run build:mcpb -w crowdcode-mcp
       - uses: actions/upload-artifact@v4
         with:
