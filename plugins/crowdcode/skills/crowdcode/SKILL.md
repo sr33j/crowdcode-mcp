@@ -206,8 +206,8 @@ flagged"; problem "ordinary OCR drops columns and misaligns totals"; builds_on
 `per_task_like_this`; price_per_call 0.5.
 
 Requests stay private. CrowdCode publishes only aggregated proposals: similar
-requests are generalized into services a builder could start on and shown with
-their demand and median price.
+requests are generalized, and every tractable one (a clear input, output and
+problem) is listed with its demand and median price.
 
 Do not request generic web search that already worked well, local Python
 execution, more context, or an ordinary agent mistake without a concrete

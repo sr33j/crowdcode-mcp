@@ -233,6 +233,9 @@ describe("Stop hook when a task ends short (SRI-122)", () => {
     for (let i = 0; i < 10; i += 1) lines.push(call(`c${i}`, i % 2 ? "Edit" : "Grep"), result(`c${i}`, "ok"));
     expect(await stopWith([...lines, say("Renamed it and updated all 5 callers; the tests pass.")])).toBeNull();
     expect(await stopWith([user("hi"), say("Hello!")], { last_assistant_message: "Hello!" })).toBeNull();
+    // Ordinary prose about limits is not the agent admitting it fell short.
+    expect(await stopWith([user("export the rows"), call("a", "Bash"), result("a", "ok"),
+      say("Done. The API can't take more than 100 rows, so I sent them in 3 batches; you cannot undo an export.")])).toBeNull();
   });
 
   it("reads Codex's last_assistant_message", async () => {

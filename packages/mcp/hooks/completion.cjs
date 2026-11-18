@@ -28,16 +28,18 @@ const REVIEW_TOOL_RE = /crowdcode.*review_service$/i;
 const REQUEST_TOOL_RE = /crowdcode.*request_service$/i;
 // Every nudge starts with this; finding it in the turn means we already nudged.
 const MARKER = "CrowdCode check (once)";
-// A final answer that admits the task ended short of what was asked.
+// A final answer that admits, in the agent's own words, that the task ended
+// short: first person or explicit only, so "the API can't take more than 100
+// rows, so I batched them" or "you cannot deduct this" does not count. The
+// same phrases as the hosted runtime's reflection (opencrowd economy-tools.ts).
 const SHORT_RE = new RegExp([
-  "couldn[\u2019']?t", "could not", "can[\u2019']?t", "cannot", "unable to",
-  "(?:was|were|am|is|are)(?: not|n[\u2019']?t) able to", "not possible",
-  "did(?: not|n[\u2019']?t) (?:finish|complete|succeed|work|get|find|return)",
-  "failed to", "no (?:service|api|provider|tool|endpoint)s? (?:could|can|that|was|were|is|for|available|offers|returned)",
-  "partial(?:ly)?", "incomplete", "work ?around", "fell back", "gave up", "stalled",
-  "ran out of", "insufficient (?:funds|balance)", "out of (?:funds|budget|credits)",
-  "timed out", "not available",
-].map((part) => `\\b${part}\\b`).join("|"), "i");
+  String.raw`\b(?:I|we)(?:['’](?:m|ve|d|re))?(?:\s+[\w'’]+){0,3}?\s+(?:unable to|couldn[\u2019']?t|could not|can[\u2019']?t|cannot|(?:was|were|am|are) unable to|(?:was|were|am|are)(?: not|n[\u2019']?t) able to|did(?: not|n[\u2019']?t) (?:manage|get|find|finish|complete)|failed to|ran out of|gave up)\b`,
+  String.raw`\bpartial(?:ly)? (?:result|answer|list|data|report|delivery|done|complete|finished)\b`,
+  String.raw`\b(?:this|the) (?:task|request|result|answer|list|report|job) is (?:incomplete|partial|unfinished|blocked)\b`,
+  String.raw`\b(?:stalled|blocked) (?:on|by)\b`,
+  String.raw`\bwork(?:ed)? ?around\b`,
+  String.raw`\bno (?:paid |available |suitable )?(?:service|api|provider|endpoint)s? (?:could|can|was able|were able|offers?|returned|provides?|is available|was available|exists?)\b`,
+].join("|"), "i");
 const CROWDCODE_TOOL_RE = /^mcp__(plugin_)?crowdcode/i;
 
 function disabled() {
