@@ -487,7 +487,7 @@ class Tools:
             demand = p.get("demand") or {}
             rows.append({"title": p.get("title"), "problem": p.get("problem"), "input": p.get("input"),
                          "output": p.get("output"), "median_price_usd": (p.get("price") or {}).get("median"),
-                         "agents_asking": demand.get("requesters"), "would_pay": p.get("would_pay"),
+                         "agents_asking": demand.get("requesters"),
                          "last_requested_at": demand.get("last_requested_at")})
         rows.sort(key=lambda r: (r.get("agents_asking") or 0, r.get("median_price_usd") or 0), reverse=True)
         limit = max(1, min(int(args.get("limit") or 10), 50))

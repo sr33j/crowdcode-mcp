@@ -265,7 +265,7 @@ export function createToolHandlers(deps: ServerDeps) {
         }
       }
       return toToolResult({ ...payload, task_completion_reminder:
-        "Before your final answer, if a concrete paid service would have fixed an observed failure, poor result or excessive cost, file it with request_service, including builds_on. Submit nothing if none qualifies. Respect CrowdCode off." });
+        "Review this service with review_service after you use it. If the task then fails, stalls or ends partial, request_service the service that would have let you finish, including builds_on, before your final answer. Respect CrowdCode off." });
     },
 
     get_review_signing_payload: async (
@@ -345,7 +345,7 @@ export function createToolHandlers(deps: ServerDeps) {
       if (unlinkedArgs !== null) {
         payload = await forwardPayload("review_service", unlinkedArgs);
       }
-      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Before your final answer, consider request_service for a concrete paid service that would have fixed an observed failure, poor result or excessive cost, with builds_on. Skip if nothing qualifies; do not duplicate earlier requests." });
+      return toToolResult({ ...withWalletInfo(payload, prepared), task_completion_reminder: "Review every other paid service you tried this task too. If the task failed, stalled, was partial or needed a costly workaround, call request_service once for the service that would have let you finish, with builds_on, before your final answer. Otherwise file one only if it would have fixed an observed failure, poor result or excessive cost; do not duplicate earlier requests." });
     },
   };
 }
@@ -374,9 +374,9 @@ const SERVER_INSTRUCTIONS = [
   "`summary` digests what reviewers reported (strengths / failure modes /",
   "caveats).",
   "",
-  "Reviews are optional for you: use review_service when a paid result was poor or",
-  "failed, or when the user asks. Only reviews from hosted CrowdCode agents carry ranking",
-  "weight; yours are published as unweighted community evidence and are still useful.",
+  "Review each paid service you use with review_service, in one line; always review one that",
+  "was poor, failed or returned nothing useful. Only reviews from hosted CrowdCode agents carry",
+  "ranking weight; yours are published as unweighted community evidence and are still useful.",
   "Unpaid experiences use the same tool: omit payment_reference and payment_proof. The",
   "reviewer signs with the local AgentCash wallet; signing is automatic and pays nothing.",
   "Rate usefulness for the original task from 1 (unusable) to 5 (excellent), describe",
@@ -390,14 +390,16 @@ const SERVER_INSTRUCTIONS = [
   "request or response. CrowdCode counts it as a payer and liveness signal, not a rating.",
   "`crowdcode-mcp off` stops it.",
   "",
-  "Before the final answer to a substantive task that bought something, hit a failure or",
-  "took many steps, reflect once: what concrete paid service would have fixed an observed",
-  "failure, a poor result or excessive cost? For each worthwhile one call request_service",
-  "with input, output, problem, builds_on (what it could be built from today), frequency",
-  "and price_per_call. Describe a reusable service,",
+  "Before finishing ANY task that failed, stalled, was partial or needed a costly workaround,",
+  "do both, once: (1) review_service each paid service you tried, including ones that",
+  "returned nothing useful; (2) request_service for the service that would have let you",
+  "finish. Then tell the user what is still missing. After a task that bought something or",
+  "hit a failure but finished, reflect once: what concrete paid service would have fixed",
+  "an observed failure, a poor result or excessive cost? File each worthwhile one; if",
+  "nothing qualifies, submit nothing. A request has input, output, problem, builds_on (what",
+  "it could be built from today), frequency and price_per_call. Describe a reusable service,",
   "never the task's answer restated; requests that restate the task, say N/A or lack",
-  "builds_on are rejected. If nothing qualifies, submit nothing. Never send secrets or",
-  "private user data.",
+  "builds_on are rejected. Never send secrets or private user data.",
   "At task start check crowdcode_status. User says 'Crowdcode on'/'Crowdcode off': call",
   "set_crowdcode_enabled with enabled=true/false and scope=session, or scope=default",
   "when they ask to remember it. Off overrides all automatic CrowdCode workflows:",
@@ -445,7 +447,10 @@ export function buildServer(deps: ServerDeps): McpServer {
     {
       description:
         "Record a concrete paid service that would have fixed an observed failure, a poor " +
-        "result or excessive cost in this task. Fill input (what the user gives), output (the " +
+        "result or excessive cost in this task. Call it before finishing any task that failed, " +
+        "stalled, was partial or needed a costly workaround, for the service that would have " +
+        "let you finish. A clear input, a clear output and a clear problem are what make it " +
+        "buildable. Fill input (what the user gives), output (the " +
         "exact deliverable), problem (what failed, was poor or cost too much), builds_on (what " +
         "it could be built from today: an official API, licensed data, existing paid services, " +
         "a human-ops team), frequency (one_off, per_task_like_this, recurring) and " +
@@ -520,7 +525,8 @@ export function buildServer(deps: ServerDeps): McpServer {
       description:
         "Review a service experience, paid or unpaid, with a rating from 1 to 5 " +
         "and concrete observations about usefulness for the original task. " +
-        "Optional for local agents: review a poor or failed paid result, or when the user asks. " +
+        "Review each paid service you use, in one line; always review one that was poor, failed " +
+        "or returned nothing useful, and every service you tried before ending a task short. " +
         "Only hosted CrowdCode agents' reviews carry ranking weight; yours are published as " +
         "unweighted community evidence. Unpaid successes and failures can use the same tool. " +
         "Distinguish provider faults from client errors, insufficient funds, and uncertain causes. " +

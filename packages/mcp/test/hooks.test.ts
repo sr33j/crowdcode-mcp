@@ -133,14 +133,14 @@ describe("conditional Stop hook", () => {
       call("r", "mcp__crowdcode__review_service"), result("r", "{\"accepted\":true}"), say("done"),
     ])).toBeNull();
   });
-  it("fires after a failed tool or at least 8 tool calls", async () => {
-    const failed = await stopWith([user("build it"), call("a", "Bash"), result("a", "exit 1", true), say("failed")]);
+  it("fires after a failed tool, but not for many steps alone", async () => {
+    const failed = await stopWith([user("build it"), call("a", "Bash"), result("a", "exit 1", true), say("fixed it, all tests pass")]);
     expect(failed.decision).toBe("block");
     expect(failed.reason).not.toContain("without rating");
-    const seven = [user("refactor")];
-    for (let i = 0; i < 7; i += 1) seven.push(call(`c${i}`, "Read"), result(`c${i}`, "file"));
-    expect(await stopWith([...seven, say("done")])).toBeNull();
-    expect((await stopWith([...seven, call("c7", "Edit"), result("c7", "ok"), say("done")])).decision).toBe("block");
+    expect(failed.reason).not.toContain("looks unfinished");
+    const many = [user("refactor")];
+    for (let i = 0; i < 12; i += 1) many.push(call(`c${i}`, i % 2 ? "Edit" : "Read"), result(`c${i}`, "ok"));
+    expect(await stopWith([...many, say("done")])).toBeNull();
   });
   it("reads Codex rollout transcripts too", async () => {
     const codex = (payload: Line): Line => ({ timestamp: "t", type: "response_item", payload });
@@ -163,5 +163,81 @@ describe("conditional Stop hook", () => {
     const dir = await home();
     expect(runHook("completion.cjs", "broken", { CROWDCODE_HOME: dir }).stdout).toBe("");
     expect(completion.decide({ hook_event_name: "SubagentStop" }, receipts.findReceipt)).toBeNull();
+  });
+});
+
+// --- SRI-122: a task that ends short reviews what it tried and requests what it lacked ----
+
+describe("Stop hook when a task ends short (SRI-122)", () => {
+  const filingsTask = (extra: Line[] = []) => [
+    user("get the last three 10-Q revenue tables for this company as CSV"),
+    call("s1", "mcp__agentcash__fetch"), result("s1", x402Result()),
+    call("s2", "mcp__agentcash__fetch"), result("s2", x402Result({ status: 502, body: "" })),
+    say("I couldn't get the revenue tables: no service returned the filings as tables, so this is partial."),
+    ...extra,
+  ];
+
+  it("a task that fails for lack of a service ends with a review of each service tried and one request", async () => {
+    const decision = await stopWith(filingsTask());
+    expect(decision.decision).toBe("block");
+    expect(decision.reason).toContain("looks unfinished");
+    expect(decision.reason).toContain("1. review_service the 2 paid service calls you tried");
+    expect(decision.reason).toContain("including any that returned nothing useful");
+    expect(decision.reason).toContain("2. request_service once, for the service that would have let you finish");
+    expect(decision.reason).toContain("builds_on");
+    // The agent does exactly that: one review per service tried, then one request.
+    const done = filingsTask([
+      call("r1", "mcp__crowdcode__review_service"), result("r1", "{\"accepted\":true}"),
+      call("r2", "mcp__crowdcode__review_service"), result("r2", "{\"accepted\":true}"),
+      call("q1", "mcp__crowdcode__request_service"), result("q1", "{\"accepted\":true}"),
+      say("Reviewed both and requested a filings-to-CSV service. The tables are still missing."),
+    ]);
+    const steps = completion.currentTurn(done.map((l) => JSON.parse(JSON.stringify(l))));
+    const names = steps.filter((s: any) => s.kind === "call").map((s: any) => s.name);
+    expect(names.filter((n: string) => n.endsWith("review_service"))).toHaveLength(2);
+    expect(names.filter((n: string) => n.endsWith("request_service"))).toHaveLength(1);
+    // Its next stop is silent: nothing left to review, and the request is filed.
+    expect(await stopWith(done)).toBeNull();
+  });
+
+  it("nudges once, never in a loop", async () => {
+    // The host marks the stop that follows a hook...
+    expect(await stopWith(filingsTask(), { stop_hook_active: true })).toBeNull();
+    // ...and a host that does not still has our nudge in the turn.
+    const nudge = { type: "user", message: { role: "user", content: (await stopWith(filingsTask())).reason } };
+    expect(await stopWith([...filingsTask(), nudge, say("I could not finish.")])).toBeNull();
+  });
+
+  it("asks only for what is missing", async () => {
+    const reviewed = await stopWith(filingsTask([
+      call("r1", "mcp__crowdcode__review_service"), result("r1", "{}"),
+      call("r2", "mcp__crowdcode__review_service"), result("r2", "{}"),
+      say("Still could not get the tables."),
+    ]));
+    expect(reviewed.reason).not.toContain("review_service the");
+    expect(reviewed.reason).toContain("1. request_service once");
+    const noPurchases = await stopWith([user("transcribe this voicemail"), call("a", "Read"), result("a", "audio.m4a"),
+      say("I can't transcribe audio here and found no service for it.")]);
+    expect(noPurchases.reason).toContain("each paid service you tried this task, if any");
+    expect(noPurchases.reason).toContain("2. request_service once");
+  });
+
+  it("treats a paid call that returned nothing useful as a task cut short", async () => {
+    const decision = await stopWith([user("price this"), call("a", "mcp__agentcash__fetch"),
+      result("a", x402Result({ status: 500 })), say("Here is my estimate.")]);
+    expect(decision.reason).toContain("looks unfinished");
+  });
+
+  it("a successful task with no paid calls produces neither", async () => {
+    const lines: Line[] = [user("rename the helper and update its callers")];
+    for (let i = 0; i < 10; i += 1) lines.push(call(`c${i}`, i % 2 ? "Edit" : "Grep"), result(`c${i}`, "ok"));
+    expect(await stopWith([...lines, say("Renamed it and updated all 5 callers; the tests pass.")])).toBeNull();
+    expect(await stopWith([user("hi"), say("Hello!")], { last_assistant_message: "Hello!" })).toBeNull();
+  });
+
+  it("reads Codex's last_assistant_message", async () => {
+    const prompt = { timestamp: "t", type: "event_msg", payload: { type: "user_message", message: "go" } };
+    const decision = await stopWith([prompt], { last_assistant_message: "I was unable to find a service that does this." });
+    expect(decision.reason).toContain("looks unfinished");
   });
 });

@@ -61,3 +61,19 @@ configuration](https://code.claude.com/docs/en/hooks). A direct `node` executabl
 and argument array keep spaces and shell metacharacters in home paths safe on
 all supported platforms. `doctor` checks both the installed script and hook
 registration. Off cannot undo a request already sent before the setting changed.
+
+The Stop hook (`packages/mcp/hooks/completion.cjs`) reads only the local
+transcript and decides from the current turn (SRI-122):
+
+| Turn | Nudge |
+| --- | --- |
+| Ended short: the final answer says it failed, stalled, was partial or needed a workaround, or a paid call returned an error or nothing | review each paid service tried (that is not yet rated), then `request_service` once for the service that would have let it finish |
+| Finished, with an unrated paid call | rate it; reflect, request only if one qualifies |
+| Finished, with a failed tool | reflect, request only if one qualifies |
+| Finished, no paid call, no failure (any number of steps) | nothing |
+| Already reviewed everything and requested | nothing |
+
+One nudge per task, never a loop: the hook is silent when the host marks the
+stop as following a hook (`stop_hook_active`), and when its own nudge (it starts
+with "CrowdCode check (once)") is already in the turn, for hosts that do not set
+that flag. Anything unexpected fails open.
