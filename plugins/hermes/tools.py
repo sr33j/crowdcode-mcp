@@ -198,7 +198,7 @@ class Tools:
     def handlers(self) -> dict[str, Callable[..., str]]:
         return {name: self._guarded(getattr(self, name.removeprefix("crowdcode_"))) for name in (
             "crowdcode_wallet", "crowdcode_agents", "crowdcode_create_agent", "crowdcode_fund_agent",
-            "crowdcode_run_task", "crowdcode_task_status", "crowdcode_services", "crowdcode_withdraw",
+            "crowdcode_run_task", "crowdcode_task_status", "crowdcode_task_events", "crowdcode_services", "crowdcode_withdraw",
             "crowdcode_transfer", "crowdcode_demand", "crowdcode_files", "crowdcode_download", "crowdcode_claim")}
 
     # tools ---------------------------------------------------------------
@@ -388,6 +388,10 @@ class Tools:
                "files": [_file_summary(f) for f in task.get("artifacts") or []]}
         if task.get("waiting_for"):
             out["waiting_for"] = task["waiting_for"]
+        # What the API says about the run itself; a failed task's reason is in `detail` (SRI-119).
+        for key in ("state", "detail", "created_at", "finished_at"):
+            if task.get(key):
+                out[key] = task[key]
         if out["files"]:
             out["files_note"] = "Nothing was downloaded. Save them with crowdcode_download (file ids or \"all\")."
         if status not in TERMINAL:
@@ -403,6 +407,23 @@ class Tools:
         record = next((t for t in self._state_list("tasks") if t.get("task_id") == task_id),
                       {"agent_id": agent_id, "task_id": task_id, "at": time.time()})
         return self._report(record, task)
+
+    def task_events(self, args: dict) -> str:
+        agent_id, task_id = _id(args, "agent_id"), _id(args, "task_id")
+        query = []
+        if args.get("after") not in (None, ""):
+            after = int(args["after"])
+            if after < 0:
+                raise ValueError("after must be a whole number")
+            query.append(f"after={after}")
+        if args.get("limit") not in (None, ""):
+            limit = int(args["limit"])
+            if not 1 <= limit <= 500:
+                raise ValueError("limit must be between 1 and 500")
+            query.append(f"limit={limit}")
+        page = self.api().signed("GET", f"/agents/{agent_id}/tasks/{task_id}/events" + (f"?{'&'.join(query)}" if query else ""))
+        page = page if isinstance(page, dict) else {}
+        return _ok(task_id=task_id, agent_id=agent_id, events=page.get("events") or [], next_after=page.get("next_after"))
 
     def services(self, args: dict) -> str:
         agent_id = _id(args, "agent_id")

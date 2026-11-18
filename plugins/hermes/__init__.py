@@ -1,6 +1,6 @@
 """CrowdCode for Hermes: cloud agents with their own wallets, owned by this install's wallet.
 
-``register(ctx)`` wires thirteen tools, a ``pre_tool_call`` spend guard, the
+``register(ctx)`` wires fourteen tools, a ``pre_tool_call`` spend guard, the
 ``/crowdcode`` slash command and the ``hermes crowdcode`` terminal command.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .tools import Tools
 
 TOOLSET = "crowdcode"
 EMOJI = {"crowdcode_wallet": "👛", "crowdcode_agents": "🤖", "crowdcode_create_agent": "✨",
-         "crowdcode_fund_agent": "💸", "crowdcode_run_task": "🚀", "crowdcode_task_status": "📋",
+         "crowdcode_fund_agent": "💸", "crowdcode_run_task": "🚀", "crowdcode_task_status": "📋", "crowdcode_task_events": "🧾",
          "crowdcode_services": "🛠", "crowdcode_withdraw": "🏦", "crowdcode_transfer": "🔁",
          "crowdcode_demand": "📈", "crowdcode_files": "🗂", "crowdcode_download": "⬇️",
          "crowdcode_claim": "🔑"}

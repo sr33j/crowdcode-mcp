@@ -237,6 +237,9 @@ class Handler(BaseHTTPRequestHandler):
             task = STATE.tasks.get(rest[1])
             if task is None or task["agent_id"] != agent["id"]:
                 return self._send(404, {"error": "not_found"})
+            if len(rest) == 3 and rest[2] == "events" and method == "GET":
+                from urllib.parse import parse_qs
+                return self._send(200, self._task_events(agent, task, parse_qs(urlsplit(raw_path).query)))
             if len(rest) == 3 and rest[2] == "cancel" and method == "POST":
                 if task["status"] not in ("completed", "failed", "cancelled"):
                     task["status"] = "cancelled"
@@ -422,8 +425,29 @@ class Handler(BaseHTTPRequestHandler):
                                            "size_bytes": len(content), "content_type": "text/markdown",
                                            "task_id": task["id"], "created_at": created, "content": content})
         files = [{k: v for k, v in f.items() if k != "content"} for f in agent["files"] if f["task_id"] == task["id"]]
-        return {"status": task["status"], "answer": task.get("answer"), "spent_usd": _dec(task.get("spent", 0.0)),
-                "purchases": task.get("purchases", []), "artifacts": files}
+        started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(task["started"]))
+        done = task["status"] in ("completed", "failed", "cancelled")
+        return {"status": task["status"], "state": task["status"], "answer": task.get("answer"), "spent_usd": _dec(task.get("spent", 0.0)),
+                "purchases": task.get("purchases", []), "artifacts": files, "created_at": started,
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if done else None}
+
+    def _task_events(self, agent: dict, task: dict, query: dict) -> dict:
+        """What GET /agents/:id/tasks/:task_id/events answers: the tool timeline, a page at a time."""
+        self._task_view(agent, task)
+        at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(task["started"]))
+        events = [] if task["status"] in ("queued",) else [
+            {"seq": 1, "at": at, "type": "tool.started", "tool": "call_paid_service", "call_id": "1:a", "turn": 1,
+             "input": {"url": "https://x402.example/search", "method": "POST"}},
+            {"seq": 2, "at": at, "type": "tool.finished", "tool": "call_paid_service", "call_id": "1:a", "turn": 1,
+             "status": "ok", "duration_ms": 1200},
+            {"seq": 3, "at": at, "type": "model.finished", "turn": 2, "model": "openai/gpt-5.6-luna", "status": "ok",
+             "input_tokens": 1000, "output_tokens": 50},
+        ]
+        after = int((query.get("after") or ["0"])[0])
+        limit = max(1, min(500, int((query.get("limit") or ["100"])[0])))
+        rest = [e for e in events if e["seq"] > after]
+        page = rest[:limit]
+        return {"task_id": task["id"], "events": page, "next_after": page[-1]["seq"] if len(rest) > limit else None}
 
     def _move(self, agent: dict, payload: dict, target: dict | None, to: str | None = None) -> None:
         amount = float(payload.get("amount_usd") or 0)

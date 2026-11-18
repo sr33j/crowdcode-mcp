@@ -135,10 +135,45 @@
         "task_id": "$task"
       },
       "equals": {
-        "status": "completed"
+        "status": "completed",
+        "state": "completed"
       },
       "length": {
         "files": 3
+      }
+    },
+    {
+      "name": "task events",
+      "tool": "crowdcode_task_events",
+      "args": {
+        "agent_id": "$scout",
+        "task_id": "$task",
+        "limit": 2
+      },
+      "equals": {
+        "events.0.tool": "call_paid_service",
+        "events.1.status": "ok"
+      },
+      "length": {
+        "events": 2
+      },
+      "save": {
+        "after": "next_after"
+      }
+    },
+    {
+      "name": "task events, next page",
+      "tool": "crowdcode_task_events",
+      "args": {
+        "agent_id": "$scout",
+        "task_id": "$task",
+        "after": "$after"
+      },
+      "equals": {
+        "next_after": null
+      },
+      "length": {
+        "events": 1
       }
     },
     {

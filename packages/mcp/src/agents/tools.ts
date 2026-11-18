@@ -1,5 +1,5 @@
 /**
- * The 13 CrowdCode agent tools of spec/agent-tools.json, ported from the Hermes
+ * The 14 CrowdCode agent tools of spec/agent-tools.json, ported from the Hermes
  * plugin's tools.py: the same `{ok, error, hint}` shapes, field names and
  * validations, money as the API returns it.
  *
@@ -311,6 +311,7 @@ export class AgentTools {
       crowdcode_fund_agent: (a) => this.fundAgent(a),
       crowdcode_run_task: (a) => this.runTask(a),
       crowdcode_task_status: (a) => this.taskStatus(a),
+      crowdcode_task_events: (a) => this.taskEvents(a),
       crowdcode_services: (a) => this.services(a),
       crowdcode_withdraw: (a) => this.withdraw(a),
       crowdcode_transfer: (a) => this.transfer(a),
@@ -618,6 +619,11 @@ export class AgentTools {
       files: ((task.artifacts || []) as FileEntry[]).map(fileSummary),
     };
     if (task.waiting_for) out.waiting_for = task.waiting_for;
+    // What the API says about the run itself; a failed task's reason is in `detail` (SRI-119).
+    if (task.state) out.state = task.state;
+    if (task.detail) out.detail = task.detail;
+    if (task.created_at) out.created_at = task.created_at;
+    if (task.finished_at) out.finished_at = task.finished_at;
     if ((out.files as unknown[]).length) {
       out.files_note = 'Nothing was downloaded. Save them with crowdcode_download (file ids or "all").';
     }
@@ -633,6 +639,30 @@ export class AgentTools {
     const task = await api.signed("GET", `/agents/${agentId}/tasks/${taskId}`);
     const known = (await recentTasks(this.home).catch(() => [])).find((t) => t?.task_id === taskId);
     return this.report(known ?? { agent_id: agentId, task_id: taskId, at: nowSeconds() }, task);
+  }
+
+  async taskEvents(args: Args): Promise<ToolResult> {
+    const agentId = checkId(args, "agent_id");
+    const taskId = checkId(args, "task_id");
+    const query: string[] = [];
+    if (args.after !== undefined && args.after !== null && args.after !== "") {
+      const after = Number(args.after);
+      if (!Number.isSafeInteger(after) || after < 0) throw new ToolError("after must be a whole number");
+      query.push(`after=${after}`);
+    }
+    if (args.limit !== undefined && args.limit !== null && args.limit !== "") {
+      const limit = Number(args.limit);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new ToolError("limit must be between 1 and 500");
+      query.push(`limit=${limit}`);
+    }
+    const api = await this.api();
+    const page = await api.signed("GET", `/agents/${agentId}/tasks/${taskId}/events${query.length ? `?${query.join("&")}` : ""}`);
+    return ok({
+      task_id: taskId,
+      agent_id: agentId,
+      events: Array.isArray(page?.events) ? page.events : [],
+      next_after: page?.next_after ?? null,
+    });
   }
 
   async services(args: Args): Promise<ToolResult> {

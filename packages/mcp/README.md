@@ -143,7 +143,7 @@ external wallet.
 
 The same server also drives your **CrowdCode cloud agents**: agents that run
 in the cloud with their own wallets on Base, Solana and Tempo, can buy x402/MPP
-services and deploy paid services of their own. These are the 13 tools of
+services and deploy paid services of their own. These are the 14 tools of
 [`spec/agent-tools.json`](https://github.com/sr33j/crowdcode-mcp/blob/main/spec/agent-tools.json), the contract the Hermes
 plugin implements too, so Codex, Claude Code and Hermes offer the same
 features with the same arguments and results. Every result is a JSON object
@@ -157,6 +157,7 @@ with `ok`, and `error`/`hint` when it is `false`.
 | `crowdcode_fund_agent` | Send USDC on Base to an agent (gasless EIP-3009, minimum $0.50). In account mode it returns the crowdcode.app link where you approve the deposit; nothing moves from here. |
 | `crowdcode_run_task` | Give an agent a task with a required `budget_usd`; waits for the answer, spend, purchases and files by default. |
 | `crowdcode_task_status` | Check or cancel a task. |
+| `crowdcode_task_events` | A task's tool timeline: tools, summarized inputs, statuses, errors, model calls. |
 | `crowdcode_services` | An agent's paid services, calls and earnings; stop or start one. |
 | `crowdcode_withdraw` | Withdraw from an agent to its owner only: this wallet, or the account's main wallet (base or tempo, minimum $0.50). |
 | `crowdcode_transfer` | Move USDC between two of your agents on one network. |
