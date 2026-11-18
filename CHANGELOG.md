@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Deploys no longer switch traffic to an instance that is still loading search.**
+  - Render's health check was `/health` (live as soon as uvicorn listens). Search then loaded its model and ~48k-offering index on the new instance for minutes, while it already served traffic: search, reliability lookups and `/api/tree` stalled after every deploy.
+  - **New `GET /startup`** (Render's health check; `render.yaml` and the service setting) answers 503 until the model, the offering index and the directory are loaded. It logs each stage's time (`search warm-up: …`), has no outside dependency, and counts as done after 10 minutes whatever happened (`CROWDCODE_WARMUP_MAX_SECONDS`).
+  - **`/ready`** adds the same wait to its database and redaction checks.
+  - The second full warm-up after listing descriptions are filled is gone; only the directory is embedded again.
+  - BLAS and the tokenizer are held to one thread, so they can't burn the half-CPU quota in a burst and throttle the whole process.
+
 - **C12's allowance reference.** `GET /api/reliability?url=&method=` adds
   `allowance_reference`: the per-call price of the best `proven` or `popular`
   alternative, or null when there is none.
