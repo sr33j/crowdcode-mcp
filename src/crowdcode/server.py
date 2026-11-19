@@ -31,7 +31,7 @@ from crowdcode.demand import RequestExtras, validate_request_extras, validate_re
 from crowdcode.observations import submit_observation
 from crowdcode import demand_miner, reliability
 from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
-from crowdcode.discovery import WARMUP, embed_directory, find_services, warm_search
+from crowdcode.discovery import WARMUP, embed_directory, find_services, process_memory, warm_search
 from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
     MACHINE_PAYMENT_PROVIDERS,
@@ -1840,7 +1840,9 @@ async def startup(_: Request) -> JSONResponse:
     """Render's health check: 200 once this instance has loaded what search serves (model, offering
     index, directory). No outside dependency, so an outage elsewhere never makes Render restart it."""
     state = WARMUP.state()
-    return JSONResponse({"ok": state["ready"], **state}, status_code=200 if state["ready"] else 503)
+    memory = process_memory()
+    return JSONResponse({"ok": state["ready"], **state, **({"memory": memory} if memory else {})},
+                        status_code=200 if state["ready"] else 503)
 
 
 async def ready(_: Request) -> JSONResponse:

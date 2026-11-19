@@ -844,7 +844,9 @@ class Warmup:
 
     def mark(self, stage: str) -> None:
         self.stages[stage] = round(time.monotonic() - self.started, 1)
-        print(f"search warm-up: {stage} at {self.stages[stage]} s", flush=True)
+        memory = process_memory()
+        print(f"search warm-up: {stage} at {self.stages[stage]} s"
+              + (f" (rss {memory['rss_mb']} MB, peak {memory['peak_mb']} MB)" if memory else ""), flush=True)
 
     def state(self) -> dict[str, Any]:
         elapsed = time.monotonic() - self.started
@@ -852,6 +854,16 @@ class Warmup:
         return {"ready": ready, "elapsed_s": round(elapsed, 1), "stages": dict(self.stages),
                 **({"error": self.error} if self.error else {}),
                 **({"overran": True} if ready and not self.done.is_set() else {})}
+
+
+def process_memory() -> dict[str, int] | None:
+    """This process's resident memory now and its peak since it started, in MB (Linux /proc): the
+    backend has 512 MB and the index build is its peak (2026-11-19), so /startup says both."""
+    try:
+        fields = dict(line.split(":", 1) for line in open("/proc/self/status") if line.startswith(("VmRSS", "VmHWM")))
+        return {"rss_mb": int(fields["VmRSS"].split()[0]) // 1024, "peak_mb": int(fields["VmHWM"].split()[0]) // 1024}
+    except (OSError, KeyError, ValueError):
+        return None
 
 
 WARMUP = Warmup()
