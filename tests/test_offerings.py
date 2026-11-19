@@ -290,3 +290,47 @@ def test_utilities_rank_by_value_but_only_over_quality_3_or_better():
     result = search(OfferingIndex(rows), "weather forecast", seed=1)
     assert result["policy"] == "value_first"
     assert endpoints(result)[0] == "https://s2.example/api"
+
+
+def _clustered_index(n: int, dims: int = 64, seed: int = 0) -> OfferingIndex:
+    """n offerings in two clusters of vectors; every other one classified by its cluster's leaf."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    centres = rng.standard_normal((2, dims)).astype(np.float32)
+    rows = []
+    for i in range(n):
+        cluster = i % 2
+        leaves = (("video.generation", "audio.speech")[cluster],) if i % 4 < 2 else ()
+        rows.append(offering(i + 1, f"service {i}", "does a thing", leaves=leaves))
+    vectors = centres[[i % 2 for i in range(n)]] + 0.05 * rng.standard_normal((n, dims)).astype(np.float32)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+    index = OfferingIndex.__new__(OfferingIndex)
+    index.offerings, index.vectors = rows, vectors.astype(np.float32)
+    return index
+
+
+def test_an_unclassified_offering_takes_the_leaf_of_its_nearest_classified_neighbours():
+    index = _clustered_index(400)
+    index._infer_leaves()
+    for i, o in enumerate(index.offerings):
+        if o.leaves:
+            assert o.inferred == ()
+        else:
+            assert o.inferred == (("video.generation", "audio.speech")[i % 2],)
+
+
+def test_inferring_leaves_never_holds_more_than_a_small_chunk_of_similarities():
+    """The backend has 512 MB: at ~53k offerings the old step (a copy of the classified rows, 128-row
+    chunks, a negated copy and argpartition's int64 indices) peaked ~150 MB above the index and the
+    instance was OOM-killed at every start (2026-11-19). Its working set must stay a few chunks' worth."""
+    import tracemalloc
+
+    n = 20_000
+    index = _clustered_index(n, dims=256)
+    tracemalloc.start()
+    index._infer_leaves()
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    chunk_bytes = offerings.INFER_CHUNK * n * 12  # float32 similarities + int64 indices
+    assert peak < 3 * chunk_bytes + 2_000_000, f"peak {peak / 1e6:.1f} MB"
