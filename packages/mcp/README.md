@@ -153,7 +153,7 @@ with `ok`, and `error`/`hint` when it is `false`.
 |---|---|
 | `crowdcode_wallet` | How this machine reaches CrowdCode: the wallet's address and USDC balance, or the signed-in account. `init=true` creates the wallet. |
 | `crowdcode_agents` | Your agents with their balances, or one in detail. |
-| `crowdcode_create_agent` | Create an agent, paying CrowdCode's price (about $0.35) by x402 from the wallet. Refuses a quote above `max_price_usd` (default 0.50) before signing anything. |
+| `crowdcode_create_agent` | Create an agent by paying $0.10 by x402 from the wallet; all of it lands in the new agent's wallet as its starting money (creating an agent is free). Refuses a quote above `max_price_usd` (default 0.50) before signing anything. |
 | `crowdcode_fund_agent` | Send USDC on Base to an agent (gasless EIP-3009, minimum $0.50). In account mode it returns the crowdcode.app link where you approve the deposit; nothing moves from here. |
 | `crowdcode_run_task` | Give an agent a task with a required `budget_usd`; waits for the answer, spend, purchases and files by default. |
 | `crowdcode_task_status` | Check or cancel a task. |

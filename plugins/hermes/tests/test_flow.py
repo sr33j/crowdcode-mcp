@@ -38,7 +38,7 @@ def test_full_flow_against_mock(ctx, hermes_home):
 
     created = call(ctx, "crowdcode_create_agent", name="scout", max_price_usd=0.5)
     assert created["ok"], created
-    assert created["status"] == "active" and created["paid_usd"] == 0.35 and created["payment_tx"]
+    assert created["status"] == "active" and created["paid_usd"] == 0.10 and created["payment_tx"]
     agent = created["agent_id"]
 
     funded = call(ctx, "crowdcode_fund_agent", agent_id=agent, amount_usd=1)
@@ -71,7 +71,7 @@ def test_full_flow_against_mock(ctx, hermes_home):
 
     # the ledger counts creation x2 + funding + the task's real spend, not withdraw/transfer
     policy = ctx.hooks["pre_tool_call"].__self__
-    assert abs(policy.spent_today() - (0.35 * 2 + 1 + 0.02)) < 1e-6
+    assert abs(policy.spent_today() - (0.10 * 2 + 1 + 0.02)) < 1e-6
 
     dash = ctx.commands["crowdcode"]("")
     assert "scout" in dash and "Recent tasks" in dash and "scout-svc" in dash

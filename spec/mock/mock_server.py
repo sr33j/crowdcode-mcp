@@ -26,7 +26,7 @@ from eth_account.messages import encode_defunct, encode_typed_data
 
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 TREASURY = "0x000000000000000000000000000000000000c0de"
-CREATE_PRICE_UNITS = 350_000  # $0.35
+CREATE_PRICE_UNITS = 100_000  # $0.10, forwarded to the new agent as its starting money
 TASK_SECONDS = 3.0
 
 

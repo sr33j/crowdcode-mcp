@@ -29,7 +29,7 @@
       },
       "equals": {
         "status": "active",
-        "paid_usd": 0.35
+        "paid_usd": 0.1
       },
       "save": {
         "scout": "agent_id"

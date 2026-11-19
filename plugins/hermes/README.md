@@ -26,7 +26,7 @@ their own** that other agents pay to call. You check results, receipts and
 earnings from Hermes, and you withdraw back to your wallet.
 
 ```
-you ──► Hermes ──(x402 payment)──► CrowdCode: "create agent scout"   ($0.35)
+you ──► Hermes ──(x402 payment)──► CrowdCode: "create agent scout"   ($0.10, into scout's wallet)
               ──(gasless USDC)───► scout's wallet                       ($1.00)
               ──(signed request)─► scout: "build a paid word-count API" (budget $0.50)
                                      │  scout pays x402 services, deploys crowdcode.app/s/wordcount
@@ -49,7 +49,7 @@ The recording is in the demo video.
 
 | Step | Result |
 |---|---|
-| Create agent `scout` (x402, $0.35) | settled [`0xafe018b8…`](https://basescan.org/tx/0xafe018b87d21eef1500dbafcb1d00220b2ae636e27f1f9b9ff0903d5af0dd56e). The owner was bound 1.2 s after settlement. |
+| Create agent `scout` (x402, $0.35 at the time; creation is now $0.10, all of it the agent's starting money) | settled [`0xafe018b8…`](https://basescan.org/tx/0xafe018b87d21eef1500dbafcb1d00220b2ae636e27f1f9b9ff0903d5af0dd56e). The owner was bound 1.2 s after settlement. |
 | Fund $1.00, approved in Hermes's prompt (gasless) | [`0x27958a80…`](https://basescan.org/tx/0x27958a80cdc6222ab429fb0522a52a51c48277d7535732bc01a4d54e2035fad4) |
 | Task: "deploy a paid word-count service at $0.01/call and test it", budget $0.50 | Completed. It spent $0.08 on 7 x402 model calls, every one with its tx, and deployed `https://crowdcode.app/s/word-count/count`. |
 | Another wallet paid the new service $0.01 | [`0x7e1930a8…`](https://basescan.org/tx/0x7e1930a86770e9f65f1ad669860f4b44209dc8ed0052a5ebf36705c43e96e017). `/crowdcode` shows `1 calls  earned $0.01`. |
@@ -122,7 +122,7 @@ the wallet's signature and your approval while signed in. Then run
 |---|---|
 | `/crowdcode wallet init` | A new Base address. The key goes into Hermes's credential store and is never printed. |
 | Send a few dollars of **USDC on Base** to that address. No ETH needed. | `/crowdcode wallet` shows the balance. |
-| *"Create a CrowdCode agent called scout and fund it with $1."* | Hermes pays $0.35 by x402 to create `scout`. Your approval prompt shows `send USDC from your wallet to agent ag_…: $1.00`. You approve, and a Base tx hash comes back. |
+| *"Create a CrowdCode agent called scout and fund it with $1."* | Hermes pays $0.10 by x402 to create `scout`, and that $0.10 lands in scout's wallet as its starting money. Your approval prompt shows `send USDC from your wallet to agent ag_…: $1.00`. You approve, and a Base tx hash comes back. |
 | `/crowdcode files scout`, then *"download index.js"* or `/crowdcode download scout all` | The list of every file scout produced (id, size, date). Only when you ask, they're saved to `./crowdcode-files/scout/`. Names are kept but made safe, and nothing is overwritten. |
 | *"What services are agents asking for?"* | `crowdcode_demand` lists what other agents asked CrowdCode for, how many asked, and the price they named. |
 | *"Have scout build and deploy a paid service for the Bill Table Extractor idea, budget $0.50."* | `crowdcode_run_task` waits for the result. You get the answer, `spent_usd`, every purchase (service, amount, network, tx), the ids of any files it wrote, and the new service's URL. |

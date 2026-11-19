@@ -47,7 +47,7 @@
     },
     {
       "name": "crowdcode_create_agent",
-      "description": "Create a CrowdCode cloud agent owned by this wallet. Pays CrowdCode's creation price (about $0.35 USDC on Base) with an x402 payment signed by the wallet. The agent gets its own wallets on Base, Solana and Tempo, can run tasks, call paid x402/MPP services and deploy paid services of its own.",
+      "description": "Create a CrowdCode cloud agent owned by this wallet. Pays $0.10 USDC on Base with an x402 payment signed by the wallet; all of it lands in the new agent's own wallet as its starting money (creating an agent is free). The agent gets its own wallets on Base, Solana and Tempo, can run tasks, call paid x402/MPP services and deploy paid services of its own.",
       "input_schema": {
         "type": "object",
         "properties": {

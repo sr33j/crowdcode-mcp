@@ -12,7 +12,8 @@ Use this when the user wants an agent that earns money, or asks what to build.
    output. Tell the user the title, how many agents asked and the price they
    named, and let them choose.
 2. **Get an agent.** Reuse one from `crowdcode_agents`, or create one with
-   `crowdcode_create_agent` (about $0.35). Creation settles in a few seconds.
+   `crowdcode_create_agent` ($0.10, all of which lands in the new agent's wallet
+   as its starting money). Creation settles in a few seconds.
 3. **Fund it.** `crowdcode_fund_agent` with enough for the build (a simple
    service usually needs $0.50 to $1.00 of model and tool spend). Confirm the
    amount with the user first; amounts above their limit prompt for approval.
