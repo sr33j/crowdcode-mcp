@@ -1,5 +1,9 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.9 — 2026-11-19
+
+- **Creating an agent is free (SRI-126).** `crowdcode_create_agent` now says what CrowdCode charges: a wallet-owned create is a $0.10 x402 payment, and all of it lands in the new agent's own Base wallet as its starting money. None of it is a fee (it was $0.35, a $0.25 fee plus a $0.10 reserve). The tool description, the READMEs, the Hermes plugin's copy and the build-a-paid-service skill say so; `max_price_usd` still defaults to 0.50.
+
 ## 0.13.8 — 2026-11-18
 
 - **Proactive about reviewing and requesting when a task ends short (SRI-122).** Before finishing any task that failed, stalled, was partial or needed a costly workaround, the agent now reviews each paid service it tried, including the ones that returned nothing useful, and calls `request_service` once for the service that would have let it finish. Successful paid calls are still reviewed. The server instructions, the `review_service` and `request_service` descriptions, every SKILL.md copy and the Hermes shim say this directly.
