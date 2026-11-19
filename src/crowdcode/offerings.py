@@ -111,6 +111,8 @@ EXPLORE_SLOTS = 2
 # Untracked offerings have no classification (C7 classifies tracked ones); each takes the leaf its
 # INFER_NEIGHBOURS most similar classified offerings agree on, when they are this similar.
 INFER_NEIGHBOURS = 7
+# Rows compared at once in `_infer_leaves`: its working set is ~rows x offerings x 12 bytes.
+INFER_CHUNK = 32
 INFER_MIN_SIMILARITY = 0.6
 INFER_SHARE = 0.6
 # Moving USDC between one's own networks (Relay) costs about $0.02-0.03 (discovery.TRANSFER_COST_USD).
@@ -352,31 +354,44 @@ class OfferingIndex:
                     self.families.setdefault(family, set()).add(o.id)
 
     def _infer_leaves(self) -> None:
-        """A leaf for each unclassified offering, from the classified offerings most like it."""
-        classified = [i for i, o in enumerate(self.offerings) if o.leaves]
-        others = [i for i, o in enumerate(self.offerings) if not o.leaves]
-        if not classified or not others:
+        """A leaf for each unclassified offering, from the classified offerings most like it.
+
+        Memory, not time, is what this costs on a 512 MB host: it runs while the new index is built, on
+        top of everything else. Each chunk compares its rows with the whole matrix in place, rather
+        than with a copy of the classified rows (~50 MB at 50k offerings), and the chunk is small
+        enough that the similarities and argpartition's int64 indices stay ~20 MB together. At 128 rows
+        and a copied reference this step alone took ~150 MB, the peak that pushed the backend past its
+        limit once the index reached ~53k offerings (2026-11-19).
+        """
+        if self.vectors is None:
             return
-        reference = self.vectors[classified]
-        k = min(INFER_NEIGHBOURS, len(classified))
-        # Small chunks: a chunk's similarities and their partition indices are its whole working set.
-        for start in range(0, len(others), 128):
-            chunk = others[start:start + 128]
-            similarity = self.vectors[chunk] @ reference.T
-            nearest = np.argpartition(-similarity, k - 1, axis=1)[:, :k]
+        classified = np.fromiter((bool(o.leaves) for o in self.offerings), dtype=bool, count=len(self.offerings))
+        others = np.flatnonzero(~classified)
+        count = int(classified.sum())
+        if not count or not len(others):
+            return
+        unclassified = ~classified
+        k = min(INFER_NEIGHBOURS, count)
+        for start in range(0, len(others), INFER_CHUNK):
+            chunk = others[start:start + INFER_CHUNK]
+            similarity = self.vectors[chunk] @ self.vectors.T
+            # Only classified offerings vote: the rest can never be among the nearest.
+            similarity[:, unclassified] = -np.inf
+            nearest = np.argpartition(similarity, -k, axis=1)[:, -k:]
             for row, i in enumerate(chunk):
                 votes: dict[str, float] = {}
                 for j in nearest[row]:
                     sim = float(similarity[row, j])
                     if sim < INFER_MIN_SIMILARITY:
                         continue
-                    leaves = self.offerings[classified[j]].leaves
+                    leaves = self.offerings[j].leaves
                     for leaf in leaves:
                         votes[leaf] = votes.get(leaf, 0.0) + sim / len(leaves)
                 if votes:
                     leaf, weight = max(votes.items(), key=lambda kv: (kv[1], kv[0]))
                     if weight >= INFER_SHARE * sum(votes.values()):
-                        self.offerings[i].inferred = (leaf,)
+                        self.offerings[int(i)].inferred = (leaf,)
+            del similarity, nearest
 
     def _infer_from_labels(self) -> None:
         """An unclassified offering still without a leaf: the leaf whose label it reads like."""
