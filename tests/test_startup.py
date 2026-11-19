@@ -70,3 +70,10 @@ def test_numeric_libraries_are_held_to_one_thread():
     # Set by crowdcode/__init__.py before numpy or the tokenizer load (a 0.5-CPU instance).
     assert os.environ["OPENBLAS_NUM_THREADS"] == "1" and os.environ["TOKENIZERS_PARALLELISM"] == "false"
     assert threading.active_count() >= 1
+
+
+def test_startup_reports_this_processs_memory_and_its_peak(warmup):
+    """The backend has 512 MB and the index build is its peak (2026-11-19): /startup says both."""
+    warmup.done.set()
+    memory = client().get("/startup").json()["memory"]
+    assert 0 < memory["rss_mb"] <= memory["peak_mb"]
