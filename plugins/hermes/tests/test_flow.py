@@ -80,7 +80,7 @@ def test_full_flow_against_mock(ctx, hermes_home):
 
 def test_create_refuses_price_above_max(ctx):
     ctx.commands["crowdcode"]("wallet init")
-    out = call(ctx, "crowdcode_create_agent", name="pricey", max_price_usd=0.1)
+    out = call(ctx, "crowdcode_create_agent", name="pricey", max_price_usd=0.05)
     assert out["ok"] is False and "nothing was paid" in out["error"]
     import mock_server
     assert not mock_server.STATE.agents
