@@ -26,8 +26,9 @@ SCHEMAS = {
         {"agent_id": _AGENT}),
     "crowdcode_create_agent": _tool(
         "crowdcode_create_agent",
-        "Create a CrowdCode cloud agent owned by this wallet. Pays CrowdCode's creation price (about $0.35 USDC on "
-        "Base) with an x402 payment signed by the wallet. The agent gets its own wallets on Base, Solana and Tempo, "
+        "Create a CrowdCode cloud agent owned by this wallet. Pays $0.10 USDC on Base with an x402 payment signed by "
+        "the wallet; all of it lands in the new agent's own wallet as its starting money (creating an agent is "
+        "free). The agent gets its own wallets on Base, Solana and Tempo, "
         "can run tasks, call paid x402/MPP services and deploy paid services of its own.",
         {"name": {"type": "string", "description": "3-40 characters."},
          "model": {"type": "string", "description": "Optional CrowdCode model catalog id."},

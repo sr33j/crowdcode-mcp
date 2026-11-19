@@ -354,10 +354,10 @@ def _seed(conn, *, v2: bool = False) -> None:
           ('svc_video', 'Video seller', 'https://video.example.com/veo', 'https://video.example.com', 'x402', %(payee)s, 3.0, 0)
     """, {"payee": PAYEE})
     conn.execute("""
-        insert into service_identifiers (service_id, identifier_type, identifier_value) values
-          ('svc_exa', 'payment_target', 'x402:' || %(other)s),
-          ('svc_hosted', 'api_endpoint', 'https://crowdcode.app/s/old-name')
-    """, {"other": OTHER})
+        insert into service_identifiers (service_id, identifier_type, identifier_value, created_at) values
+          ('svc_exa', 'payment_target', 'x402:' || %(other)s, %(known)s),
+          ('svc_hosted', 'api_endpoint', 'https://crowdcode.app/s/old-name', %(known)s)
+    """, {"other": OTHER, "known": NOW - timedelta(days=30)})
     for rid, sid, url, tracked, payers, calls, sources in (
             (1, "svc_exa", "https://api.exa.ai/search", True, 147, 13321, ["bazaar", "gateway"]),
             (2, "svc_new", "https://new.example.com/q", True, 4, 4, ["bazaar"]),
