@@ -57,6 +57,8 @@ def test_folds_every_clip_listing_into_the_video_endpoint_keeping_its_reviews(db
     for endpoint in (f"{SUBMIT}/{JOBS[0]}", f"{SUBMIT}/v1_NewJobAbc123{'x' * 30}", SUBMIT):
         resolved = resolve_service(conn, build_identity(api_endpoint=endpoint, payment_provider="x402", payment_target_ref=PAYEE))
         assert resolved.error is None and resolved.row["id"] == "svc_submit", endpoint
+    # The gateway's reliability lookup for a new job's collect URL finds it too.
+    assert reliability._service_for_url(conn, f"{SUBMIT}/v1_NewJobAbc123{'x' * 30}", "GET")[0] == "svc_submit"
     # Run again: nothing left to fold.
     assert merge.plan(conn) == []
 
