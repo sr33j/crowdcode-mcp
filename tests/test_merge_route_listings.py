@@ -42,6 +42,8 @@ def _connect(conn):
 def test_folds_every_clip_listing_into_the_video_endpoint_keeping_its_reviews(db, monkeypatch):
     conn, _, _ = db
     _seed(conn)
+    # Production has a table whose service_id is a uuid (a hosted agent's own service): never touched.
+    conn.execute("create table hosted_things(service_id uuid)")
     monkeypatch.setattr(merge, "connect", _connect(conn))
     monkeypatch.setattr(reliability, "recompute", lambda *a, **k: {})
     planned = merge.plan(conn)
