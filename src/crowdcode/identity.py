@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -108,6 +109,74 @@ def normalize_api_endpoint(value: str | None) -> str | None:
     return urlunsplit((scheme, netloc, path, "", ""))
 
 
+# Route templates (`crowdcode.route.v1`, SRI-135). A path segment that names a
+# record rather than a route is written `{id}`, so every job of an async
+# service is one listing: BlockRun's video collect step lives at
+# `/api/v1/videos/generations/<1,580-character job id>`, and each clip of one
+# cartoon became its own service. An identifier is four or more digits, a
+# UUID, 16 or more hex digits (optionally 0x), an opaque token of 24 or more
+# URL-safe characters mixing upper case, lower case and at least three digits,
+# or any URL-safe run of 64 or more characters with a digit. Lower-case slugs
+# are left alone: marketplaces name distinct services by them
+# (`payanagent.com/x402/kh71792ee7x7w59d...`). The OpenCrowd runtime, the
+# hosted gateway and packages/mcp apply the same rule; the vectors in
+# spec/review-payload-vectors.json pin all four.
+ID_SEGMENT = re.compile(
+    r"(?:[0-9]{4,}"
+    r"|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|(?:0x)?[0-9a-fA-F]{16,}"
+    r"|(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=(?:[A-Za-z_-]*[0-9]){3})[A-Za-z0-9_-]{24,}"
+    r"|(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{64,})",
+    re.ASCII,
+)
+ROUTE_ID = "{id}"
+
+
+def template_path(path: str) -> str:
+    return "/".join(
+        ROUTE_ID if segment and ID_SEGMENT.fullmatch(segment) else segment
+        for segment in path.split("/")
+    )
+
+
+def listing_endpoint(normalized: str | None) -> str | None:
+    """The endpoint a listing is filed under: a normalized endpoint with its
+    record ids written `{id}`. Idempotent; `{id}` itself is never an id."""
+    if normalized is None:
+        return None
+    start = normalized.find("/", normalized.find("://") + 3)
+    if start == -1:
+        return normalized
+    return normalized[:start] + template_path(normalized[start:])
+
+
+def collect_parent(endpoint: str | None) -> str | None:
+    """The submit endpoint of an async job, from its collect step's listing
+    endpoint: `.../generations/{id}` is collected from `.../generations`.
+    Only a shape; the gateway decides from evidence that the two are one
+    service (the submit's own answer named the job) before it files a review
+    of one under the other."""
+    if endpoint is None or not endpoint.endswith("/" + ROUTE_ID):
+        return None
+    parent = endpoint[: -len(ROUTE_ID) - 1]
+    return parent if parent.count("/") >= 3 else None
+
+
+def receipt_covers(receipt_endpoint: str | None, api_endpoint: str | None) -> bool:
+    """Whether a gateway receipt for `receipt_endpoint` may back a review of
+    the listing at `api_endpoint`: the same endpoint, its route template, or
+    the submit endpoint of the async job it collected."""
+    if not receipt_endpoint or not api_endpoint:
+        return False
+    if receipt_endpoint == api_endpoint:
+        return True
+    try:
+        listed = listing_endpoint(normalize_api_endpoint(receipt_endpoint))
+    except ValueError:
+        return False
+    return api_endpoint in (listed, collect_parent(listed))
+
+
 def canonical_origin(api_endpoint: str | None) -> str | None:
     normalized = normalize_api_endpoint(api_endpoint)
     if normalized is None:
@@ -185,7 +254,8 @@ def build_identity(
     that validation existed must still resolve rather than raise.
     """
     provider = normalize_payment_provider(payment_provider)
-    endpoint = normalize_api_endpoint(api_endpoint)
+    # A listing's endpoint is its route template (SRI-135).
+    endpoint = listing_endpoint(normalize_api_endpoint(api_endpoint))
     target = (
         normalize_payment_target(provider, payment_target_ref)
         if strict

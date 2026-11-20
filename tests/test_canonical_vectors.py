@@ -15,7 +15,9 @@ import pytest
 
 from crowdcode.identity import (
     ServiceIdentity,
+    build_identity,
     generate_service_id,
+    listing_endpoint,
     normalize_api_endpoint,
     normalize_payment_provider,
 )
@@ -39,6 +41,19 @@ def test_endpoint_normalization(vector):
         assert str(excinfo.value) == vector["error"]
     else:
         assert normalize_api_endpoint(vector["input"]) == vector["expected"]
+
+
+@pytest.mark.parametrize(
+    "vector",
+    VECTORS["listing_endpoint"],
+    ids=lambda v: repr(v["input"])[-40:],
+)
+def test_listing_endpoint(vector):
+    """SRI-135: a listing is its route template; the TS client signs the same."""
+    assert listing_endpoint(normalize_api_endpoint(vector["input"])) == vector["expected"]
+    assert build_identity(api_endpoint=vector["input"]).api_endpoint == vector["expected"]
+    # Idempotent: a stored template resolves to itself.
+    assert listing_endpoint(vector["expected"]) == vector["expected"]
 
 
 @pytest.mark.parametrize(

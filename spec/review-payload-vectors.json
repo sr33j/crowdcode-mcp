@@ -55,6 +55,68 @@
       "error": "api_endpoint must include a host"
     }
   ],
+  "listing_endpoint": [
+    {
+      "input": "https://blockrun.ai/api/v1/videos/generations/v1_iKAoQPb2qLgY324q5iQGvatY6grOPvcyPgNiDe9pMj9C0q5B0RUP7H",
+      "expected": "https://blockrun.ai/api/v1/videos/generations/{id}"
+    },
+    {
+      "input": "https://blockrun.ai/api/v1/videos/generations/v1_0-M8TPPXjxbpzKxNL_8CoNJIo4d42XeRfYPySzbHYrY6V-nf5I5M2",
+      "expected": "https://blockrun.ai/api/v1/videos/generations/{id}"
+    },
+    {
+      "input": "https://blockrun.ai/api/v1/videos/generations/v1_KH2IOHaD9jVQD5uVhJGa8Y6sPNCnPQIFFZiNqi0T8qe9j131PkZ?x=1",
+      "expected": "https://blockrun.ai/api/v1/videos/generations/{id}"
+    },
+    {
+      "input": "https://blockrun.ai/api/v1/videos/generations",
+      "expected": "https://blockrun.ai/api/v1/videos/generations"
+    },
+    {
+      "input": "https://a.example/jobs/0b7e3f0c-5a8d-4c1e-9f2b-7d6a5c4b3a21/result",
+      "expected": "https://a.example/jobs/{id}/result"
+    },
+    {
+      "input": "https://api.onesource.io/api/chain/contract/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606EB48",
+      "expected": "https://api.onesource.io/api/chain/contract/{id}"
+    },
+    {
+      "input": "https://globalapi.dev/compliance/counterparty/0xe592427a0aece92de3edee1f18e0157c05861564",
+      "expected": "https://globalapi.dev/compliance/counterparty/{id}"
+    },
+    {
+      "input": "https://astro.dutchdata.io/api/full_chart/dt/1779285600000",
+      "expected": "https://astro.dutchdata.io/api/full_chart/dt/{id}"
+    },
+    {
+      "input": "https://payanagent.com/x402/kh71792ee7x7w59dtrgbq7zz898an9cn",
+      "expected": "https://payanagent.com/x402/kh71792ee7x7w59dtrgbq7zz898an9cn"
+    },
+    {
+      "input": "https://api.useatelier.ai/api/x402/pay/svc_1780812536114_y6pg8e7aw",
+      "expected": "https://api.useatelier.ai/api/x402/pay/svc_1780812536114_y6pg8e7aw"
+    },
+    {
+      "input": "https://x402helper.xyz/c8239c/api/v1/x402/x402-payment-header-shape",
+      "expected": "https://x402helper.xyz/c8239c/api/v1/x402/x402-payment-header-shape"
+    },
+    {
+      "input": "https://api.example/v1/models/claude-3-5-sonnet-20241022",
+      "expected": "https://api.example/v1/models/claude-3-5-sonnet-20241022"
+    },
+    {
+      "input": "https://api.twitter.com/2/tweets",
+      "expected": "https://api.twitter.com/2/tweets"
+    },
+    {
+      "input": "https://api.example/getTokenPriceByAddressV2",
+      "expected": "https://api.example/getTokenPriceByAddressV2"
+    },
+    {
+      "input": "https://blockrun.ai/api/v1/videos/generations/{id}",
+      "expected": "https://blockrun.ai/api/v1/videos/generations/{id}"
+    }
+  ],
   "provider_normalization": [
     {
       "input": "Stripe-Link",

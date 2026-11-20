@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from crowdcode.identity import (  # noqa: E402
     ServiceIdentity,
+    listing_endpoint,
     generate_service_id,
     normalize_api_endpoint,
     normalize_payment_provider,
@@ -41,6 +42,27 @@ ENDPOINT_INPUTS = [
     "",
     None,
     "https:///nohost",
+]
+
+# Route templates (SRI-135): ids in a path become `{id}`; route words and a
+# marketplace's lower-case service slugs stay. The BlockRun ids are shortened
+# stand-ins of the same alphabet (the real ones are 1,580 characters).
+LISTING_INPUTS = [
+    "https://blockrun.ai/api/v1/videos/generations/v1_iKAoQPb2qLgY324q5iQGvatY6grOPvcyPgNiDe9pMj9C0q5B0RUP7H",
+    "https://blockrun.ai/api/v1/videos/generations/v1_0-M8TPPXjxbpzKxNL_8CoNJIo4d42XeRfYPySzbHYrY6V-nf5I5M2",
+    "https://blockrun.ai/api/v1/videos/generations/v1_KH2IOHaD9jVQD5uVhJGa8Y6sPNCnPQIFFZiNqi0T8qe9j131PkZ?x=1",
+    "https://blockrun.ai/api/v1/videos/generations",
+    "https://a.example/jobs/0b7e3f0c-5a8d-4c1e-9f2b-7d6a5c4b3a21/result",
+    "https://api.onesource.io/api/chain/contract/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606EB48",
+    "https://globalapi.dev/compliance/counterparty/0xe592427a0aece92de3edee1f18e0157c05861564",
+    "https://astro.dutchdata.io/api/full_chart/dt/1779285600000",
+    "https://payanagent.com/x402/kh71792ee7x7w59dtrgbq7zz898an9cn",
+    "https://api.useatelier.ai/api/x402/pay/svc_1780812536114_y6pg8e7aw",
+    "https://x402helper.xyz/c8239c/api/v1/x402/x402-payment-header-shape",
+    "https://api.example/v1/models/claude-3-5-sonnet-20241022",
+    "https://api.twitter.com/2/tweets",
+    "https://api.example/getTokenPriceByAddressV2",
+    "https://blockrun.ai/api/v1/videos/generations/{id}",
 ]
 
 PROVIDER_INPUTS = [
@@ -325,11 +347,19 @@ def review_payload_vectors() -> list[dict]:
     return vectors
 
 
+def listing_vectors() -> list[dict]:
+    return [
+        {"input": value, "expected": listing_endpoint(normalize_api_endpoint(value))}
+        for value in LISTING_INPUTS
+    ]
+
+
 def main() -> None:
     out = {
         "version": 1,
         "generated_by": "scripts/generate_vectors.py",
         "endpoint_normalization": endpoint_vectors(),
+        "listing_endpoint": listing_vectors(),
         "provider_normalization": provider_vectors(),
         "service_id": service_id_vectors(),
         "review_payload": review_payload_vectors(),

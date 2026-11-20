@@ -36,6 +36,8 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from crowdcode.identity import receipt_covers
+
 RECEIPT_TYPE = "opencrowd.purchase-receipt.v1"
 ATTESTATION_TYPE = "opencrowd.review-attestation.v1"
 
@@ -338,7 +340,10 @@ def evaluate_attestation(
     verified = verify_attestation(raw, keys=keys, now=now)
     if not verified.ok:
         return AttestationOutcome(False, verified.reason)
-    if api_endpoint is None or verified.endpoint != api_endpoint:
+    # The receipt names the exact URL the gateway paid; the listing may be its
+    # route template or, for an async job's collect step, the submit endpoint
+    # (SRI-135). Anything else is a different service.
+    if not receipt_covers(verified.endpoint, api_endpoint):
         return AttestationOutcome(False, "the gateway receipt is for a different service endpoint")
     if payment_target_ref is None or verified.payee.lower() != payment_target_ref.strip().lower():
         return AttestationOutcome(False, "the gateway receipt is for a different payee")
