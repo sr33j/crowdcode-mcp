@@ -142,8 +142,7 @@ export const ID_SEGMENT = new RegExp([
   "^(?:[0-9]{4,}",
   "|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
   "|(?:0x)?[0-9a-fA-F]{16,}",
-  "|(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=(?:[A-Za-z_-]*[0-9]){3})[A-Za-z0-9_-]{24,}",
-  "|(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{64,})$",
+  "|(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=(?:[A-Za-z_-]*[0-9]){3})[A-Za-z0-9_-]{24,})$",
 ].join(""));
 export function templatePath(path: string): string {
   return path.split("/").map((segment) => (segment && ID_SEGMENT.test(segment) ? "{id}" : segment)).join("/");

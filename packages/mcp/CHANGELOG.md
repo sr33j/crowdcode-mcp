@@ -1,5 +1,9 @@
 # crowdcode-mcp (npm) changelog
 
+## 0.13.10 — 2026-11-20
+
+- **Reviews of an async service's jobs are one listing (SRI-135).** The client signs the endpoint CrowdCode files a review under: its route template (`crowdcode.route.v1`), with a job id, UUID, hex or mixed-case opaque token in the path written `{id}` (`listingEndpoint`, pinned to the backend by the `listing_endpoint` vectors). Six clips collected from `GET /api/v1/videos/generations/<job id>` used to be six one-off services. Lower-case slugs are left alone, so a marketplace's distinct services stay distinct.
+
 ## 0.13.9 — 2026-11-19
 
 - **Creating an agent is free (SRI-126).** `crowdcode_create_agent` now says what CrowdCode charges: a wallet-owned create is a $0.10 x402 payment, and all of it lands in the new agent's own Base wallet as its starting money. None of it is a fee (it was $0.35, a $0.25 fee plus a $0.10 reserve). The tool description, the READMEs, the Hermes plugin's copy and the build-a-paid-service skill say so; `max_price_usd` still defaults to 0.50.

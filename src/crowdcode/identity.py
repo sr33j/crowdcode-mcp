@@ -115,18 +115,17 @@ def normalize_api_endpoint(value: str | None) -> str | None:
 # `/api/v1/videos/generations/<1,580-character job id>`, and each clip of one
 # cartoon became its own service. An identifier is four or more digits, a
 # UUID, 16 or more hex digits (optionally 0x), an opaque token of 24 or more
-# URL-safe characters mixing upper case, lower case and at least three digits,
-# or any URL-safe run of 64 or more characters with a digit. Lower-case slugs
-# are left alone: marketplaces name distinct services by them
-# (`payanagent.com/x402/kh71792ee7x7w59d...`). The OpenCrowd runtime, the
+# URL-safe characters mixing upper case, lower case and at least three digits.
+# Lower-case slugs are left alone, however long: marketplaces name distinct
+# services by them (`payanagent.com/x402/kh71792ee7x7w59d...`), and data APIs
+# their series (`stationfx.com/economic-data/interest-rates/market-yield-on-...`). The OpenCrowd runtime, the
 # hosted gateway and packages/mcp apply the same rule; the vectors in
 # spec/review-payload-vectors.json pin all four.
 ID_SEGMENT = re.compile(
     r"(?:[0-9]{4,}"
     r"|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     r"|(?:0x)?[0-9a-fA-F]{16,}"
-    r"|(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=(?:[A-Za-z_-]*[0-9]){3})[A-Za-z0-9_-]{24,}"
-    r"|(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{64,})",
+    r"|(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=(?:[A-Za-z_-]*[0-9]){3})[A-Za-z0-9_-]{24,})",
     re.ASCII,
 )
 ROUTE_ID = "{id}"

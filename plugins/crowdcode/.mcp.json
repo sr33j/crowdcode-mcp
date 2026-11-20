@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "crowdcode-mcp@0.13.9"
+        "crowdcode-mcp@0.13.10"
       ]
     }
   }
