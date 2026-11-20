@@ -110,11 +110,15 @@ def plan(conn: psycopg.Connection) -> list[dict[str, Any]]:
 
 
 def _service_columns(conn: psycopg.Connection) -> list[str]:
-    """Every table in this schema with a `service_id` column, except the ones handled by name."""
+    """Every table in this schema with a text `service_id` column, except the ones handled by name.
+
+    Only text: a `service_id` that is a uuid names something else (a hosted
+    agent's own service), never a directory listing."""
     rows = conn.execute(
         """
         select table_name from information_schema.columns
         where table_schema = current_schema() and column_name = 'service_id'
+          and data_type in ('text', 'character varying')
           and table_name not in ('services', 'reviews', 'service_identifiers')
           and table_name in (select table_name from information_schema.tables
                              where table_schema = current_schema() and table_type = 'BASE TABLE')
