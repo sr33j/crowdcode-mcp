@@ -109,6 +109,10 @@
       "expected": "https://api.twitter.com/2/tweets"
     },
     {
+      "input": "https://stationfx.com/economic-data/interest-rates/market-yield-on-u-s-treasury-securities-at-10-year-constant-maturity-quoted-on-an-investment-basis",
+      "expected": "https://stationfx.com/economic-data/interest-rates/market-yield-on-u-s-treasury-securities-at-10-year-constant-maturity-quoted-on-an-investment-basis"
+    },
+    {
       "input": "https://api.example/getTokenPriceByAddressV2",
       "expected": "https://api.example/getTokenPriceByAddressV2"
     },
