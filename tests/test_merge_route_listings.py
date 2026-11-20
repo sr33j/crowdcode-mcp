@@ -7,6 +7,7 @@ collected, each with the one review its purchase got.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 
 from crowdcode import reliability
 from crowdcode.identity import build_identity, resolve_service
@@ -58,6 +59,7 @@ def test_folds_every_clip_listing_into_the_video_endpoint_keeping_its_reviews(db
         resolved = resolve_service(conn, build_identity(api_endpoint=endpoint, payment_provider="x402", payment_target_ref=PAYEE))
         assert resolved.error is None and resolved.row["id"] == "svc_submit", endpoint
     # The gateway's reliability lookup for a new job's collect URL finds it too.
+    conn.execute((Path(__file__).parents[1] / "supabase/services-index.sql").read_text())
     assert reliability._service_for_url(conn, f"{SUBMIT}/v1_NewJobAbc123{'x' * 30}", "GET")[0] == "svc_submit"
     # Run again: nothing left to fold.
     assert merge.plan(conn) == []
