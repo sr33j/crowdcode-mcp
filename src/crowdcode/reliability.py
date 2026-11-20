@@ -880,7 +880,7 @@ def _service_for_url(conn: psycopg.Connection, url: str, method: str | None) -> 
     URLs, route templates), then the service registry's endpoints and aliases
     (old URLs of renamed hosted services, reviewed endpoints)."""
     from crowdcode import index as services_index
-    from crowdcode.identity import normalize_api_endpoint
+    from crowdcode.identity import listing_endpoint, normalize_api_endpoint
 
     resource = services_index.resolve_resource(conn, url, method)
     if resource is not None and resource.get("service_id"):
@@ -890,14 +890,22 @@ def _service_for_url(conn: psycopg.Connection, url: str, method: str | None) -> 
     except ValueError:
         endpoint = None
     if endpoint:
+        # The exact endpoint first, then the listing's route (SRI-135): a job's
+        # collect URL belongs to the listing its jobs are filed under.
+        routes = [endpoint, listing_endpoint(endpoint)]
         row = conn.execute(
             """
-            select service_id from service_identifiers where identifier_type = 'api_endpoint' and identifier_value = %s
+            select service_id, 0 as rank from service_identifiers where identifier_type = 'api_endpoint' and identifier_value = %s
             union all
-            select id from services where canonical_endpoint = %s
+            select id, 1 from services where canonical_endpoint = %s
+            union all
+            select service_id, 2 from service_identifiers where identifier_type = 'api_endpoint' and identifier_value = %s
+            union all
+            select id, 3 from services where canonical_endpoint = %s
+            order by rank
             limit 1
             """,
-            (endpoint, endpoint),
+            (routes[0], routes[0], routes[1], routes[1]),
         ).fetchone()
         if row:
             return row["service_id"], resource

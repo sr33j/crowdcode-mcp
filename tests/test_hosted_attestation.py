@@ -495,3 +495,48 @@ def test_without_configured_keys_nothing_can_be_weighted(hosted, monkeypatch):
     result = review(wallet=agent, tx=tx, att=attestation(receipt(tx=tx), reviewer_wallet=agent.address))
     assert result["accepted"] is False
     assert "no published gateway receipt keys" in result["reason"]
+
+
+# --- route templates and async jobs (SRI-135) -----------------------------
+
+SUBMIT = "https://video.example/api/v1/videos/generations"
+# Shape-equivalent to BlockRun's job ids (mixed-case base64url, digits).
+JOBS = [f"v1_{seed}KAoQPb2qLgY324q5iQGvatY6grOPvcyPgNiDe9pMj9C0q5B0RUP7H_G4jIhr" for seed in ("iA", "0M", "MJ")]
+
+
+def test_every_job_of_an_async_service_is_one_listing_and_keeps_its_weight(hosted):
+    """Six clips of one cartoon used to be six one-off services, one review each."""
+    conn, review = hosted
+    agent = wallet("42")
+    for index, job in enumerate(JOBS):
+        tx = tx_hash(f"{index + 1:x}" * 2)
+        collect = f"{SUBMIT}/{job}"
+        result = review(wallet=agent, tx=tx, endpoint=collect,
+                        att=attestation(receipt(tx=tx, endpoint=collect, attempt_id=f"1111111{index}-1111-4111-a111-111111111111"),
+                                        reviewer_wallet=agent.address))
+        assert result["accepted"], result
+        assert result["verified_source"] == "hosted_receipt"
+    services = conn.execute("select id, canonical_endpoint from services").fetchall()
+    assert [row["canonical_endpoint"] for row in services] == [f"{SUBMIT}/{{id}}"]
+    assert conn.execute("select count(distinct service_id) as n, count(*) as reviews from reviews").fetchone() == {"n": 1, "reviews": 3}
+
+
+def test_a_collect_step_is_filed_under_its_submit_endpoint_when_the_gateway_pairs_them(hosted):
+    conn, review = hosted
+    agent = wallet("42")
+    tx = tx_hash("c1")
+    collect = f"{SUBMIT}/{JOBS[0]}"
+    # The gateway names the submit endpoint; the receipt names the exact URL it paid.
+    result = review(wallet=agent, tx=tx, endpoint=SUBMIT,
+                    att=attestation(receipt(tx=tx, endpoint=collect), reviewer_wallet=agent.address))
+    assert result["accepted"], result
+    assert result["counts_towards_ranking"] is True
+    row = conn.execute("select s.canonical_endpoint from reviews r join services s on s.id = r.service_id").fetchone()
+    assert row["canonical_endpoint"] == SUBMIT
+    # A receipt for a job can back only its own route or its submit, not the provider's other endpoints.
+    tx2 = tx_hash("c2")
+    sideways = review(wallet=agent, tx=tx2, endpoint="https://video.example/api/v1/images/generations",
+                      att=attestation(receipt(tx=tx2, endpoint=collect, attempt_id="22222222-1111-4111-a111-111111111111"),
+                                      reviewer_wallet=agent.address))
+    assert sideways["accepted"] is False
+    assert "different service endpoint" in sideways["reason"]

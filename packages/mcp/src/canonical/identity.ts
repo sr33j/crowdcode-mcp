@@ -132,6 +132,30 @@ export function generateServiceId(
   );
 }
 
+/**
+ * Route templates (`crowdcode.route.v1`, SRI-135): record ids in a path are
+ * written `{id}`, so every job of an async service is one listing. Mirrors
+ * identity.py `ID_SEGMENT` / `listing_endpoint`; spec/review-payload-vectors.json
+ * (`listing_endpoint`) pins both.
+ */
+export const ID_SEGMENT = new RegExp([
+  "^(?:[0-9]{4,}",
+  "|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+  "|(?:0x)?[0-9a-fA-F]{16,}",
+  "|(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[A-Z])(?=(?:[A-Za-z_-]*[0-9]){3})[A-Za-z0-9_-]{24,}",
+  "|(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{64,})$",
+].join(""));
+export function templatePath(path: string): string {
+  return path.split("/").map((segment) => (segment && ID_SEGMENT.test(segment) ? "{id}" : segment)).join("/");
+}
+/** The endpoint a listing is filed under: a normalized endpoint with its record ids written `{id}`. */
+export function listingEndpoint(normalized: string | null): string | null {
+  if (normalized === null) return null;
+  const start = normalized.indexOf("/", normalized.indexOf("://") + 3);
+  if (start === -1) return normalized;
+  return normalized.slice(0, start) + templatePath(normalized.slice(start));
+}
+
 export function buildIdentity(args: {
   service_id?: string | null;
   service_name?: string | null;
@@ -143,7 +167,7 @@ export function buildIdentity(args: {
   return {
     service_id: cleanOptional(args.service_id),
     service_name: cleanOptional(args.service_name),
-    api_endpoint: normalizeApiEndpoint(args.api_endpoint),
+    api_endpoint: listingEndpoint(normalizeApiEndpoint(args.api_endpoint)),
     payment_provider: normalizePaymentProvider(args.payment_provider),
     payment_target_ref: cleanOptional(args.payment_target_ref),
     directory_slug: cleanOptional(args.directory_slug),

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   generateServiceId,
   normalizeApiEndpoint,
+  listingEndpoint,
+  buildIdentity,
   normalizePaymentProvider,
 } from "../src/canonical/identity.js";
 import { canonicalReviewPayload, reasonHash } from "../src/canonical/payload.js";
@@ -46,6 +48,7 @@ const vectors = JSON.parse(
   ),
 ) as {
   endpoint_normalization: NormalizationVector[];
+  listing_endpoint: { input: string; expected: string }[];
   provider_normalization: NormalizationVector[];
   service_id: ServiceIdVector[];
   review_payload: PayloadVector[];
@@ -82,6 +85,15 @@ describe("normalizeApiEndpoint", () => {
   for (const vector of vectors.endpoint_normalization) {
     it(JSON.stringify(vector.input), () => {
       checkNormalization(normalizeApiEndpoint, vector);
+    });
+  }
+});
+
+describe("listingEndpoint (SRI-135 route templates)", () => {
+  for (const vector of vectors.listing_endpoint) {
+    it(JSON.stringify(vector.input).slice(-60), () => {
+      expect(listingEndpoint(normalizeApiEndpoint(vector.input))).toBe(vector.expected);
+      expect(buildIdentity({ api_endpoint: vector.input }).api_endpoint).toBe(vector.expected);
     });
   }
 });

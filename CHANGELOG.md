@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Listings are filed under their route, not one URL per job (SRI-135).** An async service's collect step has a URL per job (BlockRun: `GET /api/v1/videos/generations/<1,580-character job id>`), so the six clips of one cartoon became six one-off services with one review each, and BlockRun's video listing had none.
+  - `build_identity` files an endpoint under its route template (`crowdcode.route.v1`): a path segment that is four or more digits, a UUID, 16+ hex digits, a mixed-case token of 24+ characters with three or more digits, or any 64+ character token with a digit becomes `{id}`. Lower-case slugs stay, because marketplaces name distinct services by them (`payanagent.com/x402/kh7…`). The canonical review payload signs the templated endpoint; `listing_endpoint` vectors in `spec/review-payload-vectors.json` pin the TypeScript client (`listingEndpoint`), the hosted gateway and the OpenCrowd runtime to the same rule.
+  - A gateway receipt backs a review of its exact endpoint, its route template, or the submit endpoint of the async job it collected (`receipt_covers`); the hosted gateway files a collect step under its submit only when the submit's own answer named the job.
+  - `scripts/merge_route_listings.py` (dry run by default) folds listings filed the old way into their route, moving every review and identifier. BlockRun's seven per-clip listings go to `svc_1406f24e88ecaf37455b` (`/api/v1/videos/generations`).
+
 - **A proposal the redactor misreads is reworded once instead of dropped (SRI-122).** The production redactor read "Runner" in "GPU Training Runner" as a surname, so the GPU-training proposal (request #202) was hidden as `private`. Flagged proposals now get one model call that rewrites them from their already-redacted text; the rewrite passes the same copy, traceability and redaction checks, and one still flagged stays hidden. A request hidden this way keeps its redacted proposal title in `service_request_triage`.
 
 - **Service proposals list anything tractable (SRI-122).** Backend only; apply `supabase/request-triage.sql` (idempotent) before deploying.
