@@ -32,6 +32,7 @@ from crowdcode.observations import submit_observation
 from crowdcode import demand_miner, reliability
 from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
 from crowdcode.discovery import WARMUP, embed_directory, find_services, process_memory, warm_search
+from crowdcode.relevant import find_relevant
 from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
     MACHINE_PAYMENT_PROVIDERS,
@@ -2284,17 +2285,34 @@ async def find_services_route(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return _json_error("invalid JSON body", status_code=400, error_code="invalid_request")
-    if not isinstance(body, dict) or not isinstance(body.get("query"), str) or not body["query"].strip():
-        return _json_error("query is required", status_code=400, error_code="invalid_request")
+    has_task = isinstance(body, dict) and isinstance(body.get("task"), str) and body["task"].strip()
+    if not has_task and (not isinstance(body, dict) or not isinstance(body.get("query"), str) or not body["query"].strip()):
+        return _json_error("query or task is required", status_code=400, error_code="invalid_request")
+    task = body.get("task") if isinstance(body, dict) else None
     try:
-        payload = await run_in_threadpool(
-            find_services, body["query"], networks=body.get("networks"), balances=body.get("balances"),
-            candidates=body.get("candidates"), limit=body.get("limit"), conn_factory=connect,
-            seed=body.get("seed"), detail=body.get("detail"),
-        )
+        if isinstance(task, str) and task.strip():
+            # w107: a task in, the endpoints that fit it out (relevant.py).
+            payload = await run_in_threadpool(
+                find_relevant, task, search=find_services, client=_client_key(request),
+                networks=body.get("networks"), balances=body.get("balances"), candidates=body.get("candidates"),
+                limit=body.get("limit"), conn_factory=connect, seed=body.get("seed"),
+            )
+        else:
+            payload = await run_in_threadpool(
+                find_services, body["query"], networks=body.get("networks"), balances=body.get("balances"),
+                candidates=body.get("candidates"), limit=body.get("limit"), conn_factory=connect,
+                seed=body.get("seed"), detail=body.get("detail"),
+            )
     except Exception:
         return _unexpected_json_error("find_services")
     return JSONResponse(payload)
+
+
+def _client_key(request: Request) -> str:
+    """Who is asking, for relevant.BUDGET: the first forwarded address Render saw, else the peer."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    first = forwarded.split(",")[0].strip()
+    return first or (request.client.host if request.client else "unknown")
 
 
 async def observations_route(request: Request) -> JSONResponse:
