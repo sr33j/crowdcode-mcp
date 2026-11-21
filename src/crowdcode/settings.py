@@ -39,6 +39,9 @@ class Settings:
     # The service-proposal job groups every request at once into general
     # services, so it gets a more capable model.
     proposal_model: str = "gpt-5.5"
+    # find_relevant_services (w107): the cheap model that rewrites a task into
+    # capability queries and picks the endpoints that fit. Empty: openai_model.
+    find_model: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     # Owner references pinned at trust 1.0 (docs/SCORING.md §3.5): the root of
     # trust. Synced into review_owners at startup and at each cron run.
@@ -122,6 +125,7 @@ def get_settings() -> Settings:
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip()
         or "gpt-5-mini",
         proposal_model=os.environ.get("CROWDCODE_PROPOSAL_MODEL", "").strip() or "gpt-5.5",
+        find_model=os.environ.get("CROWDCODE_FIND_MODEL", "").strip(),
         openai_base_url=os.environ.get(
             "OPENAI_BASE_URL",
             "https://api.openai.com/v1",
