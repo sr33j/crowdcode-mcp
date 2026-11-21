@@ -41,18 +41,26 @@ POOL_MAX = 40
 QUERIES_MAX = 3
 TASK_CHARS_MAX = 1500
 DESCRIPTION_CHARS = 200
-#: A task this short is already a capability query: no rewrite.
-SHORT_QUERY_WORDS = 6
+#: A task this short is already a capability query ("video generation"): no rewrite.
+SHORT_QUERY_WORDS = 2
 
 REWRITE_SYSTEM = (
     "You turn a user's task into search queries for a directory of paid HTTP APIs that AI agents buy per call "
     "(web and news search, page fetch and extraction, social media data, image/video/audio generation, "
     "speech, email, SMS and phone calls, travel, finance and crypto data, domains, documents, compute). "
-    "Write 1 to 3 short queries (2 to 6 words) naming the API capabilities the task needs, most important "
-    "first, e.g. \"reddit post search\", \"text to video generation\", \"html to pdf\", \"stock price quote\", "
-    "\"ai phone call\". Name capabilities, never the task's subject (no people, places, products or dates). "
-    "Prefer a platform's own data service over generic web search when the task names a platform with "
-    "structured records (Reddit, X, GitHub, SEC filings, a stock ticker). "
+    "Write 1 to 3 queries of 2 to 5 words, each a generic API capability as an API's own description would "
+    "name it, most important first. Never put the task's subject in a query: no people, companies, products, "
+    "places, tickers, topics, laws or dates. Tasks that ask to find facts, articles, announcements or people "
+    "on the open web need \"web search\" or \"news search\". A task that names a web page needs \"web page "
+    "fetch\". Prefer a platform's own data service when the task names a platform with structured records "
+    "(Reddit, X, GitHub, SEC filings, stock prices). Don't add queries for things the agent can do itself "
+    "(saving a file, formatting, summarising). Examples: "
+    "\"latest news on the EU AI Act, with links\" -> [\"news search\", \"web search\"]; "
+    "\"what is NVDA trading at?\" -> [\"stock price quote\"]; "
+    "\"turn this paragraph into an mp3\" -> [\"text to speech\"]; "
+    "\"find indie hackers on Reddit complaining about invoicing\" -> [\"reddit post search\", \"reddit comment search\"]; "
+    "\"email the CFO of Acme about the invoice\" -> [\"web search\", \"send email\"]; "
+    "\"ring the dentist and move my appointment\" -> [\"ai phone call\"]. "
     'Return JSON: {"queries": ["..."]}.'
 )
 

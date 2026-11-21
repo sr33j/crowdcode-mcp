@@ -72,6 +72,7 @@ def test_falls_back_to_todays_ranking_when_the_model_fails_or_is_over_budget():
 
 def test_a_short_capability_query_is_not_rewritten():
     chat = Chat(picks=[1])
+    assert find_relevant("stock price of aapl?", search=fake_search, chat=Chat(picks=[1]), budget=Budget(10, 10))["rewritten"] is True
     out = find_relevant("video generation", search=fake_search, chat=chat, budget=Budget(10, 10))
     assert out["queries"] == ["video generation"] and len(chat.calls) == 1
 
