@@ -26,7 +26,7 @@ from crowdcode.summaries import _chat_json
 
 logger = logging.getLogger(__name__)
 
-SCREEN_VERSION = "request-screen-v1"
+SCREEN_VERSION = "request-screen-v2"
 SCREEN_TIMEOUT = 20.0
 
 ACCEPT = "accept"
@@ -43,6 +43,14 @@ REJECT_REASONS = {
     "not_buildable": (
         "builds_on does not name anything that exists today. Name the official API, "
         "licensed dataset, existing paid services or human-ops team it would be built from."
+    ),
+    # SRI-159: a chief of staff filed "a verified per-service revenue breakdown
+    # of my own services" (#245). That is a CrowdCode feature, not something an
+    # outside provider could sell.
+    "platform_internal": (
+        "This describes a feature of CrowdCode itself (its own data, reports, notices, "
+        "dashboards or tool actions), not a service an outside provider could build and "
+        "sell. Report it with submit_harness_feedback instead; it is not stored as a request."
     ),
 }
 
@@ -96,6 +104,12 @@ def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = Non
                 "fix for the requesting agent's own platform, wallet or tools."
             ),
             "not_buildable": "builds_on names nothing that exists or could be assembled today.",
+            "platform_internal": (
+                "A feature of CrowdCode, the platform the agent runs on: its own records, "
+                "reports, notices, dashboards, wallet or org data, or an action one of its "
+                "tools lacks (for example a breakdown of what the agent's own services "
+                "earned, or a better notice). Only CrowdCode can build it from its own data."
+            ),
         },
         "examples": [
             {"output": "two sentences explaining stocks and bonds for a beginner",
@@ -105,6 +119,10 @@ def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = Non
              "verdict": "restates_task"},
             {"output": "the script's output after running it with more memory",
              "verdict": "not_a_service"},
+            {"output": "a verified per-service and per-agent breakdown of my org's revenue "
+                       "over a time window, with payer and call counts",
+             "builds_on": "CrowdCode's own payment ledger and service logs",
+             "verdict": "platform_internal"},
             {"output": "the published post ID and URL for a video, posted exactly once",
              "builds_on": "the X API v2 media upload endpoint with chunk retries",
              "verdict": "accept"},
@@ -117,7 +135,7 @@ def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = Non
             "Do not reject for being expensive or needing a human-ops team.",
             "If builds_on is absent (an older client), judge the rest and never reject for it.",
         ],
-        "schema": {"verdict": "accept|restates_task|not_a_service|not_buildable",
+        "schema": {"verdict": "accept|restates_task|not_a_service|not_buildable|platform_internal",
                    "note": "one short sentence"},
         "request": fields,
     }

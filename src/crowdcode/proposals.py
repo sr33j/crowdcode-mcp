@@ -73,7 +73,7 @@ def fetch_requests(conn: Any) -> list[dict[str, Any]]:
                request_input, request_output, request_problem,
                price_per_call_usd, fields_source, inference_confidence,
                builds_on, frequency, capability,
-               source, miner_run_count
+               source, miner_run_count, screen_verdict
         from service_requests
         where created_at > now() - make_interval(days => %s)
         order by created_at desc
@@ -627,9 +627,18 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
     keys = ("service_description", "task_context", "request_input", "request_output",
             "request_problem", "builds_on")
     clean_rows = _redact_rows(rows, keys)
+    # Rejected after it was stored, as a CrowdCode feature rather than a
+    # service (SRI-159, #245): shown in /admin as internal, never proposed.
+    every_row = clean_rows
+    platform = {int(row["id"]): {
+        "listed": False, "reason": "internal",
+        "note": "A feature of CrowdCode itself, not a service: it belongs in harness feedback.",
+        "proposal_id": None, "proposal_title": None}
+        for row in clean_rows if row.get("screen_verdict") == "platform_internal"}
+    clean_rows = [row for row in clean_rows if int(row["id"]) not in platform]
     usable = [row for row in clean_rows
               if row.get("request_input") and row.get("request_output") and row.get("request_problem")]
-    sources = SourceIndex([row.get(key) for row in clean_rows for key in keys])
+    sources = SourceIndex([row.get(key) for row in every_row for key in keys])
     usable_ids = {int(row["id"]) for row in usable}
     unusable = {int(row["id"]): {
         "listed": False, "reason": "not_a_service",
@@ -640,16 +649,19 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
         payload = empty_payload(now, settings.proposal_model)
         payload["source_request_count"] = len(rows)
         payload["hidden_request_count"] = len(rows)
-        payload["hidden_reasons"]["not_a_service"] = len(rows)
-        payload["_triage"] = unusable
+        payload["hidden_reasons"]["not_a_service"] = len(unusable)
+        payload["hidden_reasons"]["internal"] = len(platform)
+        payload["_triage"] = {**unusable, **platform}
         return payload
 
     parsed = propose_services(_model_items(usable))
     payload = build_payload(parsed, usable, sources, now, settings.proposal_model)
     payload["source_request_count"] = len(rows)
-    payload["hidden_request_count"] += len(unusable)
+    payload["hidden_request_count"] += len(unusable) + len(platform)
     payload["hidden_reasons"]["not_a_service"] += len(unusable)
+    payload["hidden_reasons"]["internal"] += len(platform)
     payload["_triage"].update(unusable)
+    payload["_triage"].update(platform)
     return redact_payload(payload, sources, reword_flagged)
 
 

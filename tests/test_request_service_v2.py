@@ -456,3 +456,51 @@ def test_a_rewording_still_flagged_stays_hidden(monkeypatch):
     # A failed or missing rewrite hides it too.
     out = proposals.redact_payload(_gpu_payload(), SourceIndex([]), lambda flagged: {})
     assert out["hidden_reasons"]["private"] == 1
+
+
+# --- SRI-159: a CrowdCode feature is not a service ----------------------------
+
+INTERNAL = {"input": "my org's paid service calls over a time window, by service and agent",
+            "output": "a verified per-service and per-agent revenue breakdown with payer and call counts",
+            "problem": "the overnight notice gives only an org-wide total, so I cannot say which service earned it"}
+
+
+def test_the_screen_rejects_a_crowdcode_feature_and_points_to_harness_feedback(hosted, monkeypatch):  # noqa: F811
+    conn, _ = hosted
+    monkeypatch.setattr(request_screen, "_chat_json", lambda *a, **k: {"verdict": "platform_internal", "note": "CrowdCode's own data"})
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    result = server_mod.request_service(**{**GOOD, **INTERNAL}, **{**EXTRAS, "builds_on": "CrowdCode's own payment ledger and service logs"},
+                                        requester_wallet=WALLET)
+    assert result["accepted"] is False and result["error_code"] == "request_platform_internal"
+    assert "submit_harness_feedback" in result["reason"]
+    assert result["screen"]["version"] == "request-screen-v2"
+    assert conn.execute("select count(*) as n from service_requests").fetchone()["n"] == 0
+
+
+def test_the_screen_prompt_names_platform_internal_with_the_revenue_example(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(request_screen, "_chat_json", lambda settings, system, prompt, **_: captured.update(prompt=prompt) or {"verdict": "accept"})
+    request_screen.screen_request(INTERNAL)
+    text = json.dumps(captured["prompt"])
+    assert "platform_internal" in captured["prompt"]["verdicts"] and "per-service and per-agent breakdown" in text
+
+
+def test_a_request_marked_platform_internal_is_never_proposed_and_shows_as_internal(monkeypatch):
+    rows = [{**_row(245, 0.01), **{f"request_{k}": v for k, v in INTERNAL.items()}, "screen_verdict": "platform_internal"},
+            {**_row(246, 0.2), "screen_verdict": "accept"}]
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(proposals, "fetch_requests", lambda conn: rows)
+    monkeypatch.setattr(proposals, "redact_texts", lambda texts, **_: texts)
+    seen = []
+    monkeypatch.setattr(proposals, "propose_services", lambda items: seen.extend(items) or {"proposals": [_proposal("DNS", [246])]})
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    payload = proposals.generate(NOW, lambda: Conn())
+    assert [item["id"] for item in seen] == [246]
+    assert payload["source_request_count"] == 2 and payload["hidden_reasons"]["internal"] == 1
+    assert payload["_triage"][245]["reason"] == "internal" and "harness feedback" in payload["_triage"][245]["note"]
