@@ -51,7 +51,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 from crowdcode import media_models
@@ -146,8 +146,21 @@ NODES: tuple[Node, ...] = (
     Node(
         "extraction", "Page extraction and browsing",
         "A page needs JavaScript rendering, anti-bot access, or clean markdown at scale.",
-        "A static page: curl -L plus a parser. Use a browser only for rendered or interactive pages.",
-        "scraping a given URL, page to markdown or text, crawling, headless browsers, web page screenshots, URL to PDF",
+        "A static page: curl -L plus a parser. To click, type or fill in a page, see browser.",
+        "scraping a given URL, page to markdown or text, crawling, rendering a JavaScript page to read it, "
+        "web page screenshots, URL to PDF",
+    ),
+    # SRI-159: a real owner asked an agent to fill in a checkout with a browser
+    # and was told it had no browser; Browser Use, Browserbase, StableBrowser
+    # and MrScraper were listed, but only as "extraction", which reads pages.
+    Node(
+        "browser", "Browser automation and computer use",
+        "The task needs a browser you drive: open a page, click, type, fill in and submit forms, log in, or step "
+        "through a multi-page flow (a remote browser session, computer use).",
+        "Reading a page needs no browser: curl, or extraction for rendered pages. You pay in USDC, not by card: "
+        "a browser can fill in a retailer's checkout, but you can't pay a normal retailer.",
+        "remote or cloud browser sessions an agent drives (CDP, Playwright, Puppeteer), browser automation and "
+        "computer-use agents, filling in and submitting web forms, clicking and logging in on websites, browser tasks",
     ),
     Node(
         "llm", "LLM inference",
@@ -1621,11 +1634,30 @@ PRIORITY_KNOWN = 1e7
 PRIORITY_CURATED_OR_MODEL = 1e6
 
 
+# A node added after items were classified (SRI-159: `browser`) takes items
+# from the nodes they were filed under instead. Those items are sorted again
+# once; the rest keep their classification.
+RESORT: tuple[tuple[frozenset[str], datetime], ...] = (
+    (frozenset({"extraction", "developer"}), datetime(2026, 11, 21, 19, 46, tzinfo=timezone.utc)),
+)
+
+
+def needs_resort(assignments: Any, classified_at: Any, now: datetime) -> bool:
+    """Classified under a node a newer node takes items from, before that node
+    existed. The cutoff is when the node was added, before its deploy, so an
+    item sorted by the new code is never sent again."""
+    nodes = {a.get("node") for a in (assignments or []) if isinstance(a, dict)}
+    when = classified_at if isinstance(classified_at, datetime) else None
+    return any(nodes & sources and since <= now and (when is None or when < since) for sources, since in RESORT)
+
+
 def _pending_items(conn: Any, resources: list[dict[str, Any]], proposals: list[dict[str, Any]],
                    reliability: ReliabilityView,
-                   offering_models: dict[int, list[dict[str, Any]]] | None = None) -> list[Item]:
-    stored = {row["item_key"]: row["fingerprint"] for row in
-              conn.execute("select item_key, fingerprint from capability_classifications").fetchall()}
+                   offering_models: dict[int, list[dict[str, Any]]] | None = None, now: datetime | None = None) -> list[Item]:
+    stored = {}
+    for row in conn.execute("select item_key, fingerprint, assignments, classified_at from capability_classifications").fetchall():
+        # A stale fingerprint sends the item to the classifier again.
+        stored[row["item_key"]] = "resort" if now and needs_resort(row["assignments"], row["classified_at"], now) else row["fingerprint"]
     items = []
     for row in resources:
         item = resource_item(row)
@@ -1945,7 +1977,7 @@ def run(connect: Callable[[], Any], now: datetime, *, chat: ChatFn | None = None
         resources = load_resources(conn)
         proposals = load_proposals(conn)
         offering_models, _ = media_models.load(conn)
-        items = _pending_items(conn, resources, proposals, reliability, offering_models)
+        items = _pending_items(conn, resources, proposals, reliability, offering_models, now)
     spend = Spend(model=model, remaining_usd=max(0.0, remaining))
     report: dict[str, Any] = {"pending": len(items), "budget_left_usd": round(spend.remaining_usd, 4)}
 

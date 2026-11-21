@@ -913,3 +913,19 @@ def test_the_api_serves_a_model_s_own_view():
     assert body["id"] == "video.generate.veo-3.1" and body["kind"] == "model"
     assert "## video.generate.veo-3.1 — Veo 3.1, 2 seller(s)" in body["text"]
     assert "Pick: Veo 3.1 via Treza video" in body["text"] and "Models (" not in body["text"]
+
+
+def test_browser_automation_is_its_own_node_and_takes_items_from_extraction_once():
+    # SRI-159: an agent told a real owner it had no browser; browser sessions were filed under extraction.
+    node = ct.NODE_BY_ID["browser"]
+    assert "fill in" in node.when_to_look and "can't pay a normal retailer" in node.when_not_to_buy
+    assert "browser" in ct.CLASSIFIABLE and "headless browsers" not in ct.NODE_BY_ID["extraction"].hint
+    (sources, since), = ct.RESORT
+    before, after = since - timedelta(days=1), since + timedelta(minutes=5)
+    now = since + timedelta(hours=1)
+    assert ct.needs_resort([{"node": "extraction", "facet": "headless-browser"}], before, now)
+    assert ct.needs_resort([{"node": "developer", "facet": "misc"}], before, now)
+    # Sorted again after the node existed, never under those nodes, or a clock before it was added: left alone.
+    assert not ct.needs_resort([{"node": "extraction", "facet": "headless-browser"}], after, now)
+    assert not ct.needs_resort([{"node": "video", "facet": "text-to-video"}], before, now)
+    assert not ct.needs_resort([{"node": "extraction", "facet": "headless-browser"}], before, before)
