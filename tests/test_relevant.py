@@ -83,3 +83,8 @@ def test_budget_window_rolls():
     assert budget.take("x") and not budget.take("y")
     now[0] = 11
     assert budget.take("y")
+
+
+def test_none_fit_is_not_trusted_when_the_rewrite_failed():
+    out = find_relevant(TASK, search=fake_search, chat=Chat(fail="rewrite", none_fit=True), budget=Budget(10, 10))
+    assert out["reranked"] is False and "none_fit" not in out
