@@ -41,6 +41,8 @@ POOL_MAX = 40
 QUERIES_MAX = 3
 TASK_CHARS_MAX = 1500
 DESCRIPTION_CHARS = 200
+#: One model call's limit: a search must answer in seconds, and falls back when the model doesn't.
+CHAT_TIMEOUT_S = 8.0
 #: A task this short is already a capability query ("video generation"): no rewrite.
 SHORT_QUERY_WORDS = 2
 
@@ -110,7 +112,7 @@ def openai_chat(model: str | None = None) -> ChatFn | None:
     chosen = model or settings.find_model or settings.openai_model
 
     def chat(system: str, payload: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
-        return _chat_json(settings, system, payload, model=chosen, usage=usage, timeout=20.0,
+        return _chat_json(settings, system, payload, model=chosen, usage=usage, timeout=CHAT_TIMEOUT_S,
                           extra={"reasoning_effort": "minimal"})
 
     return chat
@@ -210,6 +212,10 @@ def find_relevant(task: str, *, search: Callable[..., dict[str, Any]], client: s
     ms = round((time.perf_counter() - started) * 1000)
     tokens = sum(int(u.get("prompt_tokens") or 0) + int(u.get("completion_tokens") or 0)
                  for u in (usage_rewrite, usage_rerank))
+    if reranked is not None and reranked[1] and not rewritten and len(task.split()) > SHORT_QUERY_WORDS:
+        # The rewrite failed, so the pool came from the raw task (which matches nouns, not capabilities):
+        # its emptiness says nothing about the directory. Never tell an agent "none fits" on that.
+        reranked = None
     if reranked is None:
         # The model was unavailable, over budget or failed: today's ranking for the first query.
         services = [{**s, "rank": i} for i, s in enumerate((first or {}).get("services", [])[:size], start=1)]
