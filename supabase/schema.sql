@@ -369,10 +369,14 @@ alter table service_requests
   -- A capability tree node id (C7). Mapped by the backend when the agent omits it.
   add column if not exists capability text,
   -- The model screen at ingest (crowdcode.request_screen): 'accept' or
-  -- 'unchecked' (model unavailable). Rejected requests are never stored.
-  add column if not exists screen_verdict text
-    check (screen_verdict is null or screen_verdict in ('accept', 'unchecked')),
+  -- 'unchecked' (model unavailable). Rejected requests are never stored, but
+  -- one that got through can be marked 'platform_internal' afterwards
+  -- (supabase/request-screen-internal.sql, SRI-159).
+  add column if not exists screen_verdict text,
   add column if not exists screened_at timestamptz;
+alter table service_requests drop constraint if exists service_requests_screen_verdict_check;
+alter table service_requests add constraint service_requests_screen_verdict_check
+  check (screen_verdict is null or screen_verdict in ('accept', 'unchecked', 'platform_internal'));
 
 -- --- C5: a paid call seen by crowdcode-mcp, verified on-chain, no content
 create table if not exists index_observations (
