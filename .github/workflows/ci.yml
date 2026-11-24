@@ -90,13 +90,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Python for the mock owner API
+      # The same venv runs test/fixtures/python_oracle.py, the differentials of
+      # agents-signing and signing-payload against wallet.py and payments.py,
+      # which import httpx, psycopg, python-dotenv and cryptography.
+      - name: Python for the mock owner API and the Python differentials
         run: |
           uv venv -p 3.12 "$RUNNER_TEMP/mock-venv"
-          VIRTUAL_ENV="$RUNNER_TEMP/mock-venv" uv pip install --exclude-newer "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" "eth-account>=0.13.0,<0.15"
+          VIRTUAL_ENV="$RUNNER_TEMP/mock-venv" uv pip install --exclude-newer "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+            "eth-account>=0.13.0,<0.15" "cryptography>=42" "httpx>=0.27.0" "psycopg[binary]>=3.2.0" "python-dotenv>=1.0.0"
       - run: npm ci
       - run: npm run build -w @crowdcode/redaction
-      - name: crowdcode-mcp tests with the conformance session
+      - name: crowdcode-mcp tests with the conformance session and the Python differentials
         run: npm test
         env:
           CROWDCODE_MOCK_PYTHON: ${{ runner.temp }}/mock-venv/bin/python
+          CROWDCODE_PYTHON: ${{ runner.temp }}/mock-venv/bin/python
