@@ -112,7 +112,7 @@ def test_the_pushed_list_is_checked_and_urls_are_built_from_slugs(db):
     [parsed] = parse_services({"services": [{**_service(VENICE_ID, "ok-slug"), "url": "https://evil.example/s/x",
         "routes": [{"method": "POST", "path": "/x?y=1"}, {"method": "DELETE", "path": "/x"}, {"method": "get", "path": "/ok/"}]}]}, ORIGIN)
     assert parsed["base"] == f"{ORIGIN}/s/ok-slug"
-    assert parsed["routes"] == [("GET", "/ok")]
+    assert parsed["routes"] == [("GET", "/ok", None)]
 
 
 def test_the_endpoint_needs_the_configured_token(monkeypatch):
@@ -127,3 +127,13 @@ def test_the_endpoint_needs_the_configured_token(monkeypatch):
     assert client.post("/api/internal/hosted-services/sync", json={"services": []}).status_code == 401
     assert client.post("/api/internal/hosted-services/sync", json={"services": []}, headers={"authorization": "Bearer wrong"}).status_code == 401
     assert client.post("/api/internal/hosted-services/sync", json={"services": "x"}, headers={"authorization": "Bearer s3cret-token"}).status_code == 400
+
+
+def test_each_route_is_listed_under_its_own_description(db):
+    # SRI-203: an image route under the service's text read like its chat route, and was matched as chat.
+    service = _service(VENICE_ID, "venice-proxy", routes=[("POST", "/chat/completions"), ("POST", "/image/generate")])
+    service["routes"][1]["description"] = "Images from Venice's image models, uncensored ones included."
+    assert _sync(db, [service])["created"] == 2
+    rows = {r["canonical_endpoint"]: r["metadata"]["description"] for r in db.execute("select canonical_endpoint, metadata from services").fetchall()}
+    assert rows == {f"{ORIGIN}/s/venice-proxy/chat/completions": "venice-proxy, hosted on CrowdCode",
+                    f"{ORIGIN}/s/venice-proxy/image/generate": "Images from Venice's image models, uncensored ones included."}
