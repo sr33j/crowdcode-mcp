@@ -72,7 +72,7 @@ def parse_services(payload: Any, origin: str | None = None) -> list[dict[str, An
         for route in raw.get("routes") or []:
             method, path = str((route or {}).get("method") or "").upper(), str((route or {}).get("path") or "")
             if method in METHODS and path.startswith("/") and len(path) <= 200 and not re.search(r"[\s?#]", path):
-                routes.append((method, path.rstrip("/") or "/"))
+                routes.append((method, path.rstrip("/") or "/", _clean((route or {}).get("description"), 600)))
         payee = raw.get("payee")
         if payee is not None and not (isinstance(payee, str) and (EVM.match(payee) or SOLANA.match(payee))):
             raise SyncError(f"service {sid}: payee must be an address")
@@ -107,7 +107,7 @@ def sync_hosted_services(conn: psycopg.Connection, services: list[dict[str, Any]
     seen: set[str] = set()
     conn.execute("select pg_advisory_xact_lock(hashtextextended('crowdcode.hosted.sync', 0))")
     for service in services:
-        for method, path in service["routes"]:
+        for method, path, route_description in service["routes"]:
             key = f"{service['id']}:{method} {path}"
             url = normalize_api_endpoint(_route_url(service["base"], path))
             old = [normalize_api_endpoint(_route_url(base, path)) for base in service["alias_bases"]]
@@ -129,7 +129,9 @@ def sync_hosted_services(conn: psycopg.Connection, services: list[dict[str, Any]
             metadata = {
                 "listing_source": LISTING_SOURCE, "crowdcode_service_id": service["id"], "hosted_slug": service["slug"],
                 "hosted_status": service["status"], "hosted_route": f"{method} {path}",
-                **({"description": service["description"]} if service["description"] else {}),
+                # Each route reads as what it does (SRI-203): venice-proxy's image route, listed under the
+                # service's text, read like its chat route and was matched, and classified, as chat.
+                **({"description": route_description or service["description"]} if (route_description or service["description"]) else {}),
             }
             conn.execute(
                 """

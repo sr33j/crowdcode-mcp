@@ -175,3 +175,18 @@ def test_an_agent_service_is_listed_under_its_own_name_and_description(db, monke
     assert status == 200
     assert detail["service"]["name"] == "Venice, per request"
     assert detail["service"]["description"] == VENICE["description"]
+
+
+def test_each_route_keeps_its_own_description():
+    # SRI-203: venice-proxy's image route, listed under the service's text, read like its chat route.
+    manifest = {**VENICE, "routes": [
+        {"method": "POST", "url": "https://crowdcode.app/s/venice-reseller/chat/completions", "description": "Chat completion from a Venice model."},
+        {"method": "POST", "url": "https://crowdcode.app/s/venice-reseller/image/generate", "description": "Images from Venice's image models, uncensored ones included."},
+        {"method": "GET", "url": "https://crowdcode.app/s/venice-reseller/models"},
+    ]}
+    listing = parse_manifest("venice-reseller", manifest, ORIGIN)
+    assert listing["description"] == VENICE["description"]
+    assert listing["route_descriptions"] == {
+        "https://crowdcode.app/s/venice-reseller/chat/completions": "Chat completion from a Venice model.",
+        "https://crowdcode.app/s/venice-reseller/image/generate": "Images from Venice's image models, uncensored ones included.",
+    }

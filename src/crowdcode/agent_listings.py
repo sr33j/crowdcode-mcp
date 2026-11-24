@@ -105,7 +105,29 @@ def parse_manifest(slug: str, payload: Any, origin: str | None = None) -> Listin
     bodies = _route_bodies(payload.get("routes"))
     if bodies:
         listing["route_bodies"] = bodies
+    routes = _route_descriptions(payload.get("routes"))
+    if routes:
+        listing["route_descriptions"] = routes
     return listing
+
+
+def _route_descriptions(routes: Any) -> dict[str, str]:
+    """Each route's own description, by its URL (SRI-203). One service's routes can do different
+    things: venice-proxy's image route, listed under the service's text, read like its chat route
+    and was matched, and classified, as chat."""
+    from crowdcode.identity import normalize_api_endpoint
+    out: dict[str, str] = {}
+    for route in routes if isinstance(routes, list) else []:
+        if not isinstance(route, dict):
+            continue
+        try:
+            url = normalize_api_endpoint(str(route.get("url") or ""))
+        except ValueError:
+            continue
+        description = _clean(route.get("description"), DESCRIPTION_MAX)
+        if url and description:
+            out[url] = description
+    return out
 
 
 def _route_bodies(routes: Any) -> dict[str, Any]:
@@ -213,13 +235,14 @@ def refresh_agent_listings(
                     continue
                 metadata = dict(row["metadata"] or {})
                 probe_body = (listing.get("route_bodies") or {}).get(row["canonical_endpoint"])
-                if (row["name"] == listing["name"] and metadata.get("description") == listing.get("description")
+                description = (listing.get("route_descriptions") or {}).get(row["canonical_endpoint"]) or listing.get("description")
+                if (row["name"] == listing["name"] and metadata.get("description") == description
                         and metadata.get("probe_body") == probe_body):
                     stats["unchanged"] += 1
                     continue
                 metadata.pop("description", None)
-                if listing.get("description"):
-                    metadata["description"] = listing["description"]
+                if description:
+                    metadata["description"] = description
                 metadata.pop("probe_body", None)
                 if probe_body:
                     metadata["probe_body"] = probe_body
