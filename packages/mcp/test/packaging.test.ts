@@ -22,6 +22,8 @@ describe("skill and plugin packaging", () => {
     expect(await text("frontend/SKILL.md")).toBe(canonical);
   });
 
+  // Only the frontmatter's shape. The skill's wording is not pinned (SRI-175): phrase pins here
+  // were rewritten on 5 of this file's 7 changes.
   it("uses only trigger-relevant canonical frontmatter", async () => {
     const skill = await text("skills/crowdcode/SKILL.md");
     const match = /^---\n([\s\S]*?)\n---/.exec(skill);
@@ -31,21 +33,6 @@ describe("skill and plugin packaging", () => {
       .filter((line) => /^[a-z][a-z0-9_-]*:/.test(line))
       .map((line) => line.split(":", 1)[0]);
     expect(keys).toEqual(["name", "description"]);
-    expect(match![1]).toMatch(/third-party paid APIs/);
-    expect(match![1]).toMatch(/review the paid services you use/);
-    expect(match![1]).toMatch(/request the service that would have let you finish/);
-    expect(match![1]).not.toMatch(/leverage/);
-    expect(match![1]).toMatch(/Do not use CrowdCode to gate trades/);
-    expect(skill).toMatch(/Call `get_service_score`/);
-    expect(skill).toMatch(/Review each paid service you use/);
-    expect(skill).toMatch(/failed, stalled, was partial, or needed a costly workaround/);
-    expect(skill).not.toMatch(/would actually pay/);
-    expect(skill).toMatch(/published as unweighted community evidence/);
-    expect(skill).not.toMatch(/same history\s+and\s+score/);
-    expect(skill).toMatch(/`builds_on`/);
-    expect(skill).not.toMatch(/leverage|`unlocks`|`kind`/);
-    expect(skill).toMatch(/## Paid-call records/);
-    expect(skill).toMatch(/signs automatically/);
   });
 
   it("keeps plugin and npm versions aligned with the expected MCP command", async () => {
