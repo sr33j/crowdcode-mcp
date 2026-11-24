@@ -14,19 +14,19 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT = fileURLToPath(new URL("./python_oracle.py", import.meta.url));
-const REQUIRED = "import eth_account, httpx, psycopg, dotenv, cryptography";
+const MODULES = ["eth_account", "httpx", "psycopg", "dotenv", "cryptography"];
 
 const configured = process.env.CROWDCODE_PYTHON || process.env.CROWDCODE_MOCK_PYTHON;
 const python = configured || "python3";
 
+/** A configured Python is used as is (a broken one fails the test); python3 is probed without importing anything. */
 function usable(): boolean {
+  if (configured) return true;
+  const probe = `import importlib.util as u, sys; sys.exit(0 if all(u.find_spec(m) for m in ${JSON.stringify(MODULES)}) else 1)`;
   try {
-    execFileSync(python, ["-I", "-c", REQUIRED], { stdio: "ignore" });
+    execFileSync(python, ["-I", "-c", probe], { stdio: "ignore" });
     return true;
-  } catch (err) {
-    if (configured) {
-      throw new Error(`${python} (CROWDCODE_PYTHON / CROWDCODE_MOCK_PYTHON) cannot run the Python oracle: ${(err as Error).message}`);
-    }
+  } catch {
     return false;
   }
 }
