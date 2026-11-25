@@ -190,6 +190,7 @@ class Resource:
     service_id: str | None = None
     service_rank: tuple[int, int] = (-1, -1)
     hosted_body: str | None = None
+    hosted: Listing | None = None  # CrowdCode's own listing of this route, when it hosts it
 
 
 _SERVICE_RANK = {"hosted": 3, "gateway": 2, "reviewed": 1}
@@ -320,6 +321,7 @@ class Merger:
             if listing.source == "hosted":
                 self._hosted.setdefault(listing.service_id, (key, resource.method))
                 resource.hosted_body = listing.probe_body or resource.hosted_body
+                resource.hosted = resource.hosted or listing
                 if resource.feed is None:
                     resource.probe_url = listing.url
 
@@ -334,7 +336,12 @@ _TMP_COLUMNS = [
     ("price_scheme", "text"), ("bazaar_payers_30d", "int4"), ("bazaar_calls_30d", "int8"),
     ("bazaar_last_called_at", "timestamptz"), ("service_name", "text"), ("description", "text"),
     ("input_schema", "text"), ("service_id", "text"), ("has_feed", "bool"), ("has_bazaar", "bool"),
+    ("has_own", "bool"), ("modality", "text"),
 ]
+
+# SQL for "a public feed lists this row": while one does, its listing speaks for the row.
+_FEEDS_SQL = "array[" + ",".join(f"'{s}'" for s in FEED_SOURCES) + "]"
+
 
 
 def _clean(value: Any) -> Any:
@@ -355,19 +362,29 @@ def _row(resource: Resource) -> tuple[Any, ...]:
 def _raw_row(resource: Resource) -> tuple[Any, ...]:
     feed = resource.feed
     sources = sorted(resource.sources, key=SOURCE_ORDER.index)
+    # A route CrowdCode hosts and no public feed lists is described by CrowdCode, and payable by
+    # construction: hosted agents pay it through CrowdCode's own gateway (x402, USDC). Without this
+    # the row had no name, no description and payable false, so the tree, the classifier and the
+    # model reader never saw it, and search dropped it as unpayable once a probe had quoted it
+    # (SRI-203: venice-proxy's image route was invisible to every image search).
+    own = resource.hosted if feed is None else None
     return (
         resource.key, resource.method, resource.route.origin, resource.route.template,
         resource.route.has_params, resource.probe_url,
         resource.hosted_body or (feed.probe_body if feed else None),
         feed.listing_type if feed else "http",
         feed.protocol if feed else ("x402" if "hosted" in resource.sources else None),
-        sources, sorted(resource.networks), resource.payable, resource.pay_to,
+        sources, sorted(resource.networks), resource.payable or own is not None, resource.pay_to,
         feed.price_atomic if feed else None, feed.price_asset if feed else None,
         feed.price_network if feed else None, feed.price_scheme if feed else None,
         resource.bazaar_payers, resource.bazaar_calls, resource.bazaar_last_called_at,
-        feed.service_name if feed else None, feed.description if feed else None,
+        feed.service_name if feed else own.service_name if own else None,
+        feed.description if feed else own.description if own else None,
         feed.input_schema if feed else None,
-        resource.service_id, feed is not None, "bazaar" in resource.sources,
+        resource.service_id, feed is not None, "bazaar" in resource.sources, own is not None,
+        # The daily model pass (update_models) gives every row its modality; a hosted route gets it from
+        # its own words the hour it appears, by the same rule, so an image route is searched as one.
+        modality_hint(resource.route.template, own.description, own.service_name) if own else None,
     )
 
 
@@ -391,11 +408,13 @@ def write_sweep(conn: psycopg.Connection, merger: Merger, swept: list[str], now:
 
     # Rows a swept source no longer lists lose that source (and Bazaar's counts).
     dropped = conn.execute(
-        """
+        f"""
         update index_resources r set
           sources = array(select unnest(r.sources) except select unnest(%(swept)s::text[])),
           bazaar_payers_30d = case when %(bazaar_swept)s then null else r.bazaar_payers_30d end,
-          bazaar_calls_30d = case when %(bazaar_swept)s then null else r.bazaar_calls_30d end
+          bazaar_calls_30d = case when %(bazaar_swept)s then null else r.bazaar_calls_30d end,
+          -- CrowdCode stopped hosting it (stopped, deleted) and no feed lists it: nothing says it is payable.
+          payable = case when 'hosted' = any(r.sources) and not (r.sources && {_FEEDS_SQL}) then false else r.payable end
         where r.sources && %(swept)s::text[]
           and not exists (select 1 from tmp_index_resources t where t.resource_key = r.resource_key)
         """,
@@ -429,6 +448,8 @@ def write_sweep(conn: psycopg.Connection, merger: Merger, swept: list[str], now:
 
 def _upsert(conn: psycopg.Connection, params: dict[str, Any]) -> None:
     # `excluded` cannot see the temp table's flags, so they travel through a CTE join.
+    # `own`: CrowdCode hosts the row and no public feed lists it, so CrowdCode's listing speaks for it.
+    own = f"(t.has_own and not (r.sources && {_FEEDS_SQL}))"
     conn.execute(
         """
         with t as (select * from tmp_index_resources)
@@ -436,26 +457,27 @@ def _upsert(conn: psycopg.Connection, params: dict[str, Any]) -> None:
           resource_key, method, origin, route_template, has_params, probe_url, probe_body,
           listing_type, protocol, sources, networks, payable, pay_to, price_atomic, price_asset,
           price_network, price_scheme, bazaar_payers_30d, bazaar_calls_30d, bazaar_last_called_at,
-          first_listed_at, last_listed_at, source_seen, service_name, description, input_schema, service_id
+          first_listed_at, last_listed_at, source_seen, service_name, description, input_schema, service_id,
+          modality
         )
         select resource_key, method, origin, route_template, has_params, probe_url, probe_body::jsonb,
                listing_type, protocol, sources, networks, payable, pay_to, price_atomic, price_asset,
                price_network, price_scheme, bazaar_payers_30d, bazaar_calls_30d, bazaar_last_called_at,
                %(now)s, %(now)s, (select jsonb_object_agg(s, %(now)s) from unnest(t.sources) s),
-               service_name, description, input_schema::jsonb, service_id
+               service_name, description, input_schema::jsonb, service_id, modality
         from t
         on conflict (resource_key) do nothing
         """,
         params,
     )
     conn.execute(
-        """
+        f"""
         update index_resources r set
           sources = array(
             select s from unnest(array_cat(
               array(select unnest(r.sources) except select unnest(%(swept)s::text[])), t.sources)) s
             group by s order by min(array_position(array['bazaar','payai','dexter','thirdweb','mpp','hosted','gateway','reviewed'], s))),
-          source_seen = r.source_seen || coalesce((select jsonb_object_agg(s, %(now)s) from unnest(t.sources) s), '{}'::jsonb),
+          source_seen = r.source_seen || coalesce((select jsonb_object_agg(s, %(now)s) from unnest(t.sources) s), '{{}}'::jsonb),
           last_listed_at = %(now)s,
           service_id = coalesce(t.service_id, r.service_id),
           probe_url = case when t.has_feed or not (r.sources && array['bazaar','payai','dexter','thirdweb','mpp']) then t.probe_url else r.probe_url end,
@@ -463,15 +485,18 @@ def _upsert(conn: psycopg.Connection, params: dict[str, Any]) -> None:
           listing_type = case when t.has_feed then t.listing_type else r.listing_type end,
           protocol = coalesce(case when t.has_feed then t.protocol end, r.protocol, t.protocol),
           networks = case when t.has_feed then t.networks else r.networks end,
-          payable = case when t.has_feed then t.payable else r.payable end,
+          payable = case when t.has_feed then t.payable when {own} then true
+                         when 'hosted' = any(r.sources) and not (r.sources && {_FEEDS_SQL}) then false
+                         else r.payable end,
           pay_to = case when t.has_feed then t.pay_to else r.pay_to end,
           price_atomic = case when t.has_feed then t.price_atomic else r.price_atomic end,
           price_asset = case when t.has_feed then t.price_asset else r.price_asset end,
           price_network = case when t.has_feed then t.price_network else r.price_network end,
           price_scheme = case when t.has_feed then t.price_scheme else r.price_scheme end,
-          service_name = coalesce(case when t.has_feed then t.service_name end, r.service_name),
-          description = coalesce(case when t.has_feed then t.description end, r.description),
+          service_name = coalesce(case when t.has_feed or {own} then t.service_name end, r.service_name),
+          description = coalesce(case when t.has_feed or {own} then t.description end, r.description),
           input_schema = coalesce(case when t.has_feed then t.input_schema::jsonb end, r.input_schema),
+          modality = coalesce(r.modality, case when {own} then t.modality end),
           bazaar_payers_30d = case when t.has_bazaar then t.bazaar_payers_30d
                                    when %(bazaar_swept)s then null else r.bazaar_payers_30d end,
           bazaar_calls_30d = case when t.has_bazaar then t.bazaar_calls_30d
@@ -494,6 +519,9 @@ def _upsert(conn: psycopg.Connection, params: dict[str, Any]) -> None:
                 is distinct from (t.probe_url, t.networks, t.payable, t.pay_to, t.price_atomic, t.price_asset,
                                   t.price_network, t.price_scheme, t.service_name, t.description, t.listing_type,
                                   t.protocol, t.route_template))
+            or ({own} and ((r.payable, r.service_name, r.description)
+                is distinct from (true, coalesce(t.service_name, r.service_name), coalesce(t.description, r.description))
+                or (r.modality is null and t.modality is not null)))
             or (t.has_feed and r.input_schema is distinct from t.input_schema::jsonb)
             or ((t.has_feed or t.probe_body is not null) and r.probe_body is distinct from t.probe_body::jsonb)
             or (t.has_bazaar and (r.bazaar_payers_30d, r.bazaar_calls_30d)

@@ -119,3 +119,62 @@ def test_a_failed_answer_is_not_cached():
     chat = Chat(picks=[1])
     out = find_relevant(TASK, search=fake_search, chat=chat, budget=Budget(10, 10), cache=cache)
     assert out["reranked"] is True and len(chat.calls) == 1  # the rewrite was cached, the rerank was asked
+
+
+# --- SRI-203: the owner's uncensored task finds the uncensored image service ------------------
+
+def _studio_search():
+    from functools import partial
+
+    from crowdcode import discovery
+    from crowdcode.offerings import OfferingIndex
+    from tests.test_offerings import STUDIO
+
+    return partial(discovery.find_services, index=OfferingIndex(STUDIO), embedder=None, seed=1)
+
+
+OWNER_TASK = "write an erotic story for me and generate naughty pictures"
+VENICE = "https://i3.example/image/generate"
+
+
+class RewritesTo(Chat):
+    """The rewrite production wrote for the owner's task: the word that mattered dropped."""
+
+    def __init__(self, queries: list[str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.queries = queries
+
+    def __call__(self, system: str, payload: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
+        if "candidates" not in payload:
+            self.calls.append(payload)
+            return {"queries": self.queries}
+        return super().__call__(system, payload, usage)
+
+
+def test_a_rewrite_that_drops_uncensored_still_searches_for_who_serves_it():
+    chat = RewritesTo(["image generation"], picks=[{"n": 1, "fit": "uncensored image models"}])
+    out = find_relevant(OWNER_TASK, search=_studio_search(), chat=chat, budget=Budget(10, 10))
+    assert out["queries"] == ["uncensored image generation"]
+    # The reranker sees the uncensored server first, marked as such.
+    first_card = chat.calls[1]["candidates"][0]
+    assert first_card["url"] == VENICE and first_card["uncensored"] is True
+    assert out["services"][0]["endpoint"] == VENICE
+
+
+def test_a_reranker_that_declines_the_content_does_not_hide_the_service_that_serves_it():
+    chat = RewritesTo(["image generation"], none_fit=True)
+    out = find_relevant(OWNER_TASK, search=_studio_search(), chat=chat, budget=Budget(10, 10))
+    assert "none_fit" not in out and out["reranked"] is False
+    assert out["services"][0]["endpoint"] == VENICE and out["services"][0]["uncensored"] is True
+
+
+def test_an_ordinary_task_is_searched_as_written():
+    chat = RewritesTo(["image generation"], picks=[1])
+    out = find_relevant("draw a watercolour of a lighthouse for my blog", search=_studio_search(), chat=chat,
+                        budget=Budget(10, 10))
+    assert out["queries"] == ["image generation"]
+    assert out["services"][0]["endpoint"] == "https://i1.example/image/generate"
+    # And "none fits" still means none fits when nothing uncensored was asked for.
+    declined = find_relevant("draw a watercolour of a lighthouse for my blog", search=_studio_search(),
+                             chat=RewritesTo(["image generation"], none_fit=True), budget=Budget(10, 10))
+    assert declined["services"] == [] and declined["none_fit"] is True

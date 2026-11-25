@@ -678,3 +678,49 @@ def test_update_models_takes_a_router_s_schema_between_the_catalog_and_the_route
         assert rows["veo-3.1"]["pricing"] == {"clip_seconds": 4, "clip_usd": 2.24}
         resource = conn.execute("select model, modality from index_resources").fetchone()
         assert (resource["model"], resource["modality"]) == (None, "video")
+
+
+def test_a_route_crowdcode_hosts_is_payable_described_and_found_once_probed(db):
+    """SRI-203: venice-proxy's image route was in the index as a blank row (no name, no description,
+    payable false), so the tree, the classifier and the model reader skipped it, and search dropped it as
+    unpayable as soon as a probe had quoted it on Base. Every image search missed it."""
+    from crowdcode import discovery, offerings
+
+    url = "https://crowdcode.app/s/venice-proxy/image/generate"
+    description = ("Images from Venice's image models, uncensored ones included (lustify-v7 for adult "
+                   "photorealism). safe_mode defaults to false (unblurred).")
+    t0 = datetime(2026, 11, 25, 6, 0, tzinfo=UTC)
+    with db() as conn:
+        conn.execute(
+            "insert into services (id, name, canonical_endpoint, canonical_origin, metadata) values "
+            "('svc_venice_image', 'Venice, per request', %s, 'https://crowdcode.app', %s)",
+            (url, json.dumps({"crowdcode_service_id": "f00d", "hosted_status": "live",
+                              "hosted_route": "POST /image/generate", "description": description})))
+        conn.commit()
+    index.run_sweep(db, t0, feeds={}, **OFFLINE)
+    with db() as conn:
+        row = conn.execute("select * from index_resources where route_template = %s", (url,)).fetchone()
+        assert row["payable"] and row["service_name"] == "Venice, per request" and row["description"] == description
+        assert row["modality"] == "image" and row["tracked_reason"] == "hosted"
+        # The probe quotes it on Base, as production's did ($0.012).
+        index.record_probes(conn, [(ProbeTarget(row["id"], "POST", url), ProbeResult(
+            True, 402, protocol="x402", network=BASE, payee=PAYEE_A, pay_to=[PAYEE_A],
+            quoted_amount_atomic=12000, asset=USDC_BASE.lower()))], t0 + timedelta(minutes=5))
+        conn.commit()
+    # The next hourly sweep keeps it so.
+    index.run_sweep(db, t0 + timedelta(hours=1), feeds={}, **OFFLINE)
+    with db() as conn:
+        found, *_ = offerings.load_offerings(conn)
+    result = discovery.find_services("uncensored image generation", index=offerings.OfferingIndex(found),
+                                     embedder=None, seed=1)
+    assert result["source"] == "index" and result["services"][0]["endpoint"] == url, result
+    assert result["services"][0]["networks"] == ["base"] and result["services"][0]["price_usd"] == pytest.approx(0.012)
+
+    # Stopped by its owner: CrowdCode no longer lists it, and nothing says it is payable.
+    with db() as conn:
+        conn.execute("update services set metadata = metadata || '{\"hosted_status\": \"stopped\"}' "
+                     "where id = 'svc_venice_image'")
+        conn.commit()
+    index.run_sweep(db, t0 + timedelta(hours=2), feeds={}, **OFFLINE)
+    with db() as conn:
+        assert not conn.execute("select payable from index_resources where route_template = %s", (url,)).fetchone()["payable"]

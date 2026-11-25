@@ -919,6 +919,13 @@ def assemble(
         }
         if models_kind:
             entry["models"] = models_in(leaf_id, models_kind, members_)
+        if node.id in MEDIA_MINIMUMS or leaf_id in GENERATE_LEAVES:
+            # Lawful adult or uncensored content (SRI-203): mainstream models refuse it, and a seller that says it
+            # serves it rarely sells a top-rated model, so the picks above never name it. Name the best one.
+            free = [i for i in generators(members_, leaf_id) if vr.serves_uncensored(spec[i])]
+            if free:
+                u = ranked(free, f"{leaf_id}:uncensored", picks=1, node_id=node.id, leaf_id=leaf_id)
+                entry["uncensored"] = (u.picks or u.explore)[:1]
         return entry
 
     nodes_out = []
@@ -1248,6 +1255,8 @@ def _leaf_block(leaf: dict[str, Any], *, picks: int, candidates: int, demand: in
         lines.append("No proven or popular offering yet: explore within the allowance (C12) or file request_service.")
     for e in leaf["explore"][:candidates]:
         lines.append(f"Explore: {_explore_line(e, endpoints=False)}")
+    for u in leaf.get("uncensored") or []:
+        lines.append(f"Uncensored or adult content (mainstream models refuse it): {_pick_line(u, with_endpoint=True)}")
     if quality:
         lines.extend(model_list())
     if demand and leaf["demand"]:

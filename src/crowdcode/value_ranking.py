@@ -29,6 +29,28 @@ import numpy as np
 
 from crowdcode import reliability
 
+
+# Lawful adult or uncensored content is a requirement, not a taste (SRI-203). Mainstream generators refuse it,
+# however good their model: the owner's run adf318ab paid two image services that answered 400 for the pictures
+# and never reached venice-proxy's uncensored one. So a request that asks for it is answered first by the
+# offerings that say they serve it, the way a request naming a model is answered by that model's sellers.
+_UNCENSORED_ASK = re.compile(
+    r"\b(?:uncensor\w*|unfiltered|nsfw|not safe for work|adult|erotic\w*|explicit|naughty|nude\w*|nudity|naked|"
+    r"porn\w*|lewd|hentai|sexy|sexual\w*|xxx|abliterated)\b|\b18\+", re.I)
+_UNCENSORED_OFFER = re.compile(
+    r"\b(?:uncensor\w*|unfiltered|nsfw|adult|explicit content|lustify\w*|abliterated|no content filter\w*)\b", re.I)
+
+
+def asks_uncensored(text: str | None) -> bool:
+    """A request that wants adult or uncensored output, in its own words."""
+    return bool(text and _UNCENSORED_ASK.search(text))
+
+
+def serves_uncensored(*texts: str | None) -> bool:
+    """An offering whose own words (name, description, listing, model) say it serves adult or uncensored content."""
+    return bool(_UNCENSORED_OFFER.search(" ".join(t for t in texts if t)))
+
+
 TIERS = ("proven", "popular", "new", "bad")
 DRAWS = 400
 MIN_PRICE_USD = 0.0005  # a free or sub-cent offering still has a finite value

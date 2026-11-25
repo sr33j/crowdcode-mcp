@@ -145,6 +145,17 @@ _GOOD_TIERS = frozenset({"proven", "popular"})
 
 NEUTRAL_QUALITY = 3.0  # the judge's 1-5 scale; an offering nobody rated sits in the middle
 
+# Lawful adult or uncensored content is a requirement, not a taste (SRI-203): see value_ranking.
+
+def asks_uncensored(query: str | None) -> bool:
+    """The request wants adult or uncensored output, in its own words."""
+    return value_ranking.asks_uncensored(query)
+
+
+def serves_uncensored(o: Offering) -> bool:
+    """The offering says, in its name, description, listing or model, that it serves adult or uncensored content."""
+    return value_ranking.serves_uncensored(o.name, o.description, o.listing_text, o.model)
+
 
 def prior(payers: int | None, calls: int | None, curated: bool) -> tuple[float, float, str]:
     """C10's outside-evidence prior, by reliability-v2's own rule: ``(alpha, beta, kind)``."""
@@ -861,6 +872,7 @@ class Ranked:
     explore: bool = False
     contender: bool = False
     model: str | None = None  # the model the query named, if any
+    uncensored: bool = False  # the request asked for uncensored content and this offering says it serves it
 
     @property
     def fit(self) -> float:
@@ -879,7 +891,8 @@ class Ranked:
 def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str, float] | None, seed: int,
          model_rows: set[int] | None = None, model: str | None = None,
          leaf_similarity: dict[str, float] | None = None,
-         producers: Callable[[str], list[Offering]] | None = None) -> tuple[list[Ranked], dict[str, Any]]:
+         producers: Callable[[str], list[Offering]] | None = None,
+         uncensored: bool = False) -> tuple[list[Ranked], dict[str, Any]]:
     """C13 over the matches, best first.
 
     1. The matching set: offerings of the model the query names, or of the leaf the strongest
@@ -891,6 +904,9 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
        scale: with a hundred Beta(1,1) offerings in a set, one of them would draw near 1.0 on
        nearly every request and the best-known option would almost never come first.
     3. The rest of the matching set, then everything else that matched, by match then mean value.
+
+    ``uncensored``: the request asks for adult or uncensored content. When an offering in the matching set says
+    it serves it, those offerings come first under either policy (``asks_uncensored``).
     """
     left_out = {"bad": 0, "not_payable": 0}
     usable: list[tuple[Match, dict[str, Any]]] = []
@@ -942,7 +958,7 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
                 if best is not None:
                     usable.append((Match(o, 0.0, None, MATCH_FLOOR), best))
             group = [(m, b) for m, b in usable if returns_artifact(m.offering, leaf)] or group
-        return _quality_first(usable, group, leaf, model, typical_of(group), left_out)
+        return _quality_first(usable, group, leaf, model, typical_of(group), left_out, uncensored)
     # value_first: only offerings at least VALUE_MIN_QUALITY good are drawn.
     group = [(m, b) for m, b in group if _model_quality(m.offering, model) >= VALUE_MIN_QUALITY] or group
     unproven = sorted((m for m, _ in group if not m.offering.evidenced),
@@ -962,7 +978,9 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
         r = Ranked(o, m.strength, best, o.price_usd, value_price, _model_quality(o, model), sample, id(o) in members)
         r.contender = id(o) in contenders
         ranked.append(r)
-    inside = sorted((r for r in ranked if r.contender), key=lambda r: (not r.best["fundable"], -r.value, r.offering.id))
+    _mark_uncensored(ranked, uncensored)
+    inside = sorted((r for r in ranked if r.contender),
+                    key=lambda r: (not r.uncensored and uncensored, not r.best["fundable"], -r.value, r.offering.id))
     by_mean = sorted(inside, key=lambda r: (not r.best["fundable"], -r.mean_value, r.offering.id))
     mean_position = {id(r): i for i, r in enumerate(by_mean)}
     for position, r in enumerate(inside):
@@ -971,7 +989,18 @@ def rank(matches: list[Match], *, networks: tuple[str, ...], balances: dict[str,
     rest = sorted((r for r in ranked if not r.contender),
                   key=lambda r: (not r.in_group, -round(r.match, 1), not r.best["fundable"], -r.mean_value, r.offering.id))
     return inside + rest, {"left_out": left_out, "capability": leaf, "model": model, "matching": len(group),
-                           "policy": "value_first"}
+                           "policy": "value_first", **({"uncensored": True} if _any_uncensored(inside) else {})}
+
+
+def _mark_uncensored(ranked: list[Ranked], asked: bool) -> None:
+    """Flags the matching offerings that serve the uncensored content the request asked for."""
+    if asked:
+        for r in ranked:
+            r.uncensored = r.contender and serves_uncensored(r.offering)
+
+
+def _any_uncensored(ranked: list[Ranked]) -> bool:
+    return any(r.uncensored for r in ranked)
 
 
 def typical_of(group: list[tuple[Match, dict[str, Any]]]) -> float:
@@ -980,8 +1009,8 @@ def typical_of(group: list[tuple[Match, dict[str, Any]]]) -> float:
 
 
 def _quality_first(usable: list[tuple[Match, dict[str, Any]]], group: list[tuple[Match, dict[str, Any]]],
-                   leaf: str | None, model: str | None, typical: float, left_out: dict[str, int]
-                   ) -> tuple[list[Ranked], dict[str, Any]]:
+                   leaf: str | None, model: str | None, typical: float, left_out: dict[str, int],
+                   uncensored: bool = False) -> tuple[list[Ranked], dict[str, Any]]:
     """C13 amendment, `quality_first`: models by quality (the leaderboard prior, then judged quality), in
     bands of QUALITY_BAND; within a band, sellers by expected delivery, then effective price. No draw:
     `explore` marks a seller with no delivery evidence yet (tier `new`), which is how a top model's
@@ -1002,8 +1031,11 @@ def _quality_first(usable: list[tuple[Match, dict[str, Any]]], group: list[tuple
     def band(q: float) -> float:
         return math.floor(q / QUALITY_BAND + 0.5) * QUALITY_BAND
 
+    _mark_uncensored(ranked, uncensored)
+    # Asked for uncensored content: who serves it comes before the best mainstream model, which would refuse.
     inside = sorted((r for r in ranked if r.contender), key=lambda r: (
-        not r.best["fundable"], -band(r.quality), -round(r.offering.mean, 2), r.value_price, -r.match, r.offering.id))
+        uncensored and not r.uncensored, not r.best["fundable"], -band(r.quality), -round(r.offering.mean, 2),
+        r.value_price, -r.match, r.offering.id))
     kinds = {mod for r in inside for mod in r.offering.modalities}
 
     def may_follow(o: Offering) -> bool:
@@ -1016,7 +1048,7 @@ def _quality_first(usable: list[tuple[Match, dict[str, Any]]], group: list[tuple
                   key=lambda r: (-round(r.match, 1), not r.best["fundable"], -band(r.quality), -r.offering.mean,
                                  r.offering.id))
     return inside + rest, {"left_out": left_out, "capability": leaf, "model": model, "matching": len(group),
-                           "policy": "quality_first"}
+                           "policy": "quality_first", **({"uncensored": True} if _any_uncensored(inside) else {})}
 
 
 def _model_quality(o: Offering, model: str | None) -> float:
@@ -1121,6 +1153,8 @@ def describe(r: Ranked, position: int, detail: bool = False, capability: str | N
         out["why"] = o.reason
     if r.explore:
         out["explore"] = True
+    if r.uncensored:
+        out["uncensored"] = True
     out["price_usd"] = round(r.price, 6) if r.price is not None else None
     out["networks"] = [] if o.networks == (UNKNOWN_NETWORK,) else list(o.networks)
     best = {k: v for k, v in r.best.items() if k != "balance_usd" and not (k == "transfer_needed" and not v)

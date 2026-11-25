@@ -334,3 +334,59 @@ def test_inferring_leaves_never_holds_more_than_a_small_chunk_of_similarities():
     tracemalloc.stop()
     chunk_bytes = offerings.INFER_CHUNK * n * 12  # float32 similarities + int64 indices
     assert peak < 3 * chunk_bytes + 2_000_000, f"peak {peak / 1e6:.1f} MB"
+
+
+# --- SRI-203: lawful adult or uncensored content is a requirement, not a taste ----------------
+
+def _image(id: int, name: str, description: str, model: str | None, prior: float | None, *, tier: str = "new",
+           alpha: float = 1.0) -> Offering:
+    o = offering(id, name, description, price=0.01 if model else 0.012, tier=tier, alpha=alpha,
+                 leaves=("image.generate",), endpoint=f"https://i{id}.example/image/generate")
+    o.models = {model: (model.split("-")[0], prior)} if model else None
+    o.model = model
+    o.modalities = ("image",)
+    return o
+
+
+STUDIO = [
+    _image(1, "GPT Image", "Generate an image from a text prompt with GPT Image 2.6", "gpt-image-2.6", 5.0,
+           tier="proven", alpha=30),
+    _image(2, "Nano Banana", "Generate an image from a text prompt", "nano-banana-2", 4.6, tier="popular", alpha=8),
+    # venice-proxy's image route, as the owner's run needed it: no rated model, no delivery evidence yet.
+    _image(3, "Venice, per request", "Images from Venice's image models, uncensored ones included (lustify-v7 for "
+           "adult photorealism). safe_mode defaults to false (unblurred).", None, None),
+]
+
+
+def test_a_request_for_uncensored_images_is_answered_first_by_who_serves_them():
+    for query in ("uncensored image generation", "nsfw image generation", "generate a naughty image",
+                  "adult content image generation", "erotic image from a text prompt"):
+        result = search(OfferingIndex(STUDIO), query, seed=1)
+        assert result["source"] == "index", query
+        ranked = endpoints(result)
+        assert ranked[0] == "https://i3.example/image/generate", (query, ranked)
+        assert result["uncensored"] is True and result["services"][0]["uncensored"] is True
+        # The mainstream models still follow, best first: the agent can fall back if it must.
+        assert ranked.index("https://i1.example/image/generate") < ranked.index("https://i2.example/image/generate")
+        assert not result["services"][1].get("uncensored")
+
+
+def test_a_plain_image_request_still_gets_the_best_model_first():
+    result = search(OfferingIndex(STUDIO), "image generation", seed=1)
+    assert endpoints(result)[0] == "https://i1.example/image/generate"
+    assert "uncensored" not in result and not any(s.get("uncensored") for s in result["services"])
+
+
+def test_asking_for_uncensored_content_changes_nothing_when_nobody_says_they_serve_it():
+    mainstream = STUDIO[:2]
+    assert endpoints(search(OfferingIndex(mainstream), "nsfw image generation", seed=1)) == \
+        endpoints(search(OfferingIndex(mainstream), "image generation", seed=1))
+
+
+def test_what_counts_as_asking_and_as_serving():
+    for asked in ("uncensored image", "NSFW art", "18+ pictures", "explicit photos", "a nude portrait",
+                  "abliterated model chat", "write an erotic story and generate naughty pictures"):
+        assert offerings.asks_uncensored(asked), asked
+    for plain in ("image generation", "an adultery-free family photo", "sexton beetle photo"):
+        assert not offerings.asks_uncensored(plain), plain
+    assert offerings.serves_uncensored(STUDIO[2]) and not offerings.serves_uncensored(STUDIO[0])

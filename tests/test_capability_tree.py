@@ -929,3 +929,34 @@ def test_browser_automation_is_its_own_node_and_takes_items_from_extraction_once
     assert not ct.needs_resort([{"node": "extraction", "facet": "headless-browser"}], after, now)
     assert not ct.needs_resort([{"node": "video", "facet": "text-to-video"}], before, now)
     assert not ct.needs_resort([{"node": "extraction", "facet": "headless-browser"}], before, before)
+
+
+# --- SRI-203: an image leaf names who serves uncensored content -------------------------------
+
+
+def test_an_image_leaf_names_the_best_seller_of_uncensored_images_and_others_do_not():
+    venice = "https://crowdcode.app/s/venice-proxy/image/generate"
+    resources = [
+        resource(1, "svc_gpt", payers=20, price=10_000, name="GPT Image seller",
+                 route="https://gpt.example/v1/images/generations", description="GPT Image 2.6 text-to-image generation"),
+        # The hosted route as the sweep now lists it: CrowdCode's name and description, quoted on Base, no payers.
+        resource(2, "svc_venice", payers=0, price=None, name="Venice, per request", sources=["hosted"], route=venice,
+                 description="Images from Venice's image models, uncensored ones included (lustify-v7 for adult "
+                             "photorealism). safe_mode defaults to false (unblurred)."),
+    ]
+    resources[1]["quoted_price_atomic"], resources[1]["quoted_asset"] = 12_000, USDC
+    leaves = fixed("image", generate=["text-to-image"])
+    tree = ct.assemble(resources=resources, assignments={"r:1": assign("image", "text-to-image"),
+                                                         "r:2": assign("image", "text-to-image")},
+                       leaves=leaves, proposals=[], reliability=view(), built_at=NOW, version=3,
+                       model_priors={"gpt-image-2.6": {**prior("gpt-image-2.6", 5.0), "source": "lmarena:text-to-image"}})
+    generate = next(leaf for leaf in node_of(tree, "image")["leaves"] if leaf["id"] == "image.generate")
+    # The best model is still the pick for an ordinary request.
+    assert generate["picks"][0]["endpoint"] == "https://gpt.example/v1/images/generations"
+    assert [u["endpoint"] for u in generate["uncensored"]] == [venice]
+    text = ct.render_entry(tree, "image.generate")
+    assert "Uncensored or adult content (mainstream models refuse it): Venice" in text and f"POST {venice}" in text
+    # A leaf where nobody says so has no such line.
+    plain = ct.assemble(resources=resources[:1], assignments={"r:1": assign("image", "text-to-image")}, leaves=leaves,
+                        proposals=[], reliability=view(), built_at=NOW, version=3)
+    assert "Uncensored" not in ct.render_entry(plain, "image.generate")
