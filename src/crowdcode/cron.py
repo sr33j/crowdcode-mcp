@@ -68,7 +68,7 @@ from crowdcode.scoring import (
 from crowdcode.review_sql import public_reviews
 from crowdcode.settings import get_settings
 from crowdcode import index as services_index
-from crowdcode import proposals
+from crowdcode import llm_budget, proposals
 from crowdcode import reliability
 from crowdcode.summaries import SUMMARY_VERSION, summarize_service_reviews
 
@@ -484,7 +484,13 @@ def run_service_summaries(now: datetime) -> None:
             )
 
         attempted += 1
-        summary = summarize_service_reviews(service_name, clean_reviews)
+        try:
+            summary = summarize_service_reviews(service_name, clean_reviews)
+        except llm_budget.BudgetExhausted as exc:
+            # Not an outage: the rest wait for tomorrow's budget, like the tree's backlog.
+            attempted -= 1
+            print(f"summaries: today's model budget is spent ({exc}); the rest wait for tomorrow")
+            break
         if summary is None:
             continue
         through = max(
@@ -518,13 +524,26 @@ def run_service_summaries(now: datetime) -> None:
         raise RuntimeError(f"summaries: all {attempted} summary call(s) failed")
 
 
-def run_service_proposals(now: datetime) -> None:
-    payload = proposals.generate(now, connect)
+def run_service_proposals(now: datetime, full: bool = False) -> None:
+    payload = proposals.generate(now, connect, full=full)
     if payload is None:
         print("proposals: skipped; keeping the last payload")
         return
     triage = payload.pop("_triage", {})
+    state = payload.pop("_state", None)
     with connect() as conn:
+        if state is not None:
+            # What this pass saw, so the next one places only what is new (w111).
+            conn.execute(
+                """
+                insert into app_cache (key, payload, generated_at)
+                values (%s, %s::jsonb, %s)
+                on conflict (key)
+                do update set payload = excluded.payload,
+                              generated_at = excluded.generated_at
+                """,
+                (proposals.STATE_KEY, _as_json(state), now),
+            )
         # Each request's outcome and the model's reason, for /admin (SRI-122).
         proposals.store_triage(conn, triage, now)
         conn.execute(
@@ -545,6 +564,7 @@ def run_service_proposals(now: datetime) -> None:
         f"proposals: {len(payload['proposals'])} listed from "
         f"{payload['source_request_count']} request(s), "
         f"{payload['hidden_request_count']} hidden"
+        + (f"; {state['mode']} pass placed {state['placed']}" if state else "")
     )
 
 
@@ -670,6 +690,11 @@ def record_status(run: dict[str, Any]) -> None:
 def main() -> None:
     settings = get_settings()
     now = utc_now()
+    if "--proposals-full" in sys.argv[1:]:
+        # Group every request again from scratch (proposals.generate): about $0.55,
+        # so run it with CROWDCODE_LLM_PROPOSALS_DAILY_USD raised for this run.
+        run_service_proposals(now, full=True)
+        return
     results: list[dict[str, Any]] = []
 
     def attempt(name: str, fn) -> None:

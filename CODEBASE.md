@@ -279,10 +279,22 @@ and the willingness-to-pay distribution.
 
 ## `src/crowdcode/proposals.py`
 
-Nightly: maps pre-v2 free-text requests into the v2 fields, groups every
-request into generalized service proposals with a product review, and stores
-the published payload in `app_cache` (`service_proposals`). Raw request and
-review text is never published; only summaries and proposals are.
+Once a day, when a request is new or changed: maps pre-v2 free-text requests
+into the v2 fields, places the new requests in the existing service proposals
+or new ones (the first pass, or `crowdcode-cron --proposals-full`, groups every
+request), and stores the published payload in `app_cache` (`service_proposals`)
+and what the pass saw in `service_proposals_state`. Raw request and review text
+is never published; only summaries and proposals are.
+
+## `src/crowdcode/llm_budget.py`
+
+One daily budget for every model call (`CROWDCODE_LLM_DAILY_USD`, $0.80), with
+a share per job (search, tree, proposals, miner, screen, summaries). Every call
+through `summaries._chat_json` names its job; it is refused before the call when
+the budget or the job's share is spent, and its cost is recorded after it in
+`app_cache` (`llm_spend`). Batch jobs never spend search's share; search falls
+back to retrieval alone. At 80% and 100% it prints one `llm.budget` line, which
+Better Stack turns into an email. `/api/cron/status` shows today's spend.
 
 ## `supabase/schema.sql`
 

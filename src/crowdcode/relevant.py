@@ -24,6 +24,9 @@ never fails because the model did.
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import threading
 import time
 from collections import defaultdict, deque
@@ -105,6 +108,65 @@ class Budget:
 BUDGET = Budget(per_client=120, overall=600)
 
 
+class AnswerCache:
+    """The model's answers to searches already made (w111), in this process.
+
+    Keyed on exactly what the model was shown: the rewrite on the task, the
+    rerank on the task and every candidate card. A change in the directory
+    changes the cards, so a stale choice is never served; it is a miss. The
+    nightly suite, the canary and agents retrying a step ask the same thing
+    again and again, and each repeat was two paid calls."""
+
+    def __init__(self, max_items: int = 2000, ttl_s: float = 6 * 3600,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.max_items, self.ttl_s, self.clock = max_items, ttl_s, clock
+        self._items: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+        self.hits = 0
+
+    @staticmethod
+    def key(system: str, payload: dict[str, Any]) -> str:
+        raw = json.dumps([system, payload], sort_keys=True, default=str).lower()
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            item = self._items.get(key)
+            if item is None or self.clock() - item[0] > self.ttl_s:
+                self._items.pop(key, None)
+                return None
+            self.hits += 1
+            return item[1]
+
+    def put(self, key: str, answer: dict[str, Any]) -> None:
+        with self._lock:
+            if len(self._items) >= self.max_items:
+                # Oldest first: dicts keep insertion order.
+                for stale in list(self._items)[: max(1, self.max_items // 10)]:
+                    del self._items[stale]
+            self._items[key] = (self.clock(), answer)
+
+
+CACHE = AnswerCache()
+
+
+def cached(chat: ChatFn, cache: AnswerCache) -> ChatFn:
+    """`chat`, answering from `cache` when it was asked the same thing before.
+    A cached answer costs nothing, so its usage stays empty."""
+
+    def ask(system: str, payload: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
+        key = cache.key(system, payload)
+        hit = cache.get(key)
+        if hit is not None:
+            return copy.deepcopy(hit)
+        answer = chat(system, payload, usage)
+        if isinstance(answer, dict):
+            cache.put(key, copy.deepcopy(answer))
+        return answer
+
+    return ask
+
+
 def openai_chat(model: str | None = None) -> ChatFn | None:
     settings = get_settings()
     if not settings.openai_api_key:
@@ -112,8 +174,10 @@ def openai_chat(model: str | None = None) -> ChatFn | None:
     chosen = model or settings.find_model or settings.openai_model
 
     def chat(system: str, payload: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
+        # Charged to search in the day's model budget (llm_budget): past its share
+        # the call is refused and the search answers from retrieval alone.
         return _chat_json(settings, system, payload, model=chosen, usage=usage, timeout=CHAT_TIMEOUT_S,
-                          extra={"reasoning_effort": "minimal"})
+                          extra={"reasoning_effort": "minimal"}, job="search")
 
     return chat
 
@@ -170,7 +234,7 @@ def _rerank(task: str, pool: list[dict[str, Any]], chat: ChatFn, usage: dict[str
 
 def find_relevant(task: str, *, search: Callable[..., dict[str, Any]], client: str = "anonymous",
                   chat: ChatFn | None = None, budget: Budget | None = None, limit: Any = None,
-                  **search_args: Any) -> dict[str, Any]:
+                  cache: AnswerCache | None = None, **search_args: Any) -> dict[str, Any]:
     """The services that fit ``task``, best first, or ``none_fit``.
 
     ``search`` is ``discovery.find_services`` (a test passes a fake); the
@@ -186,9 +250,13 @@ def find_relevant(task: str, *, search: Callable[..., dict[str, Any]], client: s
         size = PICKS_MAX
     started = time.perf_counter()
     budget = budget if budget is not None else BUDGET
+    if cache is None and chat is None:
+        cache = CACHE
     model = chat if chat is not None else openai_chat()
     if model is not None and not budget.take(client):
         model = None
+    if model is not None and cache is not None:
+        model = cached(model, cache)
     usage_rewrite: dict[str, Any] = {}
     queries, rewritten = _queries(task, model, usage_rewrite)
 

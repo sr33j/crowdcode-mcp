@@ -57,7 +57,7 @@ def reviewed(hosted, monkeypatch):  # noqa: F811
     monkeypatch.delenv("REDACTOR_URL", raising=False)
     monkeypatch.setattr(cron, "connect", server_mod.connect)
 
-    def fake_model(settings, system, prompt, timeout=None, model=None):
+    def fake_model(settings, system, prompt, timeout=None, model=None, **_):
         # The summarizer sees the private text (weighted reviews first); one
         # generated item copies it verbatim.
         copied = prompt["reviews"][0]["reason"]
@@ -153,3 +153,19 @@ def test_the_owner_can_still_list_their_own_reviews(reviewed, monkeypatch):
     conn, _ = reviewed
     row = conn.execute("select reason from reviews where reason = %s", (COMMUNITY_TEXT,)).fetchone()
     assert row["reason"] == COMMUNITY_TEXT
+
+
+def test_a_spent_model_budget_defers_summaries_without_failing_the_cron(reviewed, monkeypatch):
+    """w111: past the day's budget a summary waits for tomorrow; "every call failed"
+    (an outage, #42) is still a failure, but a refusal by the budget is not one."""
+    conn, service_id = reviewed
+    conn.execute("insert into reviews (service_id, rating, reason, reviewer_wallet, signature_verified, "
+                 "payment_verified, weight_basis) values (%s, 5, 'Fast and exact.', %s, true, false, 'none')",
+                 (service_id, "0x" + "78" * 20))
+
+    def spent(*_, **__):
+        raise summaries.llm_budget.BudgetExhausted("summaries: job")
+
+    monkeypatch.setattr(summaries, "_chat_json", spent)
+    cron.run_service_summaries(utc_now())  # does not raise
+    assert cron._collect_summary_inputs(utc_now())  # still pending for tomorrow
