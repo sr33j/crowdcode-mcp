@@ -712,7 +712,7 @@ def find_in_index(index: offerings.OfferingIndex, query: str, networks: tuple[st
     leaf_similarity = index.leaf_similarity(index.query_vector(query, embedder))
     ranked, info = offerings.rank(matches, networks=networks, balances=balances, seed=used,
                                   model_rows=model_rows or None, model=model, leaf_similarity=leaf_similarity,
-                                  producers=index.producers)
+                                  producers=index.producers, uncensored=offerings.asks_uncensored(query))
     services = [offerings.describe(r, position, detail, info.get("capability"))
                 for position, r in enumerate(ranked[:size], start=1)]
     left_out = {k: v for k, v in info["left_out"].items() if v}
@@ -726,6 +726,8 @@ def find_in_index(index: offerings.OfferingIndex, query: str, networks: tuple[st
         **({"capability": info["capability"]} if info.get("capability") else {}),
         **({"policy": info["policy"]} if info.get("policy") else {}),
         **({"model": model} if model else {}),
+        # Asked for adult or uncensored content: the results marked `uncensored` say they serve it.
+        **({"uncensored": True} if info.get("uncensored") else {}),
         "ranking": offerings.RANKING,
         "services": services,
         "total_matches": len(ranked),
