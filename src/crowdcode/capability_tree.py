@@ -57,6 +57,7 @@ from typing import Any, Callable, Iterable
 from crowdcode import media_models
 from crowdcode import value_ranking as vr
 from crowdcode.settings import Settings, get_settings
+from crowdcode import llm_budget
 from crowdcode.summaries import _chat_json
 
 TREE_FORMAT = "capability-tree-v2"
@@ -85,19 +86,12 @@ MODEL_PICKS = 2
 DEMAND_PER_LEAF = 5
 DESCRIPTION_CHARS = 280
 SPEND_CACHE_KEY = "capability_tree_spend"
-DEFAULT_DAILY_BUDGET_USD = 1.0
+DEFAULT_DAILY_BUDGET_USD = 0.15
 
-# USD per million tokens (input, cached input, output). An unknown model is
-# costed at the most expensive row, so the cap errs on the side of stopping.
-MODEL_PRICES: dict[str, tuple[float, float, float]] = {
-    "gpt-5-nano": (0.05, 0.005, 0.40),
-    "gpt-5-mini": (0.25, 0.025, 2.00),
-    "gpt-5": (1.25, 0.125, 10.00),
-    "gpt-5.5": (5.00, 0.50, 30.00),
-    "gpt-4.1-mini": (0.40, 0.10, 1.60),
-    "gpt-4o-mini": (0.15, 0.075, 0.60),
-}
-UNKNOWN_MODEL_PRICE = (5.00, 5.00, 20.00)
+# USD per million tokens, and the day's budget across every job, live in
+# llm_budget; this module's own ledger is the tree's share of it.
+MODEL_PRICES = llm_budget.MODEL_PRICES
+UNKNOWN_MODEL_PRICE = llm_budget.UNKNOWN_MODEL_PRICE
 
 # Stablecoins the index sees, all six decimals: USDC on Base and Solana, and
 # pathUSD on Tempo.
@@ -376,8 +370,8 @@ def proposal_item(proposal: dict[str, Any]) -> Item:
 # --- Model calls, costed -----------------------------------------------------------
 
 
-class BudgetExhausted(Exception):
-    pass
+# The day's model budget refuses a call with the same exception the tree's own cap raises.
+BudgetExhausted = llm_budget.BudgetExhausted
 
 
 @dataclass
@@ -394,10 +388,7 @@ class Spend:
     recorded: float = 0.0  # how much of `usd` is already in the daily ledger
 
     def price(self) -> tuple[float, float, float]:
-        for name, price in sorted(MODEL_PRICES.items(), key=lambda kv: -len(kv[0])):
-            if self.model == name or self.model.startswith(name + "-"):
-                return price
-        return UNKNOWN_MODEL_PRICE
+        return llm_budget.price(self.model)
 
     def estimate(self, payload: dict[str, Any], system: str, output_tokens: int) -> float:
         inp, _, out = self.price()
@@ -425,12 +416,12 @@ class Spend:
 ChatFn = Callable[[str, dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
-def openai_chat(settings: Settings, model: str) -> ChatFn:
+def openai_chat(settings: Settings, model: str, job: str = "tree") -> ChatFn:
     """The backend's `_chat_json`, with minimal reasoning and the usage reported."""
 
     def chat(system: str, payload: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
         return _chat_json(settings, system, payload, model=model, usage=usage,
-                          extra={"reasoning_effort": "minimal"})
+                          extra={"reasoning_effort": "minimal"}, job=job)
 
     return chat
 
@@ -441,6 +432,9 @@ def _call(chat: ChatFn, spend: Spend, system: str, payload: dict[str, Any], outp
     usage: dict[str, Any] = {}
     try:
         result = chat(system, payload, usage)
+    except BudgetExhausted:
+        # The day's budget across every job (llm_budget) is spent: stop like the tree's own cap.
+        raise
     except Exception:
         spend.failures += 1
         if usage:

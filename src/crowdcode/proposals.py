@@ -28,13 +28,15 @@ proposal that repeats a request is dropped.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from collections import Counter
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from crowdcode import demand_miner
+from crowdcode import demand_miner, llm_budget
 from crowdcode.demand import SourceIndex, price_distribution
 from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts
@@ -44,6 +46,13 @@ from crowdcode.summaries import BATCH_TIMEOUT, _chat_json
 logger = logging.getLogger(__name__)
 
 CACHE_KEY = "service_proposals"
+#: Private: what the last pass saw, so the next one sends the model only what is new (w111).
+STATE_KEY = "service_proposals_state"
+#: Who pays for these calls in the day's model budget (llm_budget).
+JOB = "proposals"
+#: A pass runs when a request was added or changed, and at most this often:
+#: the hourly cron regrouped every request with gpt-5.5 each hour, $13 a day.
+MIN_HOURS = 20
 PAYLOAD_VERSION = 2
 # Demand older than this no longer describes what agents need.
 WINDOW_DAYS = 180
@@ -150,7 +159,7 @@ def infer_legacy_fields(rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]
         }
         try:
             parsed = _chat_json(settings, LEGACY_SYSTEM, prompt, timeout=BATCH_TIMEOUT,
-                                model=settings.proposal_model)
+                                model=settings.proposal_model, job=JOB)
         except Exception as exc:  # one failed batch must not lose the others
             logger.warning("legacy request mapping failed: %s", exc)
             continue
@@ -201,7 +210,58 @@ PROPOSAL_SYSTEM = (
 )
 
 
+#: What makes a proposal, for the full pass and for placing new requests alike.
+PROPOSAL_REQUIREMENTS = [
+    "Generalize: a proposal is one reusable service that many agents could "
+    "call, not one agent's task. Merge requests one service would satisfy. "
+    "One proposal does one job: do not bundle several capabilities.",
+    "Write every field in your own words. Never copy phrases from the requests. "
+    "Never include names of people or accounts, emails, URLs, IDs, wallet "
+    "addresses, file names, dates, or the details of any one task.",
+    "title: a short product-style name, at most 50 characters.",
+    "input: what a caller sends, concretely, at most 120 characters.",
+    "output: the one deliverable returned, specific enough to check, at most "
+    "120 characters. Not a list of every field anyone asked for.",
+    "problem: the problem it solves for callers, at most 160 characters.",
+    "builds_on: what a builder would start from (an official API, a dataset, "
+    "rented hardware, existing paid services, a human-ops team), at most 160 "
+    "characters.",
+    "The only test is tractability: does the request have a clear input, a "
+    "clear output and a clear problem, so that a builder could start on it? "
+    "Do not judge whether it is realistic, popular, cheap enough, hard to "
+    "build, or whether anyone would pay. Expensive, slow, physical, "
+    "human-run or long-running work (renting GPUs, a person making a call, a "
+    "job that runs for days) is tractable when its input and deliverable "
+    "are clear. If it is tractable, list it, even if only one agent asked.",
+    "A request that only restates one task's answer (an explanation of one "
+    "topic, one document, one list of facts) is not_a_service.",
+    "internal is only for a fix to the requesting agent's own platform, "
+    "gateway, wallet, payment receipts or tools that nobody else could build "
+    "and sell as a service. If any builder could offer it to every agent as a "
+    "paid service (a faithful PDF renderer, a reliable search, a verified "
+    "image generator), it is not internal: list it.",
+    "A request in not_listed has a reason, vague (no clear input, output or "
+    "problem to start from), internal or not_a_service, and a note: one "
+    "sentence of at most 120 characters saying why, in general words, with no "
+    "names, URLs, IDs or task details.",
+    "Requests marked low_confidence were mapped from older free text and carry "
+    "a guessed price; that says nothing about whether they are tractable.",
+    "Requests with source miner were not filed by an agent: CrowdCode found the "
+    "need in summaries of `runs` hosted runs, and the price is an estimate. Judge "
+    "them like the others.",
+]
+PROPOSAL_SCHEMA = {
+    "title": "string", "input": "string", "output": "string",
+    "problem": "string", "builds_on": "string",
+    "request_ids": ["integer"],
+}
+NOT_LISTED_SCHEMA = {"request_id": "integer", "reason": "vague|internal|not_a_service", "note": "string"}
+
+
 def propose_services(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """The full pass: every request grouped from scratch (gpt-5.5, about $0.55 for
+    210 requests on 2026-11-25). Run once, then only when forced: the daily pass
+    places new requests (place_requests)."""
     settings = get_settings()
     prompt = {
         "task": (
@@ -210,59 +270,53 @@ def propose_services(items: list[dict[str, Any]]) -> dict[str, Any]:
             "request that is tractable."
         ),
         "requirements": [
-            "Generalize: a proposal is one reusable service that many agents could "
-            "call, not one agent's task. Merge requests one service would satisfy. "
-            "One proposal does one job: do not bundle several capabilities.",
-            "Write every field in your own words. Never copy phrases from the requests. "
-            "Never include names of people or accounts, emails, URLs, IDs, wallet "
-            "addresses, file names, dates, or the details of any one task.",
-            "title: a short product-style name, at most 50 characters.",
-            "input: what a caller sends, concretely, at most 120 characters.",
-            "output: the one deliverable returned, specific enough to check, at most "
-            "120 characters. Not a list of every field anyone asked for.",
-            "problem: the problem it solves for callers, at most 160 characters.",
-            "builds_on: what a builder would start from (an official API, a dataset, "
-            "rented hardware, existing paid services, a human-ops team), at most 160 "
-            "characters.",
-            "The only test is tractability: does the request have a clear input, a "
-            "clear output and a clear problem, so that a builder could start on it? "
-            "Do not judge whether it is realistic, popular, cheap enough, hard to "
-            "build, or whether anyone would pay. Expensive, slow, physical, "
-            "human-run or long-running work (renting GPUs, a person making a call, a "
-            "job that runs for days) is tractable when its input and deliverable "
-            "are clear. If it is tractable, list it, even if only one agent asked.",
-            "A request that only restates one task's answer (an explanation of one "
-            "topic, one document, one list of facts) is not_a_service.",
-            "internal is only for a fix to the requesting agent's own platform, "
-            "gateway, wallet, payment receipts or tools that nobody else could build "
-            "and sell as a service. If any builder could offer it to every agent as a "
-            "paid service (a faithful PDF renderer, a reliable search, a verified "
-            "image generator), it is not internal: list it.",
             "Every request id appears exactly once: in one proposal's request_ids, or "
-            "in not_listed with reason vague (no clear input, output or problem to "
-            "start from), internal or not_a_service, and a note: one sentence of at "
-            "most 120 characters saying why, in general words, with no names, URLs, "
-            "IDs or task details.",
-            "Requests marked low_confidence were mapped from older free text and carry "
-            "a guessed price; that says nothing about whether they are tractable.",
-            "Requests with source miner were not filed by an agent: CrowdCode found the "
-            "need in summaries of `runs` hosted runs, and the price is an estimate. Judge "
-            "them like the others.",
+            "in not_listed.",
+            *PROPOSAL_REQUIREMENTS,
         ],
-        "schema": {
-            "proposals": [{
-                "title": "string", "input": "string", "output": "string",
-                "problem": "string", "builds_on": "string",
-                "request_ids": ["integer"],
-            }],
-            "not_listed": [{"request_id": "integer",
-                            "reason": "vague|internal|not_a_service",
-                            "note": "string"}],
-        },
+        "schema": {"proposals": [PROPOSAL_SCHEMA], "not_listed": [NOT_LISTED_SCHEMA]},
         "requests": items,
     }
     return _chat_json(settings, PROPOSAL_SYSTEM, prompt, timeout=BATCH_TIMEOUT,
-                      model=settings.proposal_model)
+                      model=settings.proposal_model, job=JOB)
+
+
+def place_requests(existing: list[dict[str, Any]], items: list[dict[str, Any]]) -> dict[str, Any]:
+    """The daily pass: only the requests that are new since the last one, placed
+    in an existing proposal, a new one, or not_listed. The model reads the
+    existing proposals' public fields, never their requests, and cannot change
+    them. About 40 times cheaper than grouping everything again every hour, and
+    the published proposals no longer change their titles from one hour to the
+    next."""
+    settings = get_settings()
+    prompt = {
+        "task": (
+            "New service requests from AI agents have arrived. Place each one: in the "
+            "existing proposal whose service would satisfy it, in a new proposal, or in "
+            "not_listed."
+        ),
+        "requirements": [
+            "Prefer an existing proposal: put a request there when that one service would "
+            "satisfy it, even if the request asks for a little more or less. Propose a new "
+            "service only when none of the existing ones would.",
+            "Existing proposals stay as they are: give only their number `n` in assign.",
+            "Every new request id appears exactly once: in assign, in one new proposal's "
+            "request_ids, or in not_listed.",
+            *PROPOSAL_REQUIREMENTS,
+        ],
+        "schema": {
+            "assign": [{"request_id": "integer", "proposal": "integer (an existing n)"}],
+            "proposals": [PROPOSAL_SCHEMA],
+            "not_listed": [NOT_LISTED_SCHEMA],
+        },
+        "existing_proposals": [
+            {"n": n, **{key: p.get(key) for key in ("title", "input", "output", "problem")}}
+            for n, p in enumerate(existing, start=1)
+        ],
+        "requests": items,
+    }
+    return _chat_json(settings, PROPOSAL_SYSTEM, prompt, timeout=BATCH_TIMEOUT,
+                      model=settings.proposal_model, extra={"reasoning_effort": "low"}, job=JOB)
 
 
 def _model_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -500,7 +554,7 @@ def reword_flagged(flagged: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     }
     try:
         parsed = _chat_json(settings, REWORD_SYSTEM, prompt, timeout=BATCH_TIMEOUT,
-                            model=settings.proposal_model)
+                            model=settings.proposal_model, job=JOB)
     except Exception as exc:  # the flagged proposals stay hidden, the rest publish
         logger.warning("rewording flagged proposals failed: %s", exc)
         return {}
@@ -601,18 +655,173 @@ def empty_payload(now: datetime, model: str | None = None) -> dict[str, Any]:
     }
 
 
-def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
+MODEL_KEYS = ("request_input", "request_output", "request_problem", "price_per_call_usd",
+              "fields_source", "inference_confidence", "builds_on", "frequency", "capability",
+              "source", "miner_run_count", "screen_verdict")
+
+
+def request_key(row: dict[str, Any]) -> str:
+    """What the model would be told about a request, hashed: a request whose key
+    changed is placed again, one whose key did not keeps its place."""
+    raw = json.dumps([str(row.get(key)) if row.get(key) is not None else None for key in MODEL_KEYS])
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def load_previous(conn: Any) -> tuple[dict[str, Any] | None, dict[str, Any], dict[int, dict[str, Any]]]:
+    """The published payload, the last pass's state and every request's outcome."""
+    rows = {row["key"]: row["payload"] for row in conn.execute(
+        "select key, payload from app_cache where key = any(%s)", ([CACHE_KEY, STATE_KEY],)).fetchall()}
+    triage = {int(row["request_id"]): dict(row) for row in conn.execute(
+        "select request_id, listed, reason, note, proposal_id, proposal_title from service_request_triage"
+    ).fetchall()}
+    payload = rows.get(CACHE_KEY)
+    return (payload if isinstance(payload, dict) and payload.get("version") == PAYLOAD_VERSION else None,
+            rows.get(STATE_KEY) if isinstance(rows.get(STATE_KEY), dict) else {}, triage)
+
+
+def bootstrap_state(rows: list[dict[str, Any]], previous: dict[str, Any] | None,
+                    triage: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    """The state of a pass that ran before the state was kept: the hourly passes
+    wrote every request's outcome to the triage table, so a request with an
+    outcome was seen as it is now, and the payload says when."""
+    if previous is None or not triage:
+        return {}
+    generated = previous.get("generated_at")
+    run_at = (datetime.fromtimestamp(generated, timezone.utc).isoformat()
+              if isinstance(generated, (int, float)) else None)
+    return {"run_at": run_at, "full_at": run_at, "mode": "bootstrap",
+            "requests": {str(row["id"]): request_key(row) for row in rows if int(row["id"]) in triage}}
+
+
+def _hours_since(value: Any, now: datetime) -> float:
+    try:
+        then = datetime.fromisoformat(str(value))
+    except ValueError:
+        return float("inf")
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return (now - then).total_seconds() / 3600
+
+
+def due(rows: list[dict[str, Any]], previous: dict[str, Any] | None, state: dict[str, Any],
+        now: datetime, *, full: bool = False) -> str | None:
+    """Why a pass is not due now, or None. A pass is due when there is nothing
+    published, or when a request was added, changed or aged out and the last
+    pass was at least MIN_HOURS ago."""
+    if full or previous is None or not state.get("requests"):
+        return None
+    keys = {str(row["id"]): request_key(row) for row in rows}
+    if keys == state.get("requests"):
+        return "no request changed since the last pass"
+    hours = float(os.environ.get("CROWDCODE_PROPOSALS_MIN_HOURS", "") or MIN_HOURS)
+    if _hours_since(state.get("run_at"), now) < hours:
+        return f"the last pass was under {hours:g} hours ago"
+    return None
+
+
+def _carry_over(usable: list[dict[str, Any]], previous: dict[str, Any], state: dict[str, Any],
+                triage: dict[int, dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The last pass's grouping of the requests that did not change, the
+    proposals they belong to, and the requests to place.
+
+    A request is placed again when it is new, changed, or was left over last
+    time (unplaced, or in a proposal dropped as private)."""
+    seen = state.get("requests") or {}
+    members: dict[str, list[int]] = {}
+    not_listed = []
+    to_place = []
+    for row in usable:
+        request_id = int(row["id"])
+        outcome = triage.get(request_id)
+        if outcome is None or seen.get(str(request_id)) != request_key(row):
+            to_place.append(row)
+        elif outcome.get("listed") and outcome.get("proposal_id"):
+            members.setdefault(outcome["proposal_id"], []).append(request_id)
+        elif outcome.get("reason") in MODEL_REASONS:
+            not_listed.append({"request_id": request_id, "reason": outcome["reason"], "note": outcome.get("note")})
+        else:
+            to_place.append(row)
+    existing = [p for p in previous.get("proposals") or [] if members.get(p.get("id"))]
+    parsed = {
+        "proposals": [{**{key: p.get(key) for key in PUBLIC_KEYS}, "request_ids": members[p["id"]]}
+                      for p in existing],
+        "not_listed": not_listed,
+    }
+    # A request whose proposal is gone from the payload is placed again.
+    kept = {request_id for p in existing for request_id in members[p["id"]]}
+    orphans = [row for row in usable if int(row["id"]) not in kept
+               and any(int(row["id"]) in ids for ids in members.values())]
+    return parsed, existing, to_place + orphans
+
+
+def _merge_placement(parsed: dict[str, Any], existing: list[dict[str, Any]], answer: dict[str, Any],
+                     new_ids: set[int]) -> dict[str, Any]:
+    """The model's placement of new requests added to the carried-over grouping.
+    Existing proposals come first, so build_payload gives them their old members."""
+    def ids(values: Any) -> list[int]:
+        out = []
+        for value in values or []:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return [i for i in out if i in new_ids]
+
+    for item in answer.get("assign") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            n = int(item.get("proposal"))
+        except (TypeError, ValueError):
+            continue
+        placed = ids([item.get("request_id")])
+        if placed and 1 <= n <= len(existing):
+            parsed["proposals"][n - 1]["request_ids"].extend(placed)
+    for raw in answer.get("proposals") or []:
+        if isinstance(raw, dict):
+            parsed["proposals"].append({**raw, "request_ids": ids(raw.get("request_ids"))})
+    for item in answer.get("not_listed") or []:
+        if isinstance(item, dict) and ids([item.get("request_id")]):
+            parsed["not_listed"].append(item)
+    return parsed
+
+
+def generate(now: datetime, connect: Any, *, full: bool = False) -> dict[str, Any] | None:
     """Map legacy rows, then build the published payload. Returns None when
-    nothing should replace the last good payload (no model configured)."""
+    nothing should replace the last good payload: no model configured, no
+    request changed, the last pass was too recent, or the day's model budget
+    is spent.
+
+    The first pass groups every request (propose_services); every later one
+    keeps that grouping and places only the requests that are new or changed
+    (place_requests). `full` (crowdcode-cron --proposals-full) groups everything
+    again; it costs about $0.55, more than the job's daily share, so raise
+    CROWDCODE_LLM_PROPOSALS_DAILY_USD for that run."""
     settings = get_settings()
     with connect() as conn:
         rows = fetch_requests(conn)
+        previous, state, triage = load_previous(conn)
     if not rows:
         return empty_payload(now)
     if not settings.openai_api_key:
         logger.warning("service proposals: OPENAI_API_KEY is not set; keeping the last payload")
         return None
+    state = state or bootstrap_state(rows, previous, triage)
+    reason = due(rows, previous, state, now, full=full)
+    if reason:
+        print(f"proposals: not due ({reason}); keeping the last payload")
+        return None
 
+    try:
+        return _generate(now, connect, rows, previous, state, triage, full=full)
+    except llm_budget.BudgetExhausted as exc:
+        print(f"proposals: today's model budget is spent ({exc}); keeping the last payload")
+        return None
+
+
+def _generate(now: datetime, connect: Any, rows: list[dict[str, Any]], previous: dict[str, Any] | None,
+              state: dict[str, Any], triage: dict[int, dict[str, Any]], *, full: bool) -> dict[str, Any]:
+    settings = get_settings()
     legacy = [row for row in rows if row.get("fields_source") is None
               and row.get("service_description")]
     if legacy:
@@ -645,6 +854,13 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
         "note": "No input, output and problem could be read from it.",
         "proposal_id": None, "proposal_title": None}
         for row in clean_rows if int(row["id"]) not in usable_ids}
+    incremental = not full and previous is not None and bool(state.get("requests"))
+    pass_state = {
+        "run_at": now.isoformat(),
+        "full_at": state.get("full_at") if incremental else now.isoformat(),
+        "mode": "incremental" if incremental else "full",
+        "requests": {str(row["id"]): request_key(row) for row in rows},
+    }
     if not usable:
         payload = empty_payload(now, settings.proposal_model)
         payload["source_request_count"] = len(rows)
@@ -652,9 +868,18 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
         payload["hidden_reasons"]["not_a_service"] = len(unusable)
         payload["hidden_reasons"]["internal"] = len(platform)
         payload["_triage"] = {**unusable, **platform}
+        payload["_state"] = {**pass_state, "placed": 0}
         return payload
 
-    parsed = propose_services(_model_items(usable))
+    if incremental:
+        parsed, existing, to_place = _carry_over(usable, previous, state, triage)
+        if to_place:
+            answer = place_requests(existing, _model_items(to_place))
+            parsed = _merge_placement(parsed, existing, answer, {int(row["id"]) for row in to_place})
+        placed = len(to_place)
+    else:
+        parsed = propose_services(_model_items(usable))
+        placed = len(usable)
     payload = build_payload(parsed, usable, sources, now, settings.proposal_model)
     payload["source_request_count"] = len(rows)
     payload["hidden_request_count"] += len(unusable) + len(platform)
@@ -662,6 +887,7 @@ def generate(now: datetime, connect: Any) -> dict[str, Any] | None:
     payload["hidden_reasons"]["internal"] += len(platform)
     payload["_triage"].update(unusable)
     payload["_triage"].update(platform)
+    payload["_state"] = {**pass_state, "placed": placed}
     return redact_payload(payload, sources, reword_flagged)
 
 

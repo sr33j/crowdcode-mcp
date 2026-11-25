@@ -32,6 +32,7 @@ from crowdcode.observations import submit_observation
 from crowdcode import demand_miner, reliability
 from crowdcode.request_screen import REJECT_REASONS, SCREEN_VERSION, screen_request
 from crowdcode.discovery import WARMUP, embed_directory, find_services, process_memory, warm_search
+from crowdcode import llm_budget
 from crowdcode.relevant import find_relevant
 from crowdcode.listing_metadata import fill_in_background
 from crowdcode.identity import (
@@ -1920,7 +1921,13 @@ def _cron_status_payload() -> dict[str, Any]:
             "select payload from app_cache where key = 'cron_status'"
         ).fetchone()
     payload = row["payload"] if row and isinstance(row["payload"], dict) else None
-    return cron_status_summary(payload, datetime.now(UTC))
+    summary = cron_status_summary(payload, datetime.now(UTC))
+    try:
+        # Today's model spend by job against the day's budget (llm_budget, w111).
+        summary["llm_spend"] = llm_budget.status(connect=connect)
+    except Exception:
+        summary["llm_spend"] = None
+    return summary
 
 
 async def cron_status(_: Request) -> JSONResponse:
@@ -2139,7 +2146,7 @@ def _evolve_chat(model: str | None):
     if not settings.openai_api_key:
         raise RuntimeError("no model configured")
     chosen = (model or os.environ.get("CROWDCODE_TREE_PROPOSER_MODEL", "") or settings.openai_model).strip()
-    return chosen, capability_tree.openai_chat(settings, chosen)
+    return chosen, capability_tree.openai_chat(settings, chosen, job="tree_evolve")
 
 
 def _record_evolve_spend(spend: Any) -> None:

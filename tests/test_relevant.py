@@ -88,3 +88,34 @@ def test_budget_window_rolls():
 def test_none_fit_is_not_trusted_when_the_rewrite_failed():
     out = find_relevant(TASK, search=fake_search, chat=Chat(fail="rewrite", none_fit=True), budget=Budget(10, 10))
     assert out["reranked"] is False and "none_fit" not in out
+
+
+def test_the_same_search_again_costs_nothing_until_the_directory_changes():
+    """w111: the nightly suite, the canary and agents retrying a step ask the same thing again."""
+    from crowdcode.relevant import AnswerCache
+
+    cache, chat = AnswerCache(), Chat(picks=[{"n": 2, "fit": "generates video"}])
+    first = find_relevant(TASK, search=fake_search, chat=chat, budget=Budget(10, 10), cache=cache)
+    again = find_relevant("  " + TASK.upper() + " ", search=fake_search, chat=chat, budget=Budget(10, 10), cache=cache)
+    assert len(chat.calls) == 2  # one rewrite and one rerank, for both searches
+    assert [s["endpoint"] for s in again["services"]] == [s["endpoint"] for s in first["services"]]
+    assert again["reranked"] is True and again["tokens"] == 0
+
+    SERVICES["video generation"].append({"endpoint": "https://new.example/video", "method": "POST", "name": "New"})
+    try:
+        changed = find_relevant(TASK, search=fake_search, chat=chat, budget=Budget(10, 10), cache=cache)
+    finally:
+        SERVICES["video generation"].pop()
+    # The rewrite is reused; the candidates changed, so the choice is made again.
+    assert len(chat.calls) == 3 and "candidates" in chat.calls[-1]
+    assert changed["reranked"] is True
+
+
+def test_a_failed_answer_is_not_cached():
+    from crowdcode.relevant import AnswerCache
+
+    cache = AnswerCache()
+    find_relevant(TASK, search=fake_search, chat=Chat(fail="rerank"), budget=Budget(10, 10), cache=cache)
+    chat = Chat(picks=[1])
+    out = find_relevant(TASK, search=fake_search, chat=chat, budget=Budget(10, 10), cache=cache)
+    assert out["reranked"] is True and len(chat.calls) == 1  # the rewrite was cached, the rerank was asked
