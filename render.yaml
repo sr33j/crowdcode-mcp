@@ -77,10 +77,19 @@ services:
         sync: false
       - key: CROWDCODE_DEMAND_MINER_DAILY_USD
         value: "0.24"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      # Every model call the backend and the cron make, together, in one UTC day
+      # (src/crowdcode/llm_budget.py); each job has its share of it.
+      - key: CROWDCODE_LLM_DAILY_USD
+        value: "0.80"
 
   # Hourly batch (docs/SCORING.md §8.2): consistency sweep, per-service
-  # review summaries, service proposals, and the services index (its feed
-  # sweep runs once a day; its probes are spread across the hours).
+  # review summaries, service proposals (one pass a day, when a request is
+  # new), and the services index (its feed sweep runs once a day; its probes
+  # are spread across the hours).
   - type: cron
     name: crowdcode-cron
     runtime: python
@@ -98,11 +107,14 @@ services:
       # The capability tree (src/crowdcode/capability_tree.py) classifies new
       # index resources with OPENAI_MODEL, capped at this much a day.
       - key: CROWDCODE_TREE_DAILY_BUDGET_USD
-        value: "1"
+        value: "0.15"
       # Service proposals ask a product question over every request at once;
-      # they get a more capable model than the per-service summaries.
+      # they get a more capable model than the per-service summaries. One pass
+      # a day, placing only the requests that are new (proposals.generate).
       - key: CROWDCODE_PROPOSAL_MODEL
         value: gpt-5.5
+      - key: CROWDCODE_LLM_DAILY_USD
+        value: "0.80"
       - key: CROWDCODE_REVIEWER_SALT
         sync: false
       - key: CROWDCODE_SEED_OWNERS

@@ -72,9 +72,10 @@ class ScreenResult:
 
 
 def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = None,
-                   extra: dict[str, Any] | None = None) -> ScreenResult:
+                   extra: dict[str, Any] | None = None, job: str = "screen") -> ScreenResult:
     """`usage`, when given, is filled with the call's token usage; `extra` adds
-    request fields (the demand miner asks for low reasoning effort)."""
+    request fields (the demand miner asks for low reasoning effort); `job` is
+    who pays for the call in the day's model budget (llm_budget)."""
     settings = get_settings()
     if not settings.openai_api_key:
         return ScreenResult("unchecked", "no model configured")
@@ -147,7 +148,7 @@ def screen_request(fields: dict[str, Any], *, usage: dict[str, Any] | None = Non
                             model=os.environ.get("CROWDCODE_SCREEN_MODEL", "").strip()
                             or settings.proposal_model,
                             **({"usage": usage} if usage is not None else {}),
-                            **({"extra": extra} if extra else {}))
+                            **({"extra": extra} if extra else {}), job=job)
     except Exception as exc:  # fail open: the nightly pass still judges it
         logger.warning("request screen unavailable: %s", type(exc).__name__)
         return ScreenResult("unchecked", "model unavailable")

@@ -53,6 +53,7 @@ from crowdcode.demand import (
 )
 from crowdcode.redaction import BATCH_TIMEOUT as REDACTION_BATCH_TIMEOUT
 from crowdcode.redaction import RedactionUnavailable, redact_texts, redaction_enabled
+from crowdcode.llm_budget import BudgetExhausted
 from crowdcode.request_screen import ScreenResult, screen_request
 from crowdcode.settings import get_settings
 
@@ -325,7 +326,7 @@ ScreenFn = Callable[[dict[str, Any], dict[str, Any]], ScreenResult]
 
 
 def _screen(fields: dict[str, Any], usage: dict[str, Any]) -> ScreenResult:
-    return screen_request(fields, usage=usage, extra={"reasoning_effort": "low"})
+    return screen_request(fields, usage=usage, extra={"reasoning_effort": "low"}, job="miner")
 
 
 def traceable(text: str | None) -> bool:
@@ -460,6 +461,10 @@ def mine(body: Any, connect: Callable[[], Any], now: datetime, *,
     usage: dict[str, Any] = {}
     try:
         parsed = chat(SYSTEM, prompt, usage)
+    except BudgetExhausted:
+        # The day's model budget across every job (llm_budget) is spent.
+        outcome.skipped = "budget"
+        return outcome.as_json(already, budget)
     except Exception as exc:
         spend.failures += 1
         if usage:
@@ -551,7 +556,7 @@ def openai_chat_low(settings: Any) -> ChatFn:
 
     def chat(system: str, payload: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
         return _chat_json(settings, system, payload, model=settings.proposal_model, usage=usage,
-                          extra={"reasoning_effort": "low"}, timeout=240.0)
+                          extra={"reasoning_effort": "low"}, timeout=240.0, job="miner")
 
     return chat
 

@@ -223,7 +223,7 @@ def test_cron_maps_legacy_rows_and_publishes_only_proposals(hosted, monkeypatch)
     monkeypatch.setattr(proposals, "redact_texts", lambda texts, **_: texts)
     calls = []
 
-    def fake_model(settings, system, prompt, timeout=None, model=None):
+    def fake_model(settings, system, prompt, timeout=None, model=None, **_):
         calls.append(model)
         if "requests" in prompt and "text" in prompt["requests"][0]:
             legacy_id = prompt["requests"][0]["id"]
@@ -493,6 +493,7 @@ def test_a_request_marked_platform_internal_is_never_proposed_and_shows_as_inter
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(proposals, "fetch_requests", lambda conn: rows)
+    monkeypatch.setattr(proposals, "load_previous", lambda conn: (None, {}, {}))  # the first pass
     monkeypatch.setattr(proposals, "redact_texts", lambda texts, **_: texts)
     seen = []
     monkeypatch.setattr(proposals, "propose_services", lambda items: seen.extend(items) or {"proposals": [_proposal("DNS", [246])]})
@@ -504,3 +505,97 @@ def test_a_request_marked_platform_internal_is_never_proposed_and_shows_as_inter
     assert [item["id"] for item in seen] == [246]
     assert payload["source_request_count"] == 2 and payload["hidden_reasons"]["internal"] == 1
     assert payload["_triage"][245]["reason"] == "internal" and "harness feedback" in payload["_triage"][245]["note"]
+
+
+# --- w111: one pass a day, and only what is new ---------------------------------
+
+VIDEO = {"title": "Video posting to X with a verified post ID",
+         "input": "A video file and the post text for a connected X account",
+         "output": "The post ID and URL, published exactly once",
+         "problem": "Chunked video uploads to X fail midway and leave agents unsure whether it posted"}
+
+
+def _insert_request(conn, n):
+    return conn.execute(
+        "insert into service_requests (request_input, request_output, request_problem, price_per_call_usd, "
+        "fields_source, requester_id, builds_on, frequency) values (%s, %s, %s, 0.05, 'agent', %s, %s, %s) returning id",
+        (f"{GOOD['input']} #{n}", GOOD["output"], GOOD["problem"], f"agent-{n}",
+         EXTRAS["builds_on"], EXTRAS["frequency"]),
+    ).fetchone()["id"]
+
+
+@pytest.fixture
+def daily(hosted, monkeypatch):  # noqa: F811
+    conn, _ = hosted
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("CROWDCODE_PROPOSALS_MIN_HOURS", raising=False)
+    monkeypatch.setattr(cron, "connect", server_mod.connect)
+    monkeypatch.setattr(proposals, "redact_texts", lambda texts, **_: texts)
+    calls = []
+
+    def fake_model(settings, system, prompt, **_):
+        calls.append(prompt)
+        ids = [item["id"] for item in prompt["requests"]]
+        if "existing_proposals" in prompt:
+            return {"assign": [{"request_id": i, "proposal": 1} for i in ids]}
+        return {"proposals": [{**VIDEO, "request_ids": ids}]}
+
+    monkeypatch.setattr(proposals, "_chat_json", fake_model)
+    return conn, calls
+
+
+def test_proposals_regroup_nothing_when_no_request_changed(daily):
+    """Every hour the cron sent every request to gpt-5.5 to group them again: $0.555 a
+    pass, $13.30 a day, for the same 202 requests (2026-11-23 to 25)."""
+    conn, calls = daily
+    first, second = _insert_request(conn, 1), _insert_request(conn, 2)
+    cron.run_service_proposals(NOW)
+    assert len(calls) == 1 and {item["id"] for item in calls[0]["requests"]} == {first, second}
+    for hour in range(1, 30):
+        cron.run_service_proposals(NOW + timedelta(hours=hour))
+    assert len(calls) == 1
+
+
+def test_a_new_request_is_placed_once_a_day_without_regrouping_the_rest(daily):
+    conn, calls = daily
+    first, second = _insert_request(conn, 1), _insert_request(conn, 2)
+    cron.run_service_proposals(NOW)
+    [before] = server_mod._service_proposals_payload()["proposals"]
+    third = _insert_request(conn, 3)
+    cron.run_service_proposals(NOW + timedelta(hours=2))
+    assert len(calls) == 1  # new demand waits for the day's pass
+    cron.run_service_proposals(NOW + timedelta(hours=21))
+    assert len(calls) == 2
+    place = calls[1]
+    assert [item["id"] for item in place["requests"]] == [third]
+    assert [p["title"] for p in place["existing_proposals"]] == [VIDEO["title"]]
+    [after] = server_mod._service_proposals_payload()["proposals"]
+    assert after["id"] == before["id"] and after["title"] == before["title"]
+    assert after["demand"]["requests"] == 3
+    triage = {row["request_id"]: row["proposal_id"] for row in
+              conn.execute("select request_id, proposal_id from service_request_triage").fetchall()}
+    assert triage == {first: before["id"], second: before["id"], third: before["id"]}
+
+
+def test_the_first_daily_pass_after_the_hourly_ones_places_only_what_they_had_not_seen(daily):
+    """Deployed over a payload and a triage table written by the hourly passes, with no state yet."""
+    conn, calls = daily
+    _insert_request(conn, 1)
+    cron.run_service_proposals(NOW)
+    conn.execute("delete from app_cache where key = %s", (proposals.STATE_KEY,))
+    new = _insert_request(conn, 2)
+    cron.run_service_proposals(NOW + timedelta(days=1))
+    assert len(calls) == 2 and [item["id"] for item in calls[1]["requests"]] == [new]
+    assert server_mod._service_proposals_payload()["proposals"][0]["demand"]["requests"] == 2
+
+
+def test_a_spent_budget_keeps_the_last_proposals_and_fails_no_job(daily, monkeypatch):
+    conn, calls = daily
+    _insert_request(conn, 1)
+
+    def spent(*_, **__):
+        raise proposals.llm_budget.BudgetExhausted("proposals: job")
+
+    monkeypatch.setattr(proposals, "_chat_json", spent)
+    cron.run_service_proposals(NOW)  # does not raise: the cron run stays green
+    assert server_mod._service_proposals_payload()["proposals"] == []
